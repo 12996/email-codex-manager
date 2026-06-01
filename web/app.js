@@ -1,0 +1,404 @@
+const state = {
+  accounts: [],
+  filtered: [],
+  selectedIds: new Set(),
+  activity: [],
+};
+
+const statusLabels = {
+  pending: 'pending',
+  active: 'active',
+  banned: 'banned',
+  replacing: 'replacing',
+  replaced: 'replaced',
+  failed: 'failed',
+};
+
+const $ = (selector) => document.querySelector(selector);
+
+document.addEventListener('DOMContentLoaded', () => {
+  bindEvents();
+  loadAccounts();
+});
+
+function bindEvents() {
+  $('#statusFilter').addEventListener('change', renderAccounts);
+  $('#searchInput').addEventListener('input', renderAccounts);
+  $('#filterButton').addEventListener('click', renderAccounts);
+  $('#selectAll').addEventListener('change', toggleAll);
+  $('#batchReplaceButton').addEventListener('click', batchReplace);
+  $('#newAccountButton').addEventListener('click', () => openAccountDialog());
+  $('#newAccountTopButton').addEventListener('click', () => openAccountDialog());
+  $('#accountForm').addEventListener('submit', saveAccount);
+  $('#statusForm').addEventListener('submit', saveStatus);
+  $('#clearActivity').addEventListener('click', () => {
+    state.activity = [];
+    renderActivity();
+  });
+  document.querySelectorAll('[data-close]').forEach((button) => {
+    button.addEventListener('click', () => button.closest('dialog').close());
+  });
+  document.querySelectorAll('[data-quick]').forEach((button) => {
+    button.addEventListener('click', () => runQuickAction(button.dataset.quick));
+  });
+  document.addEventListener('click', closeOpenMenus);
+}
+
+async function loadAccounts() {
+  try {
+    const body = await api('/replacement-accounts');
+    state.accounts = body.accounts || [];
+    renderAccounts();
+    toast('列表已刷新');
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function renderAccounts() {
+  const status = $('#statusFilter').value;
+  const keyword = $('#searchInput').value.trim().toLowerCase();
+  state.filtered = state.accounts.filter((account) => {
+    const matchesStatus = !status || account.status === status;
+    const haystack = [account.email, account.phone, account.remark, account.status]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return matchesStatus && (!keyword || haystack.includes(keyword));
+  });
+
+  $('#accountsBody').innerHTML = state.filtered.map(accountRow).join('');
+  $('#totalText').textContent = `共 ${state.filtered.length} 条`;
+  bindRowEvents();
+  renderStats();
+  renderActivity();
+}
+
+function accountRow(account) {
+  const checked = state.selectedIds.has(account.id) ? 'checked' : '';
+  const lastText = lastOperationText(account);
+  return `
+    <tr>
+      <td><input class="row-check" type="checkbox" data-id="${account.id}" ${checked}></td>
+      <td><div class="email-main">${escapeHtml(account.email)}</div><div class="muted">ID: ${account.id}</div></td>
+      <td>${escapeHtml(maskPhone(account.phone))}</td>
+      <td><span class="status ${account.status}">${statusLabels[account.status] || account.status}</span></td>
+      <td>${escapeHtml(account.activation_method || '-')}</td>
+      <td>${account.replacement_count || 0}</td>
+      <td><span class="dot ${lastText.type}"></span>${escapeHtml(lastText.label)}<div class="muted">${escapeHtml(formatDate(account.last_replace_at || account.json_fetched_at || account.status_updated_at))}</div></td>
+      <td>${escapeHtml(formatDate(account.updated_at))}</td>
+      <td>
+        <div class="actions">
+          <button class="primary action-toggle" type="button" data-id="${account.id}">操作⌄</button>
+          <div class="action-menu" hidden>
+            <button type="button" data-action="sms" data-id="${account.id}">▣ 获取验证码</button>
+            <button type="button" data-action="json" data-id="${account.id}">▣ 获取 JSON</button>
+            <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
+            <button type="button" data-action="status" data-id="${account.id}">⊙ 状态设置</button>
+            <button class="danger" type="button" data-action="delete" data-id="${account.id}">🗑 删除账号</button>
+          </div>
+        </div>
+        <button type="button" data-action="detail" data-id="${account.id}">详情</button>
+      </td>
+    </tr>
+  `;
+}
+
+function bindRowEvents() {
+  document.querySelectorAll('.row-check').forEach((checkbox) => {
+    checkbox.addEventListener('change', () => {
+      const id = Number(checkbox.dataset.id);
+      if (checkbox.checked) state.selectedIds.add(id);
+      else state.selectedIds.delete(id);
+    });
+  });
+  document.querySelectorAll('.action-toggle').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      const menu = button.nextElementSibling;
+      const willOpen = menu.hidden;
+      closeOpenMenus();
+      menu.hidden = !willOpen;
+    });
+  });
+  document.querySelectorAll('[data-action]').forEach((button) => {
+    button.addEventListener('click', (event) => {
+      event.stopPropagation();
+      handleAction(button.dataset.action, Number(button.dataset.id));
+      closeOpenMenus();
+    });
+  });
+}
+
+async function handleAction(action, id) {
+  const account = state.accounts.find((item) => item.id === id);
+  if (!account) return;
+  if (action === 'detail') return openDetail(account);
+  if (action === 'status') return openStatusDialog(account);
+  if (action === 'delete') return deleteAccount(account);
+  if (action === 'sms') return fetchSmsCode(account);
+  if (action === 'json') return fetchJson(account);
+  if (action === 'replace') return replaceAccount(account);
+}
+
+function openAccountDialog(account = null) {
+  const form = $('#accountForm');
+  form.reset();
+  $('#dialogTitle').textContent = account ? '编辑账号' : '新增账号';
+  for (const field of ['id', 'email', 'phone', 'sms_api', 'activation_method', 'activated_at', 'status', 'remark']) {
+    form.elements[field].value = account?.[field] || (field === 'status' ? 'pending' : '');
+  }
+  $('#accountDialog').showModal();
+}
+
+async function saveAccount(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const data = Object.fromEntries(new FormData(form));
+  const id = data.id;
+  delete data.id;
+  try {
+    await api(id ? `/replacement-accounts/${id}` : '/replacement-accounts', {
+      method: id ? 'PUT' : 'POST',
+      body: JSON.stringify(data),
+    });
+    $('#accountDialog').close();
+    addActivity(id ? '修改账号' : '新增账号', data.email);
+    await loadAccounts();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function openStatusDialog(account) {
+  const form = $('#statusForm');
+  form.elements.id.value = account.id;
+  form.elements.status.value = account.status === 'replacing' ? 'pending' : account.status;
+  form.elements.status_note.value = account.status_note || '';
+  $('#statusDialog').showModal();
+}
+
+async function saveStatus(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const id = form.elements.id.value;
+  const data = {
+    status: form.elements.status.value,
+    status_note: form.elements.status_note.value,
+  };
+  try {
+    await api(`/replacement-accounts/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+    $('#statusDialog').close();
+    addActivity('状态设置', `ID ${id} -> ${data.status}`);
+    await loadAccounts();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function fetchSmsCode(account) {
+  try {
+    const body = await api(`/replacement-accounts/${account.id}/fetch-sms-code`, { method: 'POST' });
+    addActivity('获取验证码', `${account.email}: ${body.code}`);
+    toast(`验证码：${body.code}`);
+  } catch (error) {
+    addActivity('验证码失败', account.email);
+    toast(error.message);
+    await loadAccounts();
+  }
+}
+
+async function fetchJson(account) {
+  const url = prompt('请输入 JSON URL', account.json_url || '');
+  if (!url) return;
+  try {
+    await api(`/replacement-accounts/${account.id}/fetch-json`, {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+    addActivity('获取 JSON', account.email);
+    await loadAccounts();
+  } catch (error) {
+    addActivity('获取 JSON 失败', account.email);
+    toast(error.message);
+    await loadAccounts();
+  }
+}
+
+async function replaceAccount(account) {
+  try {
+    await api(`/replacement-accounts/${account.id}/replace`, { method: 'POST' });
+    addActivity('补号成功', account.email);
+    await loadAccounts();
+  } catch (error) {
+    addActivity('补号失败', account.email);
+    toast(error.message);
+    await loadAccounts();
+  }
+}
+
+async function batchReplace() {
+  const candidates = selectedAccounts().length
+    ? selectedAccounts()
+    : state.accounts.filter((account) => ['banned', 'failed', 'pending'].includes(account.status));
+  if (!candidates.length) {
+    toast('没有可补号账号');
+    return;
+  }
+  if (!confirm(`确认执行一键补号？共 ${candidates.length} 个账号`)) return;
+  for (const account of candidates) {
+    await replaceAccount(account);
+  }
+}
+
+async function deleteAccount(account) {
+  if (!confirm(`确认删除 ${account.email}？`)) return;
+  try {
+    await api(`/replacement-accounts/${account.id}`, { method: 'DELETE' });
+    state.selectedIds.delete(account.id);
+    addActivity('删除账号', account.email);
+    await loadAccounts();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+function openDetail(account) {
+  $('#detailContent').textContent = JSON.stringify(account, null, 2);
+  $('#detailDialog').showModal();
+}
+
+function runQuickAction(action) {
+  const account = selectedAccounts()[0] || state.filtered[0];
+  if (action === 'activity') {
+    document.getElementById('activity').scrollIntoView({ behavior: 'smooth' });
+    return;
+  }
+  if (!account) {
+    toast('请先选择账号');
+    return;
+  }
+  handleAction(action, account.id);
+}
+
+function selectedAccounts() {
+  return state.accounts.filter((account) => state.selectedIds.has(account.id));
+}
+
+function toggleAll(event) {
+  if (event.target.checked) {
+    state.filtered.forEach((account) => state.selectedIds.add(account.id));
+  } else {
+    state.filtered.forEach((account) => state.selectedIds.delete(account.id));
+  }
+  renderAccounts();
+}
+
+function renderStats() {
+  const counts = countByStatus(state.accounts);
+  $('#statTotal').textContent = state.accounts.length;
+  $('#statActive').textContent = counts.active || 0;
+  $('#statBanned').textContent = counts.banned || 0;
+  $('#statReplaced').textContent = state.accounts.reduce((sum, account) => sum + Number(account.replacement_count || 0), 0);
+  $('#statFailed').textContent = counts.failed || 0;
+  renderStatusLegend(counts);
+}
+
+function renderStatusLegend(counts) {
+  const total = state.accounts.length || 1;
+  const colors = {
+    active: '#21bf73',
+    banned: '#f24e5c',
+    replaced: '#26aebd',
+    pending: '#2273f5',
+    failed: '#b8c1ce',
+  };
+  const statuses = ['active', 'banned', 'replaced', 'pending', 'failed'];
+  $('#statusLegend').innerHTML = statuses.map((status) => {
+    const count = counts[status] || 0;
+    const percent = Math.round((count / total) * 1000) / 10;
+    return `<li><span><i style="background:${colors[status]}"></i> ${status}</span><strong>${count} (${percent}%)</strong></li>`;
+  }).join('');
+}
+
+function countByStatus(accounts) {
+  return accounts.reduce((counts, account) => {
+    counts[account.status] = (counts[account.status] || 0) + 1;
+    return counts;
+  }, {});
+}
+
+function renderActivity() {
+  $('#activityList').innerHTML = (state.activity.slice(0, 5).map((item) => `
+    <li><span>${escapeHtml(item.title)}<br><small>${escapeHtml(item.detail)}</small></span><small>${item.time}</small></li>
+  `).join('')) || '<li><span>暂无操作</span><small>-</small></li>';
+}
+
+function addActivity(title, detail) {
+  state.activity.unshift({
+    title,
+    detail,
+    time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+  });
+  renderActivity();
+}
+
+async function api(path, options = {}) {
+  const response = await fetch(path, {
+    headers: { 'content-type': 'application/json', ...(options.headers || {}) },
+    ...options,
+  });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok || body.ok === false) {
+    throw new Error(body.message || body.error || `请求失败：${response.status}`);
+  }
+  return body;
+}
+
+function lastOperationText(account) {
+  if (account.status === 'failed') return { type: 'failed', label: '补号失败' };
+  if (account.status === 'replacing') return { type: 'replacing', label: '补号中' };
+  if (account.last_replace_at || account.status === 'replaced') return { type: '', label: '补号成功' };
+  if (account.json_fetched_at) return { type: 'replacing', label: '获取 JSON' };
+  return { type: 'empty', label: '-' };
+}
+
+function maskPhone(phone) {
+  if (!phone) return '-';
+  const text = String(phone);
+  if (text.length < 7) return text;
+  return `${text.slice(0, 3)}****${text.slice(-4)}`;
+}
+
+function formatDate(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+}
+
+function closeOpenMenus() {
+  document.querySelectorAll('.action-menu').forEach((menu) => {
+    menu.hidden = true;
+  });
+}
+
+function toast(message) {
+  const node = $('#toast');
+  node.textContent = message;
+  node.classList.add('show');
+  window.clearTimeout(toast.timer);
+  toast.timer = window.setTimeout(() => node.classList.remove('show'), 2600);
+}
+
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
+}
