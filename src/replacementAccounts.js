@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+
 const SYSTEM_STATUSES = new Set(['pending', 'active', 'banned', 'replacing', 'replaced', 'failed']);
 const MANUAL_STATUSES = new Set(['pending', 'active', 'banned', 'replaced', 'failed']);
 
@@ -5,6 +7,7 @@ export function createReplacementAccountRepository(db) {
   return {
     createAccount(input) {
       const data = normalizeAccountInput(input, { requireEmail: true });
+      data.public_code_key ||= generatePublicCodeKey();
       validateStatus(data.status, { allowReplacing: false });
       assertEmailAvailable(db, data.email);
       const now = new Date().toISOString();
@@ -19,10 +22,12 @@ export function createReplacementAccountRepository(db) {
           status_updated_at,
           status_note,
           remark,
+          public_code_enabled,
+          public_code_key,
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         data.email,
         data.phone,
@@ -33,6 +38,8 @@ export function createReplacementAccountRepository(db) {
         now,
         data.status_note,
         data.remark,
+        data.public_code_enabled,
+        data.public_code_key,
         now,
         now,
       );
@@ -58,6 +65,11 @@ export function createReplacementAccountRepository(db) {
     updateAccount(id, input) {
       const existing = assertAccountExists(this.getAccount(id));
       const data = normalizeAccountInput(input, { requireEmail: true });
+      if (Object.hasOwn(input || {}, 'public_code_key')) {
+        data.public_code_key ||= generatePublicCodeKey();
+      } else {
+        data.public_code_key = existing.public_code_key || generatePublicCodeKey();
+      }
       validateStatus(data.status, { allowReplacing: false });
       assertEmailAvailable(db, data.email, existing.id);
       const now = new Date().toISOString();
@@ -73,6 +85,8 @@ export function createReplacementAccountRepository(db) {
           status = ?,
           status_note = ?,
           remark = ?,
+          public_code_enabled = ?,
+          public_code_key = ?,
           updated_at = ?
         WHERE id = ?
       `).run(
@@ -84,11 +98,27 @@ export function createReplacementAccountRepository(db) {
         data.status,
         data.status_note,
         data.remark,
+        data.public_code_enabled,
+        data.public_code_key,
         now,
         existing.id,
       );
 
       return this.getAccount(existing.id);
+    },
+
+    getPublicCodeAccountByKey(key) {
+      const normalizedKey = normalizeOptional(key);
+      if (!normalizedKey) {
+        return undefined;
+      }
+      return db.prepare(`
+        SELECT * FROM replacement_accounts
+        WHERE public_code_key = ?
+          AND public_code_enabled = 1
+          AND deleted_at IS NULL
+        LIMIT 1
+      `).get(normalizedKey);
     },
 
     deleteAccount(id) {
@@ -230,6 +260,8 @@ function normalizeAccountInput(input, { requireEmail }) {
     status: normalizeOptional(input?.status) || 'pending',
     status_note: normalizeOptional(input?.status_note),
     remark: normalizeOptional(input?.remark),
+    public_code_enabled: normalizeBooleanFlag(input?.public_code_enabled),
+    public_code_key: normalizeOptional(input?.public_code_key),
   };
 }
 
@@ -271,6 +303,17 @@ function normalizeRequired(value, code, message) {
 function normalizeOptional(value) {
   const normalized = String(value || '').trim();
   return normalized || null;
+}
+
+function normalizeBooleanFlag(value) {
+  if (value === true || value === 1 || value === '1' || value === 'true' || value === 'on') {
+    return 1;
+  }
+  return 0;
+}
+
+function generatePublicCodeKey() {
+  return `vc_${randomBytes(24).toString('base64url')}`;
 }
 
 function normalizeErrorMessage(value) {

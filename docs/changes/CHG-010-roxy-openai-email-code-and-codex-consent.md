@@ -1,6 +1,6 @@
 # CHG-010 新增 Roxy OpenAI 邮箱验证码与 Codex 登录确认处理
 
-状态：implemented
+状态：merged
 创建日期：2026-06-02
 关联 PRD：PRD-002
 关联 Issue：
@@ -27,3 +27,9 @@
 - [x] Codex 登录确认页判断不依赖 class，只使用英文关键词和 `Continue` 按钮。
 - [x] 能在 Codex 登录确认页点击 `Continue`。
 - [x] 单元测试通过。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-02
+- 备注：已合入邮箱验证码页和 Codex 授权确认页处理要求。

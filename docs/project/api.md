@@ -492,7 +492,9 @@ Gmail 认证失败：请确认 Gmail 邮箱号正确、App Password 没有填错
 
 根据传入的 Gmail 主账号或 `+tag` 别名，返回最近邮件中的 6 位验证码。
 
-该接口复用后台登录态，调用前需要先登录后台并携带 `admin_auth` cookie。
+该接口复用后台登录态，非本机调用前需要先登录后台并携带 `admin_auth` cookie。
+
+本机请求免后台登录态，允许 `127.0.0.1`、`::1`、`::ffff:127.0.0.1` 调用本接口时不携带 `admin_auth`，用于本地自动化脚本直接获取验证码。
 
 请求类型：
 
@@ -555,6 +557,61 @@ application/json
 }
 ```
 
+### GET `/api/verification-code/public/latest`
+
+根据补号账号表中放权的公开验证码 key，返回该行邮箱最近邮件中的 6 位验证码。
+
+该接口不需要 `admin_auth`，但不会接收邮箱明文；外部调用方只能传入数据库中配置的 `public_code_key`。
+
+请求：
+
+```text
+GET /api/verification-code/public/latest?key=vc_8Jf3qP9xK2mN7rT6sL4aBcDeFgHi
+```
+
+后台行为：
+
+1. 使用 `key` 查找 `replacement_accounts.public_code_key`。
+2. 只允许 `public_code_enabled = 1` 且未软删除的补号账号。
+3. 使用该补号账号行的 `email` 作为目标邮箱。
+4. 后续复用 `POST /api/verification-code/latest` 的主账号路由、IMAP 读取、别名匹配和 6 位验证码提取逻辑。
+
+成功响应同 `POST /api/verification-code/latest`：
+
+```json
+{
+  "ok": true,
+  "account": "jregkolpig+s2@gmail.com",
+  "mainAccount": "jregkolpig@gmail.com",
+  "code": "123456",
+  "from": "Google <no-reply@google.com>",
+  "subject": "Verification",
+  "date": "2026-06-01T10:00:00.000Z"
+}
+```
+
+缺少 key：
+
+```json
+{
+  "ok": false,
+  "error": "KEY_REQUIRED",
+  "message": "key is required"
+}
+```
+
+key 无效、未启用或账号已删除：
+
+```json
+{
+  "ok": false,
+  "error": "PUBLIC_ACCESS_DENIED",
+  "message": "验证码访问 key 无效或未启用"
+}
+```
+
+主账号未配置、未找到验证码、IMAP 失败等响应同 `POST /api/verification-code/latest`。
+
 ## 补号账号 JSON API
 
 补号账号接口复用后台登录态，调用前需要先登录后台并携带 `admin_auth` cookie。接口请求和响应均为 JSON。
@@ -565,15 +622,24 @@ application/json
 GET /replacement-ui
 ```
 
+补号子进程日志页面：
+
+```text
+GET /replacement-automation-logs
+```
+
 静态前端文件位于：
 
 ```text
 web/index.html
 web/styles.css
 web/app.js
+web/automation-logs.html
+web/automation-logs.js
 ```
 
 页面入口需要后台登录态，前端通过 `/replacement-accounts*` JSON API 读取和操作数据。
+日志页面同样需要后台登录态，前端通过 `/replacement-automation-runs*` JSON API 读取运行记录、查看日志和停止运行中的子进程。
 
 ### 字段说明
 
@@ -597,11 +663,13 @@ SQLite 表：`replacement_accounts`
 | `last_replace_at` | 最近一次成功补号时间 |
 | `last_error` | 最近一次 JSON 或补号错误 |
 | `remark` | 管理员备注 |
+| `public_code_enabled` | 是否允许使用公开 GET 接口获取该邮箱验证码，`1` 为允许，默认 `0` |
+| `public_code_key` | 公开 GET 接口使用的随机访问 key；创建补号账号时自动生成，也可手动覆盖为不可猜测字符串 |
 | `deleted_at` | 软删除时间 |
 | `created_at` | 创建时间 |
 | `updated_at` | 更新时间 |
 
-验证码不入库；SMS 原始响应不入库；补号失败不增加 `replacement_count`。
+验证码不入库；SMS 原始响应不入库；补号失败不增加 `replacement_count`。`remark` 仅用于人工标注来源或用途，不参与公开验证码接口的权限判断。
 
 ### 状态枚举
 
@@ -758,7 +826,95 @@ SQLite 表：`replacement_accounts`
 
 ### POST `/replacement-accounts/:id/replace`
 
-执行自动补号。当前真实自动化补号接口尚未完成，后端已预留 `replacementServices.replaceAccount` 适配边界，后续封装到独立 JS 文件后接入。
+执行自动补号。自动化运行时代码位于：
+
+```text
+src/auto/roxy_oauth_login.js
+```
+
+后端通过 `replacementServices.replaceAccount(account)` 适配边界接入真实自动化。默认适配器会使用 `child_process` 启动独立 Node 子进程运行 `roxy_oauth_login.js`，避免 Playwright/Roxy 自动化长流程直接占用主 Express 进程运行态。
+
+请求体：
+
+```json
+{}
+```
+
+后端行为：
+
+1. 根据路径参数 `id` 读取 `replacement_accounts` 中未软删除账号。
+2. 将账号状态置为 `replacing`。
+3. 调用 `replacementServices.replaceAccount(account)`。
+4. 默认适配器启动子进程调用 `src/auto/roxy_oauth_login.js`，并把补号账号字段写入子进程 env，完成 RoxyBrowser 开窗、OpenAI/Codex OAuth 登录、邮箱验证码、手机验证码和 token 导出。
+5. 自动化成功后，后端将账号标记为 `replaced` 并增加成功次数。
+6. 自动化失败后，后端将账号标记为 `failed` 并记录错误。
+
+自动化脚本需要的数据来源：
+
+| 脚本数据 | 来源 | 说明 |
+|---|---|---|
+| `email` / `ROXY_OAUTH_EMAIL` | `replacement_accounts.email` | OpenAI 登录邮箱；默认适配器会覆盖子进程 env 中的 `ROXY_OAUTH_EMAIL`；也用于邮箱验证码接口的 `account` 参数。 |
+| `smsApiUrl` / `PHONE_VERIFICATION_SMS_API_URL` | `replacement_accounts.sms_api` | 手机短信验证码接口；存在时默认适配器会覆盖子进程 env 中的 `PHONE_VERIFICATION_SMS_API_URL`；脚本会从响应文本或 JSON 中提取 6 位验证码。 |
+| `phone` | `replacement_accounts.phone` | 当前脚本不直接填写手机号；仅作为补号账号记录和人工排查信息。 |
+| `publicCodeKey` | `replacement_accounts.public_code_key` | 当前脚本默认走本地 `POST /api/verification-code/latest`，不需要该字段；外部公开取邮箱验证码时才使用。 |
+| Roxy API 地址 | `.env` / 运行配置 | `ROXY_API_BASE_URL` 或 `ROXY_API_PORT`，由子进程继承，不来自补号表。 |
+| Roxy API Token | `.env` / 运行配置 | `ROXY_API_TOKEN`，不来自补号表。 |
+| Roxy 工作区 | `.env` / 运行配置 | `ROXY_WORKSPACE_ID`，不来自补号表。 |
+| Roxy 窗口定位 | `.env` / 运行配置 | `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者至少配置一种；不来自补号表。 |
+| 复用 CDP | `.env` / 运行配置 | `ROXY_CDP_ENDPOINT`；配置后脚本跳过 Roxy 准备流程并直接连接现有浏览器。 |
+| 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`，默认 `http://127.0.0.1:3000/api/verification-code/latest`。 |
+| 后台 Cookie | `.env` / 运行配置 | `ADMIN_AUTH_COOKIE`；非本机调用邮箱验证码接口时使用。 |
+| 浏览器关闭策略 | `.env` / 运行配置 | `ROXY_KEEP_OPEN`、`ROXY_ENSURE_CLOSED`。 |
+| 代理提示 | `.env` / 运行配置 | `ROXY_PROXY`；当前 token 请求阶段仅记录提示，浏览器代理由 Roxy 窗口自身配置决定。 |
+
+脚本生成的数据：
+
+| 数据 | 来源 | 说明 |
+|---|---|---|
+| OAuth `state` | 脚本运行时生成 | 用于校验 callback。 |
+| PKCE `verifier` / `challenge` | 脚本运行时生成 | 用于授权码换 token。 |
+| OAuth callback `code` | OpenAI/Codex OAuth 回调 | 脚本从当前页面或网络请求捕获。 |
+| `access_token`、`refresh_token`、`id_token` | OpenAI token endpoint | 脚本使用 callback code 换取。 |
+| `chatgpt_account_id`、`chatgpt_user_id`、`plan_type` | access token payload | 写入导出的账号 JSON。 |
+| 导出文件 | `src/auto/product_files/` | 默认写入 `sub2api/邮箱.json` 和 `cpa/邮箱.json`。 |
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "account": {
+    "id": 1,
+    "email": "jregkolpig+s2@gmail.com",
+    "status": "replaced",
+    "replacement_count": 1,
+    "last_replace_at": "2026-06-02T10:00:00.000Z",
+      "last_error": null
+  },
+  "run": {
+    "id": 12,
+    "account_id": 1,
+    "email": "jregkolpig+s2@gmail.com",
+    "status": "succeeded",
+    "pid": 1234,
+    "log_path": "data/automation-logs/replacement-1-2026-06-02T10-00-00-000Z.log",
+    "started_at": "2026-06-02T10:00:00.000Z",
+    "finished_at": "2026-06-02T10:05:00.000Z",
+    "exit_code": 0,
+    "error_message": null
+  }
+}
+```
+
+失败响应：
+
+```json
+{
+  "ok": false,
+  "error": "REPLACE_FAILED",
+  "message": "自动补号失败原因"
+}
+```
 
 成功时：
 
@@ -773,6 +929,96 @@ SQLite 表：`replacement_accounts`
 - `last_error = 错误信息`
 - `replacement_count` 不变
 
+## 补号子进程运行日志 API
+
+补号运行日志接口复用后台登录态，调用前需要先登录后台并携带 `admin_auth` cookie。
+
+### SQLite 表：`replacement_automation_runs`
+
+| 字段 | 说明 |
+|---|---|
+| `id` | 运行记录 ID |
+| `account_id` | 对应 `replacement_accounts.id` |
+| `email` | 运行时使用的补号邮箱快照 |
+| `status` | `running`、`succeeded`、`failed`、`stopped` |
+| `pid` | 子进程 PID；仅用于展示和当前服务会话内 child 关联，不用于盲杀历史进程 |
+| `log_path` | stdout/stderr 日志文件路径 |
+| `started_at` | 开始时间 |
+| `finished_at` | 结束时间 |
+| `exit_code` | 子进程退出码 |
+| `error_message` | 失败或停止摘要 |
+
+日志文件默认写入：
+
+```text
+data/automation-logs/
+```
+
+### GET `/replacement-automation-runs`
+
+获取最近的补号自动化运行记录，默认最多返回 100 条，`limit` 最大 500。
+
+成功：
+
+```json
+{
+  "ok": true,
+  "runs": []
+}
+```
+
+### GET `/replacement-automation-runs/:id`
+
+获取单次运行记录和日志文本。
+
+成功：
+
+```json
+{
+  "ok": true,
+  "run": {},
+  "log": "stdout/stderr log text"
+}
+```
+
+不存在：
+
+```json
+{
+  "ok": false,
+  "error": "RUN_NOT_FOUND",
+  "message": "automation run not found"
+}
+```
+
+### POST `/replacement-automation-runs/:id/stop`
+
+停止仍在运行的补号子进程。
+
+安全约束：
+
+- 只停止当前 Express 服务进程内仍被追踪的 child process。
+- 如果服务已重启、运行记录仍为 `running` 但内存中没有 child 句柄，则返回 `RUN_NOT_ACTIVE`。
+- 不根据历史 PID 直接杀系统进程，避免 PID 复用导致误杀。
+
+成功：
+
+```json
+{
+  "ok": true,
+  "runId": 12
+}
+```
+
+常见错误：
+
+| 错误码 | HTTP 状态 | 说明 |
+|---|---:|---|
+| `RUN_NOT_FOUND` | 404 | 运行记录不存在 |
+| `RUN_NOT_RUNNING` | 400 | 运行记录不是 running |
+| `RUN_NOT_ACTIVE` | 502 | 当前服务会话中没有可停止的活跃 child |
+| `RUN_STOP_FAILED` | 502 | child kill 调用失败 |
+
 ### 用户操作与接口映射
 
 | 用户操作 | 接口 | 后端影响 |
@@ -784,10 +1030,12 @@ SQLite 表：`replacement_accounts`
 | 获取验证码 | `POST /replacement-accounts/:id/fetch-sms-code` | 实时返回验证码，不入库 |
 | 获取 JSON | `POST /replacement-accounts/:id/fetch-json` | 保存 JSON 原文 |
 | 自动补号 | `POST /replacement-accounts/:id/replace` | 成功后补号次数加一 |
+| 查看补号日志 | `GET /replacement-automation-runs` / `GET /replacement-automation-runs/:id` | 查看运行记录和 stdout/stderr |
+| 停止子进程 | `POST /replacement-automation-runs/:id/stop` | 停止当前服务会话内仍在运行的 child |
 
 ## 数据库字段
 
-当前 SQLite 表：`email_accounts`、`replacement_accounts`
+当前 SQLite 表：`email_accounts`、`replacement_accounts`、`replacement_automation_runs`
 
 ```sql
 CREATE TABLE email_accounts (
@@ -823,4 +1071,4 @@ CREATE TABLE email_accounts (
 - 补号账号已提供 JSON 接口，但仍复用后台 Cookie 登录态。
 - 邮件详情只存在于本次响应页面，刷新后需要重新获取。
 - App Password 明文保存，符合当前本地使用需求，但不适合公开部署。
-- 自动补号真实适配器尚未接入，当前通过后端服务边界预留。
+- 自动补号运行时代码已在 `src/auto/roxy_oauth_login.js`；`POST /replacement-accounts/:id/replace` 默认通过子进程调用该脚本，仍需要 `.env` 中配置有效 RoxyBrowser/API 运行参数。

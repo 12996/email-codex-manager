@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -7,6 +7,7 @@ import signature from 'cookie-signature';
 
 import { config } from '../src/config.js';
 import { createDatabase } from '../src/db.js';
+import { createReplacementAutomationRunRepository } from '../src/replacementAutomationRuns.js';
 import { createReplacementAccountRepository } from '../src/replacementAccounts.js';
 import { createApp } from '../src/server.js';
 
@@ -32,9 +33,11 @@ function createTestContext(replacementServices = successfulServices()) {
   const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-service-'));
   const db = createDatabase(join(dir, 'test.db'));
   const replacementAccounts = createReplacementAccountRepository(db);
+  const replacementAutomationRuns = createReplacementAutomationRunRepository(db);
   const app = createApp({
     db,
     replacementAccounts,
+    replacementAutomationRuns,
     replacementServices,
     accounts: {
       listAccounts() {
@@ -46,7 +49,7 @@ function createTestContext(replacementServices = successfulServices()) {
     },
   });
 
-  return { app, replacementAccounts };
+  return { app, replacementAccounts, replacementAutomationRuns, dir };
 }
 
 function successfulServices() {
@@ -222,6 +225,45 @@ test('replacement account failure APIs persist errors without incrementing repla
     assert.equal(replace.body.account.status, 'failed');
     assert.equal(replace.body.account.replacement_count, 0);
     assert.equal(replacementAccounts.getAccount(created.id).last_error, 'replace failed');
+  } finally {
+    await server.close();
+  }
+});
+
+test('replacement automation run APIs list, read logs, and stop active runs', async () => {
+  const stopped = [];
+  const services = {
+    ...successfulServices(),
+    stopReplacementRun(runId) {
+      stopped.push(Number(runId));
+      return { ok: true, runId: Number(runId) };
+    },
+  };
+  const { app, replacementAutomationRuns, dir } = createTestContext(services);
+  const logPath = join(dir, 'run.log');
+  writeFileSync(logPath, 'child log line\n', 'utf8');
+  const run = replacementAutomationRuns.createRun({
+    account_id: 1,
+    email: 'user@example.com',
+    pid: 1234,
+    log_path: logPath,
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const listed = await jsonRequest(server, 'GET', '/replacement-automation-runs');
+    assert.equal(listed.response.status, 200);
+    assert.equal(listed.body.runs.length, 1);
+    assert.equal(listed.body.runs[0].id, run.id);
+
+    const detail = await jsonRequest(server, 'GET', `/replacement-automation-runs/${run.id}`);
+    assert.equal(detail.response.status, 200);
+    assert.equal(detail.body.run.email, 'user@example.com');
+    assert.equal(detail.body.log, 'child log line\n');
+
+    const stoppedResponse = await jsonRequest(server, 'POST', `/replacement-automation-runs/${run.id}/stop`);
+    assert.equal(stoppedResponse.response.status, 200);
+    assert.deepEqual(stopped, [run.id]);
   } finally {
     await server.close();
   }

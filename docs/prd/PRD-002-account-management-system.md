@@ -2,6 +2,7 @@
 
 状态：active
 创建日期：2026-06-01
+最近基线合并：2026-06-02
 
 ## 1. 背景与目标
 
@@ -10,7 +11,7 @@
 系统核心目标：
 - 统一管理主 Gmail IMAP 邮箱配置，支持在线连通性测试和邮件内容按需获取。
 - 统一管理下游补号账号及其对应的开通方式、SMS API、JSON 元数据和补号状态。
-- 提供基于指纹浏览器（RoxyBrowser）和 Playwright 的自动化补号底层调用工具。
+- 提供基于指纹浏览器（RoxyBrowser）、Playwright、OpenAI/Codex OAuth 的自动化补号链路。
 - 提供风格一致、高内聚且具备重用组件（如通用侧边栏、详情模态框）的响应式后台管理界面。
 
 ---
@@ -54,19 +55,34 @@
 - `status`: 状态 (`pending` 待补号, `active` 正常, `banned` 被封禁, `replacing` 补号中, `replaced` 补号成功, `failed` 补号失败)
 - `status_note`: 状态变更备注
 - `replacement_count`: 累计成功补号次数
-- `json_url`: 抓取 JSON 配置的 URL
 - `json_payload`: 抓取成功的 JSON 原文内容
+- `json_fetched_at`: 最近一次 JSON 抓取成功时间
+- `last_replace_at`: 最近一次补号成功时间
+- `last_error`: 最近一次 JSON 或补号错误
+- `sms_last_error`: 最近一次短信验证码获取失败原因
+- `public_code_enabled`: 是否允许通过公开验证码 key 获取该邮箱验证码
+- `public_code_key`: 公开验证码接口使用的随机访问 key
+- `remark`: 管理员备注
+- `deleted_at`: 软删除时间
 
 #### 功能细则
 - **账号 CRUD**: 支持新增、编辑、软删除。
 - **状态手动修改**: 支持管理员手动调整状态与状态备注，但不能手动调整为系统控制状态（如 `replacing`）。
 - **获取验证码**: 手动触发向 `sms_api` 请求提取 6 位短信验证码，成功后以 Toast 提示并生成操作记录，验证码不落库。
+- **公开验证码 key**:
+  - 系统为补号账号生成不可猜测的 `public_code_key`。
+  - 只有 `public_code_enabled = 1` 且未删除的补号账号，才允许通过公开 GET 接口按 key 获取邮箱验证码。
+  - 公开接口不接收邮箱明文，避免外部系统枚举任意邮箱验证码。
+- **本机验证码获取**:
+  - 本机自动化脚本调用 `POST /api/verification-code/latest` 可免后台登录态。
+  - 非本机请求仍需要后台 Cookie 登录态。
 - **获取 JSON**: 支持通过输入的 URL 抓取账号配置 JSON 信息并持久化于 `json_payload`，获取成功后清除最近错误。
 - **一键补号 / 批量补号**: 
   - 支持单账号点击补号或多选批量补号。
-  - 补号开始时状态流转为 `replacing`，执行 RoxyBrowser + Playwright 自动化流程。
+  - 补号开始时状态流转为 `replacing`，执行 RoxyBrowser + Playwright + OpenAI/Codex OAuth 自动化流程。
   - 补号成功后，状态流转为 `replaced`，`replacement_count` 自动累加 1。
   - 补号失败后，状态流转为 `failed`，计数值不累加，将错误信息记录在最后操作信息中。
+  - 正式补号入口默认以子进程执行自动化脚本，避免长流程直接占用主 Express 进程运行态。
 
 ---
 
@@ -80,7 +96,34 @@
   2. 窗口序号 (`sortNum`)。
   3. 窗口名称 (`windowName`)。
 - Roxy 接口返回失败时应抛出包含明确 API 路径的描述性错误。
-- 支持 OAuth 授权自动化流程（如 ChatGPT 自动登录与授权）。
+- CLI 应输出完整 CDP WebSocket 地址，并输出可直接复制到环境变量的 `ROXY_CDP_ENDPOINT=...` 复用提示。
+- `ROXY_KEEP_OPEN` 和 `ROXY_ENSURE_CLOSED` 等关闭策略应在 `.env` 加载后生效。
+- 支持复用已有 CDP；复用失败时可回退到正常 Roxy 开窗流程。
+
+#### OpenAI/Codex OAuth 自动化
+- 自动化运行时代码归属 `src/auto/roxy_oauth_login.js`。
+- 手动验证入口归属 `src/auto/roxy_oauth_steps_manual_test.js`。
+- 当用户明确要求 Playwright codegen/录制并亲自走流程时，必须先启动 recorder/codegen；录制完成后再整理 selector、流程函数和测试。
+- OAuth 自动化状态机应覆盖：
+  1. OpenAI 邮箱登录页：填写目标邮箱并点击 `Continue`。
+  2. 邮箱验证码页：调用验证码接口获取 6 位验证码并提交。
+  3. 可选手机验证方式页：选择 `Text Message` 并继续。
+  4. 可选手机验证码页：从 SMS API 响应中提取 6 位验证码并提交。
+  5. Codex/ChatGPT 授权确认页：点击 `Continue`。
+  6. OAuth callback：捕获 `code/state`，校验 state，并使用授权码换取 token bundle。
+- 页面判断应优先使用稳定文本、ARIA role 和可见控件，不依赖易变 class。
+- 自动化应输出可识别错误码，并在超时或页面不匹配时附带当前 URL、title 和 body 摘要。
+- 页面步骤失败时默认截图到 `debug_image/`，截图文件名不得包含邮箱、验证码、API key 或 URL 等敏感信息。
+- Token 交换优先在浏览器页面上下文发起请求，以复用真实 Roxy 网络环境。
+- Token 交换成功后，应在本地生成账号认证 JSON：
+  - `src/auto/product_files/sub2api/<email>.json`
+  - `src/auto/product_files/cpa/<email>.json`
+- `src/auto/product_files/` 下的认证文件包含敏感 token，禁止提交或公开。
+- `POST /replacement-accounts/:id/replace` 默认通过子进程运行 `src/auto/roxy_oauth_login.js`：
+  - 子进程继承 `.env` / `process.env` 中的 Roxy 配置。
+  - `replacement_accounts.email` 覆盖子进程 `ROXY_OAUTH_EMAIL`。
+  - `replacement_accounts.sms_api` 覆盖子进程 `PHONE_VERIFICATION_SMS_API_URL`。
+  - 子进程退出码为 `0` 时视为补号成功；非 `0` 或启动失败时视为 `REPLACE_FAILED`。
 
 ---
 
@@ -102,5 +145,11 @@
 - [x] 获取邮件的详情以弹窗显示，能正确解析和滚动展示 HTML 格式邮件正文。
 - [x] 补号账号在数据库和业务层强制校验邮箱唯一性并做去空和转小写处理。
 - [x] 补号流程的状态流转与计数规则严谨无误（成功加 1，失败不加）。
+- [x] 公开验证码接口只通过启用的 `public_code_key` 定位补号邮箱，不暴露邮箱明文。
+- [x] 本机自动化脚本可免登录调用邮箱验证码接口。
+- [x] Roxy API 连接错误能暴露请求 URL 和底层网络原因。
+- [x] Roxy OAuth 自动化可完成邮箱验证码、可选手机验证、Codex 授权确认、OAuth callback 捕获、token 交换和本地认证 JSON 生成。
+- [x] 自动化失败时可生成失败截图，且截图文件名不泄露敏感信息。
+- [x] 正式补号入口通过子进程执行自动化，成功/失败结果能驱动补号账号状态流转。
 - [x] 侧边栏为统一模板加载，能够随当前路由自动匹配高亮。
 - [x] 整个系统的 UI 展现一致，符合现代磨砂透明和卡片化美学。

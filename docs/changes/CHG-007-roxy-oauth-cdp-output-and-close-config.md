@@ -1,6 +1,6 @@
 # CHG-007 修复 Roxy OAuth 调试脚本 CDP 输出与关闭配置读取
 
-状态：implemented
+状态：merged
 创建日期：2026-06-01
 关联 PRD：PRD-002
 关联 Issue：
@@ -23,3 +23,9 @@ Roxy OAuth 调试脚本已能拿到 CDP WebSocket，但命令行只输出“已�
 - [x] CLI 日志能看到可直接放入环境变量的 `ROXY_CDP_ENDPOINT=...`。
 - [x] `.env` 中设置 `ROXY_KEEP_OPEN=0` 时，脚本进入关闭 Roxy 窗口分支。
 - [x] 单元测试覆盖 CDP 输出和 dotenv 后读取关闭配置。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-02
+- 备注：已合入 RoxyBrowser 与 OAuth 自动化适配要求。

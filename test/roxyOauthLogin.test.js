@@ -214,6 +214,15 @@ test('is_email_code_page detects the email verification code screen from English
   assert.equal(await is_email_code_page(page, { timeoutMs: 100 }), true);
 });
 
+test('is_email_code_page does not misclassify Codex consent text as email code page', async () => {
+  const { is_email_code_page } = require('../src/auto/roxy_oauth_login.js');
+  const { page } = createOpenAiPageHarness(
+    'Sign in to Codex with ChatGPT. jregkolpig+s4@gmail.com Codex makes mistakes. Review the code it writes. Continue'
+  );
+
+  assert.equal(await is_email_code_page(page, { timeoutMs: 100 }), false);
+});
+
 test('openAi_email_code fetches latest code by API, fills Code, and clicks Continue', async () => {
   const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
   const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
@@ -231,9 +240,73 @@ test('openAi_email_code fetches latest code by API, fills Code, and clicks Conti
   assert.deepEqual(calls.filter((call) => ['request.post', 'code.fill', 'continue.click'].includes(call[0])), [
     ['request.post', 'http://127.0.0.1:3000/api/verification-code/latest', {
       data: { account: 'smiro4099+s1@gmail.com' },
+      headers: { Cookie: 'admin_auth=s%3A1.VU9C5Zr7JzIEl761twodGqwXJydas1N5tQ%2Fa1LdNwG8' },
       timeout: 100,
     }],
     ['code.fill', '687664'],
+    ['continue.click', { timeout: 100 }],
+  ]);
+});
+
+test('openAi_email_code sends configured admin_auth cookie when fetching email code', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
+
+  await openAi_email_code(page, 'jregkolpig+s2@gmail.com', {
+    verificationApiUrl: 'http://127.0.0.1:3000/api/verification-code/latest',
+    adminAuthCookie: 's%3Atest-cookie',
+    timeoutMs: 100,
+  });
+
+  const postCall = calls.find((call) => call[0] === 'request.post');
+  assert.deepEqual(postCall[2], {
+    data: { account: 'jregkolpig+s2@gmail.com' },
+    headers: { Cookie: 'admin_auth=s%3Atest-cookie' },
+    timeout: 100,
+  });
+});
+
+test('openAi_email_code falls back to numeric input selector when role Code is unstable', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  const roleCodeInput = {
+    async isVisible() { calls.push(['roleCode.isVisible']); return true; },
+    async waitFor() { calls.push(['roleCode.waitFor']); throw new Error('role input detached'); },
+  };
+  const fallbackInput = {
+    async waitFor(options) { calls.push(['fallback.waitFor', options]); },
+    async click() { calls.push(['fallback.click']); },
+    async fill(value) { calls.push(['fallback.fill', value]); },
+  };
+  const page = {
+    getByRole(role) {
+      calls.push(['getByRole', role]);
+      if (role === 'textbox') return roleCodeInput;
+      return { async click(options) { calls.push(['continue.click', options]); } };
+    },
+    locator(selector) {
+      calls.push(['locator', selector]);
+      if (selector === 'body') {
+        return { async textContent() { return 'Enter the code sent to your email. Code Continue'; } };
+      }
+      return { first: () => fallbackInput };
+    },
+    request: {
+      async post() {
+        return { async json() { return { ok: true, code: '654321' }; } };
+      },
+    },
+    url: () => 'https://auth.openai.com/email-verification',
+    title: async () => 'Verification',
+    textContent: async () => 'Enter the code sent to your email. Code Continue',
+  };
+
+  const result = await openAi_email_code(page, 'jregkolpig+s2@gmail.com', { timeoutMs: 100 });
+
+  assert.equal(result.code, '654321');
+  assert.deepEqual(calls.filter((call) => ['roleCode.waitFor', 'fallback.fill', 'continue.click'].includes(call[0])), [
+    ['roleCode.waitFor'],
+    ['fallback.fill', '654321'],
     ['continue.click', { timeout: 100 }],
   ]);
 });
@@ -436,6 +509,433 @@ test('codex_login clicks Continue on the Codex consent page', async () => {
   ]);
 });
 
+test('codex_login treats click timeout as success when callback URL is already reached', async () => {
+  const { codex_login } = require('../src/auto/roxy_oauth_login.js');
+  let currentUrl = 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent';
+  const page = {
+    getByRole(role) {
+      if (role === 'button') {
+        return {
+          async isVisible() { return true; },
+          async click() {
+            currentUrl = 'http://localhost:1455/auth/callback?code=code_ok&state=state_ok';
+            throw new Error('locator.click: Timeout 60000ms exceeded');
+          },
+        };
+      }
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return { async textContent() { return 'Sign in to Codex with ChatGPT. Continue'; } };
+    },
+    url: () => currentUrl,
+    title: async () => 'Sign in to Codex with ChatGPT - OpenAI',
+    textContent: async () => 'Sign in to Codex with ChatGPT. Continue',
+  };
+
+  const result = await codex_login(page, { timeoutMs: 100 });
+
+  assert.deepEqual(result, { status: 'codex-login-submitted', callbackReached: true });
+});
+
+function unsignedJwt(payload) {
+  const encode = (value) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  return `${encode({ alg: 'none', typ: 'JWT' })}.${encode(payload)}.`;
+}
+
+test('buildCpaAuthFile creates the CPA compatible auth JSON from token bundle', () => {
+  const { buildCpaAuthFile } = require('../src/auto/roxy_oauth_login.js');
+  const accessToken = unsignedJwt({
+    exp: 1780000000,
+    'https://api.openai.com/auth': {
+      chatgpt_account_id: 'acct_123',
+      chatgpt_user_id: 'user_123',
+      chatgpt_plan_type: 'plus',
+    },
+  });
+  const idToken = unsignedJwt({ sub: 'sub_123' });
+
+  const cpa = buildCpaAuthFile({
+    name: 'jregkolpig+s2@gmail.com',
+    credentials: { chatgpt_account_id: 'acct_123' },
+  }, {
+    access_token: accessToken,
+    id_token: idToken,
+    refresh_token: 'refresh_123',
+  }, {
+    now: new Date('2026-06-02T08:00:00.000Z'),
+  });
+
+  assert.deepEqual(cpa, {
+    type: 'codex',
+    email: 'jregkolpig+s2@gmail.com',
+    expired: '2026-05-29T04:26:40+08:00',
+    id_token: idToken,
+    account_id: 'acct_123',
+    access_token: accessToken,
+    last_refresh: '2026-06-02T16:00:00+08:00',
+    refresh_token: 'refresh_123',
+  });
+});
+
+test('saveIndividualAccountJson writes CPA JSON locally and returns its path', async () => {
+  const { saveIndividualAccountJson } = require('../src/auto/roxy_oauth_login.js');
+  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-product-'));
+  const accessToken = unsignedJwt({ exp: 1780000000 });
+  const idToken = unsignedJwt({ sub: 'sub_123' });
+
+  try {
+    const exportInfo = saveIndividualAccountJson({
+      name: 'jregkolpig+s2@gmail.com',
+      credentials: { chatgpt_account_id: 'acct_123' },
+    }, {
+      access_token: accessToken,
+      id_token: idToken,
+      refresh_token: 'refresh_123',
+    }, {
+      outputRootDir,
+      now: new Date('2026-06-02T08:00:00.000Z'),
+    });
+
+    assert.equal(exportInfo.cpaFile, 'jregkolpig+s2@gmail.com.json');
+    assert.match(exportInfo.cpaPath, /cpa/);
+    const saved = JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(exportInfo.cpaPath, 'utf8')));
+    assert.equal(saved.email, 'jregkolpig+s2@gmail.com');
+    assert.equal(saved.account_id, 'acct_123');
+    assert.equal(saved.refresh_token, 'refresh_123');
+  } finally {
+    await rm(outputRootDir, { recursive: true, force: true });
+  }
+});
+
+test('exchangeToken posts authorization code, parses tokens, and saves CPA JSON', async () => {
+  const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
+  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-'));
+  const calls = [];
+  const accessToken = unsignedJwt({
+    exp: 1780000000,
+    'https://api.openai.com/auth': {
+      chatgpt_account_id: 'acct_456',
+      chatgpt_user_id: 'user_456',
+      chatgpt_plan_type: 'team',
+    },
+  });
+  const idToken = unsignedJwt({ sub: 'sub_456' });
+
+  try {
+    const result = await exchangeToken('code_123', 'verifier_123', 'jregkolpig+s2@gmail.com', '', {
+      outputRootDir,
+      now: new Date('2026-06-02T08:00:00.000Z'),
+      fetch: async (url, options) => {
+        calls.push(['fetch', url, JSON.parse(options.body), options.headers]);
+        return {
+          ok: true,
+          async json() {
+            return {
+              access_token: accessToken,
+              id_token: idToken,
+              refresh_token: 'refresh_456',
+              expires_in: 3600,
+            };
+          },
+        };
+      },
+    });
+
+    assert.equal(result.cpaFile, 'jregkolpig+s2@gmail.com.json');
+    assert.equal(JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(result.cpaPath, 'utf8'))).account_id, 'acct_456');
+    assert.deepEqual(calls, [[
+      'fetch',
+      'https://auth.openai.com/oauth/token',
+      {
+        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
+        grant_type: 'authorization_code',
+        code: 'code_123',
+        redirect_uri: 'http://localhost:1455/auth/callback',
+        code_verifier: 'verifier_123',
+      },
+      { 'Content-Type': 'application/json' },
+    ]]);
+  } finally {
+    await rm(outputRootDir, { recursive: true, force: true });
+  }
+});
+
+test('exchangeToken prefers Playwright request context over Node fetch for token exchange', async () => {
+  const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
+  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-request-'));
+  const calls = [];
+  const accessToken = unsignedJwt({
+    exp: 1780000000,
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_req' },
+  });
+
+  try {
+    await exchangeToken('code_req', 'verifier_req', 'jregkolpig+s2@gmail.com', '', {
+      outputRootDir,
+      request: {
+        async post(url, options) {
+          calls.push(['request.post', url, options.data, options.headers]);
+          return {
+            ok: () => true,
+            async json() {
+              return {
+                access_token: accessToken,
+                id_token: unsignedJwt({ sub: 'sub_req' }),
+                refresh_token: 'refresh_req',
+                expires_in: 3600,
+              };
+            },
+          };
+        },
+      },
+      fetch: async () => {
+        throw new Error('fetch should not be used');
+      },
+      logger: { log: () => {}, warn: () => {}, error: () => {} },
+    });
+
+    assert.deepEqual(calls, [[
+      'request.post',
+      'https://auth.openai.com/oauth/token',
+      {
+        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
+        grant_type: 'authorization_code',
+        code: 'code_req',
+        redirect_uri: 'http://localhost:1455/auth/callback',
+        code_verifier: 'verifier_req',
+      },
+      { 'Content-Type': 'application/json' },
+    ]]);
+  } finally {
+    await rm(outputRootDir, { recursive: true, force: true });
+  }
+});
+
+test('exchangeToken prefers browser page fetch over request context for token exchange', async () => {
+  const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
+  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-page-'));
+  const calls = [];
+  const accessToken = unsignedJwt({
+    exp: 1780000000,
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_page' },
+  });
+
+  try {
+    await exchangeToken('code_page', 'verifier_page', 'jregkolpig+s2@gmail.com', '', {
+      outputRootDir,
+      page: {
+        async evaluate(fn, arg) {
+          calls.push(['page.evaluate', arg.url, arg.payload]);
+          return {
+            ok: true,
+            data: {
+              access_token: accessToken,
+              id_token: unsignedJwt({ sub: 'sub_page' }),
+              refresh_token: 'refresh_page',
+              expires_in: 3600,
+            },
+          };
+        },
+      },
+      request: {
+        async post() {
+          throw new Error('request should not be used');
+        },
+      },
+      logger: { log: () => {}, warn: () => {}, error: () => {} },
+    });
+
+    assert.equal(calls[0][0], 'page.evaluate');
+    assert.equal(calls[0][1], 'https://auth.openai.com/oauth/token');
+    assert.equal(calls[0][2].code, 'code_page');
+  } finally {
+    await rm(outputRootDir, { recursive: true, force: true });
+  }
+});
+
+test('processOAuthLoginFlow skips missing phone verification, reaches callback, and exchanges token', async () => {
+  const { processOAuthLoginFlow } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  let stage = 'email-login';
+  let currentUrl = 'https://auth.openai.com/oauth/authorize';
+  const page = {
+    getByRole(role, options) {
+      calls.push(['getByRole', role, options, stage]);
+      if (role === 'textbox' && options.name === 'Email address') {
+        return {
+          async isVisible() { return stage === 'email-login'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['email.fill', value]); },
+        };
+      }
+      if (role === 'textbox' && options.name === 'Code') {
+        return {
+          async isVisible() { return stage === 'email-code'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['code.fill', value]); },
+        };
+      }
+      return {
+        async isVisible() { return stage === 'email-login' || stage === 'email-code' || stage === 'codex'; },
+        async click() {
+          calls.push(['continue.click', stage]);
+          if (stage === 'email-login') {
+            stage = 'email-code';
+            currentUrl = 'https://auth.openai.com/email-verification';
+          } else if (stage === 'email-code') {
+            stage = 'codex';
+          } else if (stage === 'codex') {
+            currentUrl = 'http://localhost:1455/auth/callback?code=code_789&state=state_123';
+            stage = 'callback';
+          }
+        },
+      };
+    },
+    locator() {
+      return {
+        async textContent() {
+          if (stage === 'email-code') return 'Enter the code sent to your email. Code Continue';
+          if (stage === 'codex') return 'Sign in to Codex with ChatGPT. Continue';
+          return 'Welcome';
+        },
+      };
+    },
+    request: {
+      async post() {
+        return { async json() { return { ok: true, code: '123456' }; } };
+      },
+    },
+    url() { return currentUrl; },
+    async title() { return 'OAuth'; },
+    async textContent() {
+      if (stage === 'email-code') return 'Enter the code sent to your email. Code Continue';
+      if (stage === 'codex') return 'Sign in to Codex with ChatGPT. Continue';
+      return 'Welcome';
+    },
+    async waitForTimeout() {},
+  };
+
+  const result = await processOAuthLoginFlow(page, {
+    email: 'jregkolpig+s2@gmail.com',
+    verifier: 'verifier_123',
+    state: 'state_123',
+    timeoutMs: 100,
+    stageDetectTimeoutMs: 10,
+    exchangeToken: async (code, verifier, email) => {
+      calls.push(['exchangeToken', code, verifier, email]);
+      return { cpaPath: 'local-cpa.json' };
+    },
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  assert.equal(result.status, 'oauth-completed');
+  assert.equal(result.code, 'code_789');
+  assert.equal(result.exchangeResult.cpaPath, 'local-cpa.json');
+  assert.deepEqual(calls.filter((call) => ['email.fill', 'code.fill', 'exchangeToken'].includes(call[0])), [
+    ['email.fill', 'jregkolpig+s2@gmail.com'],
+    ['code.fill', '123456'],
+    ['exchangeToken', 'code_789', 'verifier_123', 'jregkolpig+s2@gmail.com'],
+  ]);
+  assert.equal(calls.some((call) => call[0] === 'textMessage.check'), false);
+});
+
+test('processOAuthLoginFlow prioritizes Codex consent over stale email-code signals', async () => {
+  const { processOAuthLoginFlow } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  let currentUrl = 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent';
+  const page = {
+    getByRole(role, options) {
+      calls.push(['getByRole', role, options]);
+      if (role === 'textbox') {
+        return {
+          async isVisible() { return options.name === 'Code'; },
+          async waitFor() { calls.push(['code.waitFor']); },
+          async click() { calls.push(['code.click']); },
+          async fill(value) { calls.push(['code.fill', value]); },
+        };
+      }
+      return {
+        async isVisible() { return true; },
+        async click() {
+          calls.push(['continue.click']);
+          currentUrl = 'http://localhost:1455/auth/callback?code=code_abc&state=state_abc';
+        },
+      };
+    },
+    locator() {
+      return {
+        async textContent() {
+          return 'Sign in to Codex with ChatGPT. email profile. Review the code it writes. Continue';
+        },
+      };
+    },
+    request: {
+      async post() {
+        calls.push(['request.post']);
+        return { async json() { return { ok: true, code: '111111' }; } };
+      },
+    },
+    url: () => currentUrl,
+    title: async () => 'Sign in to Codex with ChatGPT - OpenAI',
+    textContent: async () => 'Sign in to Codex with ChatGPT. email profile. Review the code it writes. Continue',
+    waitForTimeout: async () => new Promise((resolve) => setTimeout(resolve, 1)),
+  };
+
+  const result = await processOAuthLoginFlow(page, {
+    email: 'jregkolpig+s4@gmail.com',
+    verifier: 'verifier_abc',
+    state: 'state_abc',
+    timeoutMs: 100,
+    stageDetectTimeoutMs: 10,
+    exchangeToken: async () => ({ cpaPath: 'local-cpa.json' }),
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  assert.equal(result.status, 'oauth-completed');
+  assert.equal(calls.some((call) => call[0] === 'request.post'), false);
+  assert.equal(calls.some((call) => call[0] === 'code.fill'), false);
+  assert.deepEqual(calls.filter((call) => call[0] === 'continue.click'), [['continue.click']]);
+});
+
+test('processOAuthLoginFlow extracts callback code from request before localhost chrome-error page', async () => {
+  const { processOAuthLoginFlow } = require('../src/auto/roxy_oauth_login.js');
+  const page = {
+    waitForRequest(predicate) {
+      const req = { url: () => 'http://localhost:1455/auth/callback?code=code_req&state=state_req' };
+      assert.equal(predicate(req), true);
+      return Promise.resolve(req);
+    },
+    getByRole() {
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return { async textContent() { return ''; } };
+    },
+    url: () => 'chrome-error://chromewebdata/',
+    title: async () => 'localhost',
+    textContent: async () => 'This site can’t be reached localhost refused to connect',
+    waitForTimeout: async () => {},
+  };
+
+  const result = await processOAuthLoginFlow(page, {
+    email: 'jregkolpig+s4@gmail.com',
+    verifier: 'verifier_req',
+    state: 'state_req',
+    timeoutMs: 100,
+    stageDetectTimeoutMs: 10,
+    maxStageTurns: 5,
+    exchangeToken: async (code, verifier, email) => ({ code, verifier, email, cpaPath: 'local-cpa.json' }),
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  assert.equal(result.status, 'oauth-completed');
+  assert.equal(result.code, 'code_req');
+  assert.equal(result.exchangeResult.cpaPath, 'local-cpa.json');
+});
+
 test('roxy_oauth_login 默认导航 OAuth 授权页并保持 Roxy 窗口打开', async () => {
   const messages = [];
   const calls = [];
@@ -545,6 +1045,107 @@ test('roxy_oauth_login 默认导航 OAuth 授权页并保持 Roxy 窗口打开',
   assert.match(messages.join('\n'), /保持浏览器打开: 是/);
 });
 
+test('run navigates OAuth URL, processes callback flow, and returns local CPA export result', async () => {
+  const calls = [];
+
+  class FakeRoxyBrowserClient {
+    constructor() {
+      this.workspaceId = 1;
+    }
+    async resolveDirId() { return 'dir-1'; }
+    async closeBrowser() {}
+    async clearLocalCache() {}
+    async clearServerCache() {}
+    async randomFingerprint() {}
+    async openBrowser() {}
+    async getConnectionInfo() { return { ws: 'ws://127.0.0.1:9222/devtools/browser/abc' }; }
+    async connectPlaywright() {
+      return {
+        browser: { disconnect: async () => calls.push(['browser.disconnect']) },
+        page: {
+          goto: async (url) => calls.push(['page.goto', url]),
+          waitForLoadState: async () => {},
+          getByRole: () => ({ async isVisible() { return false; } }),
+          locator: () => ({ async textContent() { return ''; } }),
+          url: () => 'http://localhost:1455/auth/callback?code=code_999&state=state_fixed',
+          title: async () => 'Callback',
+          textContent: async () => '',
+        },
+      };
+    }
+  }
+
+  const { run } = require('../src/auto/roxy_oauth_login.js');
+  const result = await run([], {
+    RoxyBrowserClient: FakeRoxyBrowserClient,
+    dotenv: { config: () => {} },
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+    env: {
+      ROXY_API_BASE_URL: 'http://127.0.0.1:59325',
+      ROXY_WORKSPACE_ID: '1',
+      ROXY_BROWSER_DIR_ID: 'dir-1',
+      ROXY_OAUTH_EMAIL: 'jregkolpig+s2@gmail.com',
+    },
+    generatePKCE: () => ({ verifier: 'verifier_fixed', challenge: 'challenge_fixed' }),
+    randomState: () => 'state_fixed',
+    exchangeToken: async (code, verifier, email) => {
+      calls.push(['exchangeToken', code, verifier, email]);
+      return { cpaPath: 'local-cpa.json' };
+    },
+  });
+
+  assert.equal(result.oauthResult.exchangeResult.cpaPath, 'local-cpa.json');
+  assert.deepEqual(calls.filter((call) => call[0] === 'exchangeToken'), [
+    ['exchangeToken', 'code_999', 'verifier_fixed', 'jregkolpig+s2@gmail.com'],
+  ]);
+});
+
+test('run continues after page.goto connection aborted when page is still inspectable', async () => {
+  const calls = [];
+  class FakeRoxyBrowserClient {
+    constructor() { this.workspaceId = 1; }
+    async resolveDirId() { return 'dir-1'; }
+    async closeBrowser() {}
+    async clearLocalCache() {}
+    async clearServerCache() {}
+    async randomFingerprint() {}
+    async openBrowser() {}
+    async getConnectionInfo() { return { ws: 'ws://127.0.0.1:9222/devtools/browser/abc' }; }
+    async connectPlaywright() {
+      return {
+        browser: { disconnect: async () => calls.push(['browser.disconnect']) },
+        page: {
+          goto: async () => { throw new Error('page.goto: net::ERR_CONNECTION_ABORTED'); },
+          waitForLoadState: async () => {},
+          getByRole: () => ({ async isVisible() { return false; } }),
+          locator: () => ({ async textContent() { return ''; } }),
+          url: () => 'http://localhost:1455/auth/callback?code=code_abort&state=state_abort',
+          title: async () => 'Callback',
+          textContent: async () => '',
+        },
+      };
+    }
+  }
+  const { run } = require('../src/auto/roxy_oauth_login.js');
+
+  const result = await run([], {
+    RoxyBrowserClient: FakeRoxyBrowserClient,
+    dotenv: { config: () => {} },
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+    env: {
+      ROXY_API_BASE_URL: 'http://127.0.0.1:59325',
+      ROXY_WORKSPACE_ID: '1',
+      ROXY_BROWSER_DIR_ID: 'dir-1',
+      ROXY_OAUTH_EMAIL: 'jregkolpig+s2@gmail.com',
+    },
+    generatePKCE: () => ({ verifier: 'verifier_abort', challenge: 'challenge_abort' }),
+    randomState: () => 'state_abort',
+    exchangeToken: async () => ({ cpaPath: 'local-cpa.json' }),
+  });
+
+  assert.equal(result.oauthResult.exchangeResult.cpaPath, 'local-cpa.json');
+});
+
 test('openRoxyBrowserForAutomation 打开 Roxy 窗口并返回 CDP 和 Playwright 对象', async () => {
   const calls = [];
 
@@ -644,6 +1245,58 @@ test('openRoxyBrowserForAutomation 检测到 ROXY_CDP_ENDPOINT 时跳过 Roxy �
   assert.match(messages.join('\n'), /检测到 ROXY_CDP_ENDPOINT/);
   assert.match(messages.join('\n'), /跳过 Roxy 准备流程/);
   assert.match(messages.join('\n'), /直接连接 CDP/);
+});
+
+test('openRoxyBrowserForAutomation 在复用 CDP 连接失败时回退到 Roxy 正常开窗', async () => {
+  const calls = [];
+  class FakeRoxyBrowserClient {
+    constructor() {
+      this.workspaceId = 1;
+    }
+    async resolveDirId() { calls.push(['resolveDirId']); return 'dir-1'; }
+    async closeBrowser() { calls.push(['closeBrowser']); }
+    async clearLocalCache() { calls.push(['clearLocalCache']); }
+    async clearServerCache() { calls.push(['clearServerCache']); }
+    async randomFingerprint() { calls.push(['randomFingerprint']); }
+    async openBrowser() { calls.push(['openBrowser']); }
+    async getConnectionInfo() {
+      calls.push(['getConnectionInfo']);
+      return { ws: 'ws://127.0.0.1:9222/devtools/browser/new' };
+    }
+    async connectPlaywright(ws) {
+      calls.push(['connectPlaywright', ws]);
+      return { browser: { disconnect: async () => {} }, page: { marker: 'page' }, context: {} };
+    }
+  }
+  const playwright = {
+    chromium: {
+      connectOverCDP: async (ws) => {
+        calls.push(['connectOverCDP', ws]);
+        throw new Error('connect ECONNREFUSED 127.0.0.1:4361');
+      },
+    },
+  };
+  const { openRoxyBrowserForAutomation } = require('../src/auto/roxy_oauth_login.js');
+
+  const session = await openRoxyBrowserForAutomation({
+    RoxyBrowserClient: FakeRoxyBrowserClient,
+    playwright,
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+    env: { ROXY_CDP_ENDPOINT: 'ws://127.0.0.1:4361/devtools/browser/stale' },
+  });
+
+  assert.equal(session.cdpEndpoint, 'ws://127.0.0.1:9222/devtools/browser/new');
+  assert.deepEqual(calls, [
+    ['connectOverCDP', 'ws://127.0.0.1:4361/devtools/browser/stale'],
+    ['resolveDirId'],
+    ['closeBrowser'],
+    ['clearLocalCache'],
+    ['clearServerCache'],
+    ['randomFingerprint'],
+    ['openBrowser'],
+    ['getConnectionInfo'],
+    ['connectPlaywright', 'ws://127.0.0.1:9222/devtools/browser/new'],
+  ]);
 });
 
 test('closeRoxyBrowserSession 在 CDP 复用模式下即使 keepOpen=false 也只断开 Playwright', async () => {

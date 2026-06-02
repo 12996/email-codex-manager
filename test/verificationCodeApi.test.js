@@ -121,3 +121,153 @@ test('POST /api/verification-code/latest returns ACCOUNT_NOT_FOUND when main acc
     await server.close();
   }
 });
+
+test('POST /api/verification-code/latest allows localhost requests without admin_auth cookie', async () => {
+  const mainAccount = {
+    id: 1,
+    gmail_email: 'jregkolpig@gmail.com',
+    gmail_app_password: 'abcdefghijklmnop',
+  };
+  const calls = [];
+  const app = createApp({
+    accounts: {
+      getAccountByGmailEmail(email) {
+        calls.push(['getAccountByGmailEmail', email]);
+        return email === 'jregkolpig@gmail.com' ? mainAccount : null;
+      },
+    },
+    mailService: {
+      async fetchMessages(account, options) {
+        calls.push(['fetchMessages', account, options]);
+        return [
+          {
+            from: 'Google <no-reply@google.com>',
+            subject: 'Verification 654321',
+            date: '2026-06-01T10:00:00.000Z',
+            bodyText: '',
+          },
+        ];
+      },
+    },
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await fetch(`${server.baseUrl}/api/verification-code/latest`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: 'jregkolpig+s2@gmail.com' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.equal(body.code, '654321');
+    assert.deepEqual(calls, [
+      ['getAccountByGmailEmail', 'jregkolpig@gmail.com'],
+      ['fetchMessages', mainAccount, { readLocation: 'inbox', limit: 30, targetEmail: 'jregkolpig+s2@gmail.com' }],
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/verification-code/public/latest resolves allowed replacement account by public key', async () => {
+  const mainAccount = {
+    id: 1,
+    gmail_email: 'jregkolpig@gmail.com',
+    gmail_app_password: 'abcdefghijklmnop',
+  };
+  const calls = [];
+  const app = createApp({
+    accounts: {
+      getAccountByGmailEmail(email) {
+        calls.push(['getAccountByGmailEmail', email]);
+        return email === 'jregkolpig@gmail.com' ? mainAccount : null;
+      },
+    },
+    replacementAccounts: {
+      getPublicCodeAccountByKey(key) {
+        calls.push(['getPublicCodeAccountByKey', key]);
+        return key === 'vc_public_key' ? { email: 'jregkolpig+s2@gmail.com' } : null;
+      },
+    },
+    mailService: {
+      async fetchMessages(account, options) {
+        calls.push(['fetchMessages', account, options]);
+        return [
+          {
+            from: 'Google <no-reply@google.com>',
+            subject: 'Verification',
+            date: '2026-06-01T10:00:00.000Z',
+            bodyText: 'Your code is 123456',
+          },
+        ];
+      },
+    },
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await fetch(`${server.baseUrl}/api/verification-code/public/latest?key=vc_public_key`);
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, {
+      ok: true,
+      account: 'jregkolpig+s2@gmail.com',
+      mainAccount: 'jregkolpig@gmail.com',
+      code: '123456',
+      from: 'Google <no-reply@google.com>',
+      subject: 'Verification',
+      date: '2026-06-01T10:00:00.000Z',
+    });
+    assert.deepEqual(calls, [
+      ['getPublicCodeAccountByKey', 'vc_public_key'],
+      ['getAccountByGmailEmail', 'jregkolpig@gmail.com'],
+      ['fetchMessages', mainAccount, { readLocation: 'inbox', limit: 30, targetEmail: 'jregkolpig+s2@gmail.com' }],
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /api/verification-code/public/latest rejects missing or disabled public key', async () => {
+  const app = createApp({
+    accounts: {
+      getAccountByGmailEmail() {
+        throw new Error('should not resolve Gmail account without allowed public key');
+      },
+    },
+    replacementAccounts: {
+      getPublicCodeAccountByKey() {
+        return null;
+      },
+    },
+    mailService: {
+      async fetchMessages() {
+        throw new Error('should not fetch without allowed public key');
+      },
+    },
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const missing = await fetch(`${server.baseUrl}/api/verification-code/public/latest`);
+    assert.equal(missing.status, 400);
+    assert.deepEqual(await missing.json(), {
+      ok: false,
+      error: 'KEY_REQUIRED',
+      message: 'key is required',
+    });
+
+    const denied = await fetch(`${server.baseUrl}/api/verification-code/public/latest?key=disabled`);
+    assert.equal(denied.status, 403);
+    assert.deepEqual(await denied.json(), {
+      ok: false,
+      error: 'PUBLIC_ACCESS_DENIED',
+      message: '验证码访问 key 无效或未启用',
+    });
+  } finally {
+    await server.close();
+  }
+});

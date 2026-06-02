@@ -12,6 +12,9 @@ data/
 *.sqlite3
 *.db
 
+# Sensitive generated auth exports
+src/auto/product_files/
+
 # Logs
 logs/
 *.log
@@ -33,8 +36,10 @@ Thumbs.db
 
 # Generated/exported HTML files
 *.html
+!web/automation-logs.html
 
 # Generated/exported image files
+debug_image/
 *.png
 *.jpg
 *.jpeg

@@ -1,4 +1,8 @@
 import assert from 'node:assert/strict';
+import { EventEmitter } from 'node:events';
+import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import { createReplacementServices } from '../src/replacementServices.js';
@@ -73,7 +77,7 @@ test('fetchJson returns raw JSON string and rejects non-2xx', async () => {
   );
 });
 
-test('replaceAccount uses injected automation and otherwise reports unconfigured service', async () => {
+test('replaceAccount uses injected automation when provided', async () => {
   const configured = createReplacementServices({
     replacementAutomation: {
       async replaceAccount(account) {
@@ -81,14 +85,153 @@ test('replaceAccount uses injected automation and otherwise reports unconfigured
       },
     },
   });
-  const unconfigured = createReplacementServices();
 
   assert.deepEqual(await configured.replaceAccount({ email: 'user@example.com' }), {
     ok: true,
     email: 'user@example.com',
   });
+});
+
+test('replaceAccount runs roxy oauth script in a child process with account env', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    scriptPath: 'src/auto/roxy_oauth_login.js',
+    baseEnv: {
+      EXISTING_ENV: '1',
+      ROXY_OAUTH_EMAIL: 'old@example.com',
+      PHONE_VERIFICATION_SMS_API_URL: 'https://old.example/sms',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'ok');
+        child.emit('close', 0);
+      });
+      return child;
+    },
+  });
+
+  const result = await services.replaceAccount({
+    email: ' user@example.com ',
+    sms_api: ' https://example.invalid/sms ',
+  });
+
+  assert.deepEqual(result, {
+    ok: true,
+    exitCode: 0,
+    stdout: 'ok',
+    stderr: '',
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'node-bin');
+  assert.deepEqual(calls[0].args, ['src/auto/roxy_oauth_login.js']);
+  assert.equal(calls[0].options.env.EXISTING_ENV, '1');
+  assert.equal(calls[0].options.env.ROXY_OAUTH_EMAIL, 'user@example.com');
+  assert.equal(calls[0].options.env.PHONE_VERIFICATION_SMS_API_URL, 'https://example.invalid/sms');
+});
+
+test('replaceAccount creates automation run and writes child logs', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-logs-'));
+  const calls = [];
+  const statuses = [];
+  const services = createReplacementServices({
+    logDir: dir,
+    automationRuns: {
+      createRun(input) {
+        calls.push(input);
+        return { id: 101, ...input };
+      },
+      markSucceeded(id, result) {
+        statuses.push({ id, status: 'succeeded', result });
+      },
+    },
+    spawnImpl() {
+      const child = new EventEmitter();
+      child.pid = 4242;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'stdout line\n');
+        child.stderr.emit('data', 'stderr line\n');
+        child.emit('close', 0);
+      });
+      return child;
+    },
+  });
+
+  const result = await services.replaceAccount({
+    id: 7,
+    email: 'user@example.com',
+    sms_api: 'https://example.invalid/sms',
+  });
+
+  assert.equal(result.run.id, 101);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].account_id, 7);
+  assert.equal(calls[0].email, 'user@example.com');
+  assert.equal(calls[0].pid, 4242);
+  assert.equal(existsSync(calls[0].log_path), true);
+  const log = readFileSync(calls[0].log_path, 'utf8');
+  assert.match(log, /Starting replacement automation/);
+  assert.match(log, /stdout line/);
+  assert.match(log, /stderr line/);
+  assert.deepEqual(statuses, [{ id: 101, status: 'succeeded', result: { exitCode: 0 } }]);
+});
+
+test('stopReplacementRun stops an active child created by the service', async () => {
+  let killed = false;
+  const services = createReplacementServices({
+    automationRuns: {
+      createRun(input) {
+        return { id: 202, ...input };
+      },
+    },
+    spawnImpl() {
+      const child = new EventEmitter();
+      child.pid = 5252;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      child.kill = () => {
+        killed = true;
+        return true;
+      };
+      return child;
+    },
+  });
+
+  services.replaceAccount({
+    id: 8,
+    email: 'user@example.com',
+    sms_api: 'https://example.invalid/sms',
+  });
+
+  assert.deepEqual(services.stopReplacementRun(202), { ok: true, runId: 202 });
+  assert.equal(killed, true);
+});
+
+test('replaceAccount reports child process failure as REPLACE_FAILED', async () => {
+  const services = createReplacementServices({
+    spawnImpl() {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stderr.emit('data', 'oauth failed');
+        child.emit('close', 1);
+      });
+      return child;
+    },
+  });
+
   await assert.rejects(
-    () => unconfigured.replaceAccount({ email: 'user@example.com' }),
-    /REPLACE_NOT_CONFIGURED/,
+    () => services.replaceAccount({
+      email: 'user@example.com',
+      sms_api: 'https://example.invalid/sms',
+    }),
+    (error) => error.code === 'REPLACE_FAILED' && /oauth failed/.test(error.message),
   );
 });

@@ -1,6 +1,6 @@
 # CHG-009 Roxy API 连接失败诊断信息增强
 
-状态：implemented
+状态：merged
 创建日期：2026-06-02
 关联 PRD：PRD-002
 关联 Issue：
@@ -23,6 +23,6 @@ Roxy OAuth 调试脚本在 RoxyBrowser API 端口不可达时只输出 `fetch fa
 
 ## 合并记录
 
-- 合并目标 PRD：
-- 合并日期：
-- 备注：
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-02
+- 备注：已合入 Roxy API 失败诊断要求。

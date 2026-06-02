@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 
 import { createDatabase } from '../src/db.js';
+import { createReplacementAutomationRunRepository } from '../src/replacementAutomationRuns.js';
 import { createReplacementAccountRepository } from '../src/replacementAccounts.js';
 
 function createTestDb() {
@@ -32,6 +33,26 @@ test('initializeSchema creates replacement_accounts table and email unique index
   assert.equal(index.name, 'idx_replacement_accounts_email_unique');
 });
 
+test('replacement automation run repository creates and finishes runs', () => {
+  const repo = createReplacementAutomationRunRepository(createTestDb());
+
+  const run = repo.createRun({
+    account_id: 1,
+    email: 'user@example.com',
+    pid: 1234,
+    log_path: 'data/automation-logs/run.log',
+  });
+
+  assert.equal(run.status, 'running');
+  assert.equal(run.pid, 1234);
+  assert.equal(repo.listRuns()[0].id, run.id);
+
+  const finished = repo.markSucceeded(run.id, { exitCode: 0 });
+  assert.equal(finished.status, 'succeeded');
+  assert.equal(finished.exit_code, 0);
+  assert.ok(finished.finished_at);
+});
+
 test('createAccount trims email and defaults status to pending', () => {
   const repo = createTestRepository();
 
@@ -41,9 +62,90 @@ test('createAccount trims email and defaults status to pending', () => {
   assert.equal(account.phone, '123');
   assert.equal(account.status, 'pending');
   assert.equal(account.replacement_count, 0);
+  assert.equal(account.public_code_enabled, 0);
+  assert.match(account.public_code_key, /^vc_[A-Za-z0-9_-]{32}$/);
   assert.equal(account.deleted_at, null);
   assert.ok(account.created_at);
   assert.ok(account.updated_at);
+});
+
+test('createAccount and updateAccount store public verification code access fields', () => {
+  const repo = createTestRepository();
+
+  const account = repo.createAccount({
+    email: 'user@example.com',
+    public_code_enabled: true,
+    public_code_key: ' vc_public_key ',
+    remark: 'openai slot 1',
+  });
+
+  assert.equal(account.public_code_enabled, 1);
+  assert.equal(account.public_code_key, 'vc_public_key');
+  assert.equal(account.remark, 'openai slot 1');
+
+  const updated = repo.updateAccount(account.id, {
+    email: 'user@example.com',
+    public_code_enabled: false,
+    public_code_key: 'new_key',
+  });
+
+  assert.equal(updated.public_code_enabled, 0);
+  assert.equal(updated.public_code_key, 'new_key');
+});
+
+test('createAccount automatically generates public verification key when omitted', () => {
+  const repo = createTestRepository();
+
+  const first = repo.createAccount({ email: 'first@example.com' });
+  const second = repo.createAccount({ email: 'second@example.com' });
+
+  assert.match(first.public_code_key, /^vc_[A-Za-z0-9_-]{32}$/);
+  assert.match(second.public_code_key, /^vc_[A-Za-z0-9_-]{32}$/);
+  assert.notEqual(first.public_code_key, second.public_code_key);
+});
+
+test('updateAccount generates public verification key when existing key is blank and public access is enabled', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({
+    email: 'user@example.com',
+    public_code_key: 'manual_key',
+  });
+
+  const updated = repo.updateAccount(account.id, {
+    email: 'user@example.com',
+    public_code_enabled: true,
+    public_code_key: '',
+  });
+
+  assert.equal(updated.public_code_enabled, 1);
+  assert.match(updated.public_code_key, /^vc_[A-Za-z0-9_-]{32}$/);
+  assert.notEqual(updated.public_code_key, 'manual_key');
+});
+
+test('getPublicCodeAccountByKey returns only enabled non-deleted accounts', () => {
+  const repo = createTestRepository();
+  const enabled = repo.createAccount({
+    email: 'enabled@example.com',
+    public_code_enabled: true,
+    public_code_key: 'enabled_key',
+  });
+  repo.createAccount({
+    email: 'disabled@example.com',
+    public_code_enabled: false,
+    public_code_key: 'disabled_key',
+  });
+  const deleted = repo.createAccount({
+    email: 'deleted@example.com',
+    public_code_enabled: true,
+    public_code_key: 'deleted_key',
+  });
+
+  repo.deleteAccount(deleted.id);
+
+  assert.equal(repo.getPublicCodeAccountByKey('enabled_key').id, enabled.id);
+  assert.equal(repo.getPublicCodeAccountByKey(' disabled_key '), undefined);
+  assert.equal(repo.getPublicCodeAccountByKey('deleted_key'), undefined);
+  assert.equal(repo.getPublicCodeAccountByKey(''), undefined);
 });
 
 test('createAccount rejects duplicate email case-insensitively', () => {

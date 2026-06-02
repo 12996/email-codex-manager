@@ -45,6 +45,8 @@ function initializeSchema(db) {
       last_replace_at TEXT,
       last_error TEXT,
       remark TEXT,
+      public_code_enabled INTEGER NOT NULL DEFAULT 0,
+      public_code_key TEXT,
       deleted_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -53,4 +55,42 @@ function initializeSchema(db) {
     CREATE UNIQUE INDEX IF NOT EXISTS idx_replacement_accounts_email_unique
     ON replacement_accounts (lower(trim(email)));
   `);
+
+  ensureColumn(db, 'replacement_accounts', 'public_code_enabled', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'replacement_accounts', 'public_code_key', 'TEXT');
+
+  db.exec(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_replacement_accounts_public_code_key_unique
+    ON replacement_accounts (public_code_key)
+    WHERE public_code_key IS NOT NULL AND public_code_key != '';
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS replacement_automation_runs (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      account_id INTEGER NOT NULL,
+      email TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'running',
+      pid INTEGER,
+      log_path TEXT NOT NULL,
+      started_at TEXT NOT NULL,
+      finished_at TEXT,
+      exit_code INTEGER,
+      error_message TEXT
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_replacement_automation_runs_started_at
+    ON replacement_automation_runs (started_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_replacement_automation_runs_account_id
+    ON replacement_automation_runs (account_id);
+  `);
+}
+
+function ensureColumn(db, tableName, columnName, definition) {
+  const columns = db.prepare(`PRAGMA table_info(${tableName})`).all();
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+  db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`);
 }

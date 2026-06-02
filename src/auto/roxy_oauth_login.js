@@ -32,6 +32,75 @@ function createAutomationError(code, message, details = {}) {
     return error;
 }
 
+function decodeJwt(token) {
+    try {
+        const base64Payload = String(token || '').split('.')[1];
+        if (!base64Payload) return {};
+        return JSON.parse(Buffer.from(base64Payload, 'base64').toString('utf8'));
+    } catch {
+        return {};
+    }
+}
+
+function formatUtc8Timestamp(timestampMs) {
+    const value = Number(timestampMs || 0);
+    if (!Number.isFinite(value) || value <= 0) {
+        return '';
+    }
+    return new Date(value + (8 * 60 * 60 * 1000))
+        .toISOString()
+        .replace(/\.\d{3}Z$/, '+08:00');
+}
+
+function buildCpaAuthFile(entry, tokenBundle = {}, options = {}) {
+    const accessPayload = decodeJwt(tokenBundle.access_token);
+    return {
+        type: 'codex',
+        email: entry.name,
+        expired: formatUtc8Timestamp(Number(accessPayload.exp || 0) * 1000),
+        id_token: tokenBundle.id_token || '',
+        account_id: entry?.credentials?.chatgpt_account_id || '',
+        access_token: tokenBundle.access_token || '',
+        last_refresh: formatUtc8Timestamp((options.now || new Date()).getTime()),
+        refresh_token: tokenBundle.refresh_token || ''
+    };
+}
+
+function saveIndividualAccountJson(entry, tokenBundle = {}, options = {}) {
+    const rootDir = options.outputRootDir || path.join(__dirname, 'product_files');
+    const sub2apiDir = path.join(rootDir, 'sub2api');
+    const cpaDir = path.join(rootDir, 'cpa');
+    fs.mkdirSync(sub2apiDir, { recursive: true });
+    fs.mkdirSync(cpaDir, { recursive: true });
+
+    const sub2apiWrapper = {
+        exported_at: (options.now || new Date()).toISOString(),
+        proxies: [],
+        accounts: [entry]
+    };
+    const sub2apiFile = `${entry.name}.json`;
+    const sub2apiPath = path.join(sub2apiDir, sub2apiFile);
+    fs.writeFileSync(sub2apiPath, JSON.stringify(sub2apiWrapper, null, 2), 'utf-8');
+
+    const cpaData = buildCpaAuthFile(entry, tokenBundle, options);
+    const cpaFile = `${entry.name}.json`;
+    const cpaPath = path.join(cpaDir, cpaFile);
+    fs.writeFileSync(cpaPath, JSON.stringify(cpaData), 'utf-8');
+
+    return {
+        filePath: sub2apiPath,
+        fileName: sub2apiFile,
+        sub2apiPath,
+        sub2apiFile,
+        cpaPath,
+        cpaFile
+    };
+}
+
+async function persistProductAsset() {
+    return undefined;
+}
+
 function formatTimestampForFilename(date = new Date()) {
     const pad = (value, size = 2) => String(value).padStart(size, '0');
     return [
@@ -236,9 +305,38 @@ async function is_email_code_page(page, options = {}) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
     const codeInput = page.getByRole('textbox', { name: 'Code' });
     const bodyText = (await getBodyText(page, timeoutMs)).toLowerCase();
+    const url = typeof page.url === 'function' ? page.url() : '';
     const hasCodeInput = await isVisible(codeInput, timeoutMs);
-    const hasEmailCodeKeywords = bodyText.includes('code') && bodyText.includes('email');
+    const hasEmailVerificationContext = url.includes('/email-verification')
+        || bodyText.includes('sent to your email')
+        || bodyText.includes('check your email')
+        || bodyText.includes('email verification')
+        || bodyText.includes('verify your email');
+    const hasEmailCodeKeywords = bodyText.includes('code') && bodyText.includes('email') && hasEmailVerificationContext;
     return hasCodeInput && hasEmailCodeKeywords;
+}
+
+async function fillVerificationCodeInput(page, code, timeoutMs) {
+    const roleCodeInput = page.getByRole('textbox', { name: 'Code' });
+    try {
+        await roleCodeInput.waitFor({ state: 'visible', timeout: timeoutMs });
+        await roleCodeInput.click();
+        await roleCodeInput.fill(String(code));
+        return 'role-code';
+    } catch (error) {
+        const fallbackSelector = [
+            'input[autocomplete="one-time-code"]',
+            'input[inputmode="numeric"]',
+            'input[name="code"]',
+            'input[type="tel"]',
+            'input[type="text"]'
+        ].join(', ');
+        const fallbackInput = page.locator(fallbackSelector).first();
+        await fallbackInput.waitFor({ state: 'visible', timeout: timeoutMs });
+        await fallbackInput.click();
+        await fallbackInput.fill(String(code));
+        return 'fallback-input';
+    }
 }
 
 async function fetchEmailVerificationCode(page, email, options) {
@@ -249,16 +347,25 @@ async function fetchEmailVerificationCode(page, email, options) {
 
     let data;
     const apiRequest = options.request || page.request || (typeof page.context === 'function' ? page.context().request : null);
+    const configuredAdminAuth = options.adminAuthCookie || options.adminAuth || admin_auth;
+    const requestHeaders = configuredAdminAuth
+        ? { Cookie: `admin_auth=${configuredAdminAuth}` }
+        : undefined;
+
     if (apiRequest && typeof apiRequest.post === 'function') {
         const response = await apiRequest.post(verificationApiUrl, {
             data: { account: email },
+            ...(requestHeaders ? { headers: requestHeaders } : {}),
             timeout: timeoutMs
         });
         data = await response.json();
     } else if (typeof fetch === 'function') {
         const response = await fetch(verificationApiUrl, {
             method: 'POST',
-            headers: { 'content-type': 'application/json' },
+            headers: {
+                'content-type': 'application/json',
+                ...(requestHeaders || {})
+            },
             body: JSON.stringify({ account: email }),
             signal: AbortSignal.timeout(timeoutMs)
         });
@@ -301,10 +408,7 @@ async function openAi_email_code(page, email, options = {}) {
             });
         }
 
-        const codeInput = page.getByRole('textbox', { name: 'Code' });
-        await codeInput.waitFor({ state: 'visible', timeout: timeoutMs });
-        await codeInput.click();
-        await codeInput.fill(String(code));
+        await fillVerificationCodeInput(page, code, timeoutMs);
         await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
 
         return {
@@ -445,7 +549,16 @@ async function codex_login(page, options = {}) {
             });
         }
 
-        await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+        try {
+            await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+        } catch (error) {
+            const currentUrl = typeof page.url === 'function' ? page.url() : '';
+            const message = String(error?.message || error);
+            if (currentUrl.includes('localhost:1455/auth/callback') || message.includes('localhost:1455/auth/callback')) {
+                return { status: 'codex-login-submitted', callbackReached: true };
+            }
+            throw error;
+        }
         return { status: 'codex-login-submitted' };
     });
 }
@@ -532,7 +645,11 @@ async function openRoxyBrowserForAutomation(deps = {}) {
     const env = deps.env || process.env;
     const reuseCdpEndpoint = String(env.ROXY_CDP_ENDPOINT || '').trim();
     if (reuseCdpEndpoint) {
-        return connectExistingRoxyByCdp(reuseCdpEndpoint, deps);
+        try {
+            return await connectExistingRoxyByCdp(reuseCdpEndpoint, deps);
+        } catch (error) {
+            log(logger, 'cdp-reuse', '复用 CDP 失败，回退 Roxy 开窗', `诊断=${error.message || error}`);
+        }
     }
 
     const Client = deps.RoxyBrowserClient || RoxyBrowserClient;
@@ -600,8 +717,9 @@ async function closeRoxyBrowserSession(session, options = {}) {
 /**
  * 核心流程：使用 Code 换取 Token 并解析
  */
-async function exchangeToken(code, verifier, email, proxyValue = '') {
-    console.log("🎟️  [Step 3] 正在通过协议换取 Token Bundle...");
+async function exchangeToken(code, verifier, email, proxyValue = '', options = {}) {
+    const logger = pickLogger(options.logger);
+    log(logger, 'token', '正在通过授权码换取 Token Bundle');
     const url = 'https://auth.openai.com/oauth/token';
     const payload = {
         client_id: "app_EMoamEEZ73f0CkXaXp7hrann",
@@ -612,17 +730,56 @@ async function exchangeToken(code, verifier, email, proxyValue = '') {
     };
 
     try {
-        const transportConfig = await buildAxiosTransportConfig(proxyValue);
-        const resp = await axios.post(url, payload, {
-            headers: { 'Content-Type': 'application/json' },
-            ...transportConfig
-        });
-        const data = resp.data;
+        if (proxyValue) {
+            logger.warn('[roxy-oauth-login] phase=token action=代理提示 诊断=当前 token 请求使用 fetch，不支持 Node 侧代理配置；浏览器阶段仍使用 Roxy 代理');
+        }
+        let data;
+        let ok = true;
+        if (options.page && typeof options.page.evaluate === 'function') {
+            const result = await options.page.evaluate(async ({ url: tokenUrl, payload: tokenPayload }) => {
+                const response = await fetch(tokenUrl, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(tokenPayload)
+                });
+                return {
+                    ok: response.ok,
+                    data: await response.json()
+                };
+            }, { url, payload });
+            ok = result.ok !== false;
+            data = result.data;
+        } else if (options.request && typeof options.request.post === 'function') {
+            const resp = await options.request.post(url, {
+                data: payload,
+                headers: { 'Content-Type': 'application/json' },
+                timeout: options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS
+            });
+            ok = typeof resp.ok === 'function' ? resp.ok() : resp.ok !== false;
+            data = await resp.json();
+        } else {
+            const fetchImpl = options.fetch || (typeof fetch === 'function' ? fetch : null);
+            if (!fetchImpl) {
+                throw createAutomationError('OPENAI_TOKEN_EXCHANGE_FAILED', '当前运行环境不支持 fetch，无法换取 Token');
+            }
+            const resp = await fetchImpl(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            });
+            ok = resp.ok !== false;
+            data = await resp.json();
+        }
+        if (!ok) {
+            throw createAutomationError('OPENAI_TOKEN_EXCHANGE_FAILED', 'OpenAI token endpoint 返回失败', {
+                apiResult: data
+            });
+        }
 
         const decodedAccess = decodeJwt(data.access_token);
         const decodedId = decodeJwt(data.id_token);
         const authInfo = decodedAccess["https://api.openai.com/auth"] || {};
-        console.log(authInfo);
+        log(logger, 'token', 'Token Bundle 解析完成', `account=${authInfo.chatgpt_account_id || '未知'}`);
         
         const accountEntry = {
             name: email,
@@ -648,13 +805,155 @@ async function exchangeToken(code, verifier, email, proxyValue = '') {
             plan_type: authInfo.chatgpt_plan_type || "plus"
         };
 
-        const exportInfo = saveIndividualAccountJson(accountEntry, data);
+        const exportInfo = saveIndividualAccountJson(accountEntry, data, options);
         await persistProductAsset(accountEntry, exportInfo);
         return exportInfo;
 
     } catch (err) {
-        console.error("换取 Token 失败:", err.response ? JSON.stringify(err.response.data) : err.message);
+        const apiDetails = err.apiResult ? ` apiResult=${JSON.stringify(err.apiResult)}` : '';
+        logger.error(`[roxy-oauth-login] phase=token action=换取 Token 失败 诊断=${err.response ? JSON.stringify(err.response.data) : err.message}${apiDetails}`);
         throw err;
+    }
+}
+
+function parseOAuthCallbackUrl(callbackUrl, expectedState) {
+    const parsed = new URL(callbackUrl);
+    const code = parsed.searchParams.get('code');
+    const state = parsed.searchParams.get('state');
+    if (!code) {
+        throw createAutomationError('OAUTH_CALLBACK_CODE_MISSING', 'OAuth callback URL 中没有 code', { callbackUrl });
+    }
+    if (expectedState && state !== expectedState) {
+        throw createAutomationError('OAUTH_CALLBACK_STATE_MISMATCH', 'OAuth callback state 与本次请求不一致', {
+            expectedState,
+            actualState: state
+        });
+    }
+    return { code, state, callbackUrl };
+}
+
+function getCurrentOAuthCallback(page, expectedState) {
+    const currentUrl = typeof page.url === 'function' ? page.url() : '';
+    if (String(currentUrl).includes('localhost:1455/auth/callback')) {
+        return parseOAuthCallbackUrl(currentUrl, expectedState);
+    }
+    return null;
+}
+
+async function processOAuthLoginFlow(page, options = {}) {
+    const logger = pickLogger(options.logger);
+    const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+    const stageDetectTimeoutMs = options.stageDetectTimeoutMs || 1500;
+    const maxStageTurns = options.maxStageTurns || 20;
+    const email = String(options.email || Default_EMAIL || '').trim();
+    if (!email) {
+        throw createAutomationError('OPENAI_LOGIN_EMAIL_REQUIRED', 'OpenAI 登录邮箱不能为空');
+    }
+    if (!options.verifier) {
+        throw createAutomationError('OAUTH_VERIFIER_REQUIRED', 'OAuth PKCE verifier 不能为空');
+    }
+    if (!page || typeof page.getByRole !== 'function') {
+        log(logger, 'oauth-flow', '当前 page 不支持页面状态机，跳过自动登录阶段');
+        return null;
+    }
+    let capturedCallback = null;
+    if (typeof page.waitForRequest === 'function') {
+        page.waitForRequest((request) => {
+            const requestUrl = typeof request.url === 'function' ? request.url() : '';
+            return requestUrl.includes('localhost:1455/auth/callback');
+        }, { timeout: timeoutMs }).then((request) => {
+            const requestUrl = typeof request.url === 'function' ? request.url() : '';
+            capturedCallback = parseOAuthCallbackUrl(requestUrl, options.state);
+        }).catch(() => {});
+    }
+
+    for (let turn = 0; turn < maxStageTurns; turn += 1) {
+        const callback = capturedCallback || getCurrentOAuthCallback(page, options.state);
+        if (callback) {
+            const exchange = options.exchangeToken || exchangeToken;
+            const requestContext = options.request
+                || page.request
+                || (typeof page.context === 'function' ? page.context().request : null);
+            const exchangeResult = await exchange(callback.code, options.verifier, email, options.proxyValue || '', {
+                ...options,
+                page,
+                ...(requestContext ? { request: requestContext } : {}),
+                logger
+            });
+            return {
+                status: 'oauth-completed',
+                code: callback.code,
+                callbackUrl: callback.callbackUrl,
+                exchangeResult
+            };
+        }
+
+        const detectOptions = { ...options, timeoutMs: stageDetectTimeoutMs, logger };
+        const actionOptions = { ...options, timeoutMs, logger };
+        if (await is_openai_login_page(page, detectOptions)) {
+            log(logger, 'oauth-flow', '识别到 OpenAI 邮箱登录页');
+            await openAi_login(page, email, actionOptions);
+        } else if (await is_codex_login_page(page, detectOptions)) {
+            log(logger, 'oauth-flow', '识别到 Codex 授权确认页');
+            await codex_login(page, actionOptions);
+        } else if (await is_email_code_page(page, detectOptions)) {
+            log(logger, 'oauth-flow', '识别到邮箱验证码页');
+            await openAi_email_code(page, email, actionOptions);
+            await waitForStageTransition(page, actionOptions);
+        } else if (await is_phone_verify_page(page, detectOptions)) {
+            log(logger, 'oauth-flow', '识别到手机验证方式选择页');
+            await openAi_phone_verify(page, actionOptions);
+        } else if (await is_phone_code_page(page, detectOptions)) {
+            log(logger, 'oauth-flow', '识别到手机验证码页');
+            await openAi_phone_code(page, actionOptions);
+        } else if (typeof page.waitForTimeout === 'function') {
+            await page.waitForTimeout(500);
+        } else {
+            await new Promise((resolve) => setTimeout(resolve, 500));
+        }
+    }
+
+    throw createAutomationError('OAUTH_FLOW_TIMEOUT', 'OAuth 登录状态机未在限定轮次内完成', {
+        ...(await collectPageDebug(page))
+    });
+}
+
+async function waitForStageTransition(page, options = {}) {
+    const timeoutMs = options.transitionTimeoutMs || 8000;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+        if (getCurrentOAuthCallback(page, options.state)) {
+            return 'callback';
+        }
+        const detectOptions = { ...options, timeoutMs: Math.min(500, options.stageDetectTimeoutMs || 1500) };
+        if (await is_codex_login_page(page, detectOptions)) return 'codex';
+        if (await is_phone_verify_page(page, detectOptions)) return 'phone-verify';
+        if (await is_phone_code_page(page, detectOptions)) return 'phone-code';
+        if (typeof page.waitForTimeout === 'function') {
+            await page.waitForTimeout(300);
+        } else {
+            await new Promise((resolve) => setTimeout(resolve, 300));
+        }
+    }
+    return 'timeout';
+}
+
+async function navigateOAuthTarget(page, targetUrl, logger) {
+    try {
+        await page.goto(targetUrl, {
+            waitUntil: 'domcontentloaded',
+            timeout: DEFAULT_NAVIGATION_TIMEOUT_MS
+        });
+    } catch (error) {
+        const message = String(error?.message || error);
+        if (!/ERR_CONNECTION_ABORTED|ERR_ABORTED/i.test(message)) {
+            throw error;
+        }
+        logger.warn(`[roxy-oauth-login] phase=navigate action=导航被中断，尝试继续检查页面 诊断=${message}`);
+        const currentUrl = typeof page.url === 'function' ? page.url() : '';
+        if (!currentUrl) {
+            throw error;
+        }
     }
 }
 
@@ -671,17 +970,17 @@ async function run(argv = process.argv.slice(2), deps = {}) {
     const session = await openRoxyBrowserForAutomation(deps);
     const { page } = session;
 
-    const { verifier, challenge } = generatePKCE();
-    const state = crypto.randomBytes(16).toString('hex');
+    const pkceFactory = deps.generatePKCE || generatePKCE;
+    const { verifier, challenge } = pkceFactory();
+    const state = typeof deps.randomState === 'function'
+        ? deps.randomState()
+        : crypto.randomBytes(16).toString('hex');
 
     const authUrl = `https://auth.openai.com/oauth/authorize?client_id=app_EMoamEEZ73f0CkXaXp7hrann&code_challenge=${challenge}&code_challenge_method=S256&codex_cli_simplified_flow=true&id_token_add_organizations=true&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&response_type=code&scope=openid+profile+email+offline_access&state=${state}`;
     const targetUrl = argv[0] || authUrl;
 
     log(logger, 'navigate', '导航目标 URL', targetUrl);
-    await page.goto(targetUrl, {
-        waitUntil: 'domcontentloaded',
-        timeout: DEFAULT_NAVIGATION_TIMEOUT_MS
-    });
+    await navigateOAuthTarget(page, targetUrl, logger);
     await page.waitForLoadState('networkidle', { timeout: DEFAULT_IDLE_TIMEOUT_MS }).catch((error) => {
         logger.warn(`[roxy-oauth-login] phase=navigate action=等待 networkidle 诊断=${error.message}`);
     });
@@ -689,6 +988,18 @@ async function run(argv = process.argv.slice(2), deps = {}) {
     const currentUrl = page.url();
     const title = await page.title();
     log(logger, 'inspect', '当前页面 URL/title', `url=${currentUrl} title=${title}`);
+
+    const email = String(env.ROXY_OAUTH_EMAIL || Default_EMAIL || '').trim();
+    const oauthResult = await processOAuthLoginFlow(page, {
+        ...deps,
+        email,
+        verifier,
+        state,
+        adminAuthCookie: deps.adminAuthCookie || env.ADMIN_AUTH_COOKIE || admin_auth,
+        verificationApiUrl: deps.verificationApiUrl || env.VERIFICATION_CODE_API_URL || DEFAULT_VERIFICATION_API_URL,
+        proxyValue: deps.proxyValue || env.ROXY_PROXY || '',
+        logger
+    });
 
     const disconnectMode = await closeRoxyBrowserSession(session, { keepOpen, logger });
 
@@ -699,7 +1010,8 @@ async function run(argv = process.argv.slice(2), deps = {}) {
         dirId: session.dirId,
         cdpEndpoint: session.cdpEndpoint,
         keepOpen,
-        disconnectMode
+        disconnectMode,
+        oauthResult
     };
 }
 
@@ -737,11 +1049,13 @@ module.exports = {
     DEFAULT_PHONE_VERIFICATION_SMS_API_URL,
     DEFAULT_VERIFICATION_API_URL,
     EMAIL_SUBTITLE_SELECTOR,
+    buildCpaAuthFile,
     captureFailureScreenshot,
     codex_login,
     connectExistingRoxyByCdp,
     closeRoxyBrowserSession,
     disconnectPlaywright,
+    exchangeToken,
     fetchPhoneVerificationCode,
     is_codex_login_page,
     is_email_code_page,
@@ -755,8 +1069,10 @@ module.exports = {
     openAi_phone_code_request,
     openAi_phone_verify,
     openRoxyBrowserForAutomation,
+    processOAuthLoginFlow,
     run,
     runCli,
+    saveIndividualAccountJson,
     session_check,
     waitForOpenAiEmailVerification
 };

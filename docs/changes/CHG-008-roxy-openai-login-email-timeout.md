@@ -1,6 +1,6 @@
 # CHG-008 新增 Roxy OpenAI 登录页邮箱处理与超时判断
 
-状态：implemented
+状态：merged
 创建日期：2026-06-02
 关联 PRD：PRD-002
 关联 Issue：
@@ -32,3 +32,9 @@
 - [x] 超时时抛出 `OPENAI_EMAIL_VERIFICATION_TIMEOUT`。
 - [x] 邮箱不一致时抛出 `OPENAI_LOGIN_EMAIL_MISMATCH`。
 - [x] 单元测试通过。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-02
+- 备注：已合入 OpenAI/Codex OAuth 自动化状态机要求。

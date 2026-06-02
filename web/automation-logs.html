@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>补号日志</title>
+  <link rel="stylesheet" href="web/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <!-- SIDEBAR_PLACEHOLDER -->
+  </aside>
+
+  <main class="shell">
+    <header class="topbar">
+      <button class="menu-btn" type="button">☰</button>
+      <div class="admin">
+        <span class="bell">🔔<em>12</em></span>
+        <span class="avatar">👤</span>
+        <strong>管理员⌄</strong>
+      </div>
+    </header>
+
+    <section class="page-head">
+      <div>
+        <h1>补号子进程日志</h1>
+        <p>查看 Roxy OAuth 自动补号子进程运行状态、stdout/stderr 日志，并停止仍在运行的子进程。</p>
+      </div>
+      <button id="refreshButton" class="primary" type="button">↻ 刷新日志</button>
+    </section>
+
+    <section class="panel">
+      <div class="toolbar">
+        <select id="statusFilter" aria-label="状态筛选">
+          <option value="">全部状态</option>
+          <option value="running">running</option>
+          <option value="succeeded">succeeded</option>
+          <option value="failed">failed</option>
+          <option value="stopped">stopped</option>
+        </select>
+        <input id="searchInput" type="search" placeholder="搜索邮箱 / PID / run ID">
+        <span class="spacer"></span>
+        <span id="totalText" class="muted">共 0 条</span>
+      </div>
+
+      <div class="table-wrap automation-log-table">
+        <table>
+          <thead>
+            <tr>
+              <th>Run ID</th>
+              <th>账号</th>
+              <th>状态</th>
+              <th>PID</th>
+              <th>开始时间</th>
+              <th>结束时间</th>
+              <th>退出码</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="runsBody"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel log-detail-panel">
+      <div class="mail-panel-head">
+        <div>
+          <h2 id="detailTitle">运行详情</h2>
+          <p id="detailMeta" class="muted">选择一条运行记录查看日志</p>
+        </div>
+        <button id="stopButton" class="danger" type="button" hidden>停止子进程</button>
+      </div>
+      <pre id="logContent" class="automation-log-content">暂无日志</pre>
+    </section>
+  </main>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="web/automation-logs.js"></script>
+</body>
+</html>

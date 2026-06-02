@@ -8,6 +8,7 @@ import { config } from './config.js';
 import { createAccountRepository } from './accounts.js';
 import { createAuthMiddleware, clearAuthCookie, setAuthCookie } from './auth.js';
 import { createDatabase } from './db.js';
+import { createReplacementAutomationRunRepository } from './replacementAutomationRuns.js';
 import {
   deriveMainGmailAccount,
   fetchMessages,
@@ -25,7 +26,8 @@ export function createApp({
   db = createDatabase(config.databasePath),
   accounts = createAccountRepository(db),
   replacementAccounts = createReplacementAccountRepository(db),
-  replacementServices = createReplacementServices(),
+  replacementAutomationRuns = createReplacementAutomationRunRepository(db),
+  replacementServices = createReplacementServices({ automationRuns: replacementAutomationRuns }),
   mailService = { fetchMessages, testConnection },
 } = {}) {
   const app = express();
@@ -55,7 +57,15 @@ export function createApp({
     res.redirect('/login');
   });
 
-  app.post('/api/verification-code/latest', requireAuth, async (req, res) => {
+  const requireAuthUnlessLocal = (req, res, next) => {
+    if (isLocalRequest(req)) {
+      next();
+      return;
+    }
+    requireAuth(req, res, next);
+  };
+
+  app.post('/api/verification-code/latest', requireAuthUnlessLocal, async (req, res) => {
     const account = String(req.body?.account || '').trim().toLowerCase();
     if (!account) {
       res.status(400).json({
@@ -66,63 +76,45 @@ export function createApp({
       return;
     }
 
-    const mainAccountEmail = deriveMainGmailAccount(account);
-    const mainAccount = accounts.getAccountByGmailEmail(mainAccountEmail);
-    if (!mainAccount) {
-      res.status(404).json({
+    await sendLatestVerificationCodeResponse(res, { account, accounts, mailService });
+  });
+
+  app.get('/api/verification-code/public/latest', async (req, res) => {
+    const key = String(req.query?.key || '').trim();
+    if (!key) {
+      res.status(400).json({
         ok: false,
-        account,
-        mainAccount: mainAccountEmail,
-        error: 'ACCOUNT_NOT_FOUND',
-        message: '数据库中没有配置主 Gmail 账号',
+        error: 'KEY_REQUIRED',
+        message: 'key is required',
       });
       return;
     }
 
-    try {
-      const messages = await mailService.fetchMessages(mainAccount, {
-        readLocation: 'inbox',
-        limit: 30,
-        targetEmail: account,
-      });
-      const result = findLatestVerificationCode(messages);
-      if (!result) {
-        res.status(404).json({
-          ok: false,
-          account,
-          mainAccount: mainAccountEmail,
-          code: null,
-          error: 'CODE_NOT_FOUND',
-          message: '未找到最近的 6 位验证码邮件',
-        });
-        return;
-      }
-
-      res.json({
-        ok: true,
-        account,
-        mainAccount: mainAccountEmail,
-        code: result.code,
-        from: result.message.from || '',
-        subject: result.message.subject || '',
-        date: result.message.date || '',
-      });
-    } catch (error) {
-      const status = error.code === 'AUTH_FAILED' ? 401 : 502;
-      res.status(status).json({
+    const publicAccount = replacementAccounts.getPublicCodeAccountByKey(key);
+    if (!publicAccount) {
+      res.status(403).json({
         ok: false,
-        account,
-        mainAccount: mainAccountEmail,
-        error: error.code || 'IMAP_ERROR',
-        message: error.message || 'IMAP 请求失败',
+        error: 'PUBLIC_ACCESS_DENIED',
+        message: '验证码访问 key 无效或未启用',
       });
+      return;
     }
+
+    const account = String(publicAccount.email || '').trim().toLowerCase();
+    await sendLatestVerificationCodeResponse(res, { account, accounts, mailService });
   });
 
   app.get('/replacement-ui', requireAuth, (req, res) => {
     const html = readFileSync(join(webDir, 'index.html'), 'utf8');
     const sidebar = readFileSync(join(webDir, 'sidebar.html'), 'utf8')
       .replace('id="nav-replacement"', 'id="nav-replacement" class="active"');
+    res.send(html.replace('<!-- SIDEBAR_PLACEHOLDER -->', sidebar));
+  });
+
+  app.get('/replacement-automation-logs', requireAuth, (req, res) => {
+    const html = readFileSync(join(webDir, 'automation-logs.html'), 'utf8');
+    const sidebar = readFileSync(join(webDir, 'sidebar.html'), 'utf8')
+      .replace('id="nav-automation-logs"', 'id="nav-automation-logs" class="active"');
     res.send(html.replace('<!-- SIDEBAR_PLACEHOLDER -->', sidebar));
   });
 
@@ -299,12 +291,51 @@ export function createApp({
 
     replacementAccounts.markReplacementStarted(account.id);
     try {
-      await replacementServices.replaceAccount(account);
+      const result = await replacementServices.replaceAccount(account);
       const updated = replacementAccounts.markReplacementSuccess(account.id);
-      res.json({ ok: true, account: updated });
+      res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
     } catch (error) {
       const updated = replacementAccounts.markReplacementFailure(account.id, error.message);
       sendApiError(res, error, { account: updated });
+    }
+  });
+
+  app.get('/replacement-automation-runs', requireAuth, (req, res) => {
+    res.json({ ok: true, runs: replacementAutomationRuns.listRuns({ limit: req.query?.limit }) });
+  });
+
+  app.get('/replacement-automation-runs/:id', requireAuth, (req, res) => {
+    const run = replacementAutomationRuns.getRun(req.params.id);
+    if (!run) {
+      res.status(404).json(errorBody('RUN_NOT_FOUND', 'automation run not found'));
+      return;
+    }
+
+    let log = '';
+    try {
+      log = readFileSync(run.log_path, 'utf8');
+    } catch (error) {
+      log = `日志文件读取失败：${error.message}`;
+    }
+    res.json({ ok: true, run, log });
+  });
+
+  app.post('/replacement-automation-runs/:id/stop', requireAuth, (req, res) => {
+    const run = replacementAutomationRuns.getRun(req.params.id);
+    if (!run) {
+      res.status(404).json(errorBody('RUN_NOT_FOUND', 'automation run not found'));
+      return;
+    }
+    if (run.status !== 'running') {
+      res.status(400).json(errorBody('RUN_NOT_RUNNING', 'automation run is not running'));
+      return;
+    }
+
+    try {
+      const result = replacementServices.stopReplacementRun(req.params.id);
+      res.json({ ok: true, ...result });
+    } catch (error) {
+      sendApiError(res, error);
     }
   });
 
@@ -414,6 +445,65 @@ function markAccountError(accounts, accountId, error) {
   accounts.markFetchFailure(accountId, status, error.message);
 }
 
+async function sendLatestVerificationCodeResponse(res, { account, accounts, mailService }) {
+  const mainAccountEmail = deriveMainGmailAccount(account);
+  const mainAccount = accounts.getAccountByGmailEmail(mainAccountEmail);
+  if (!mainAccount) {
+    res.status(404).json({
+      ok: false,
+      account,
+      mainAccount: mainAccountEmail,
+      error: 'ACCOUNT_NOT_FOUND',
+      message: '数据库中没有配置主 Gmail 账号',
+    });
+    return;
+  }
+
+  try {
+    const messages = await mailService.fetchMessages(mainAccount, {
+      readLocation: 'inbox',
+      limit: 30,
+      targetEmail: account,
+    });
+    const result = findLatestVerificationCode(messages);
+    if (!result) {
+      res.status(404).json({
+        ok: false,
+        account,
+        mainAccount: mainAccountEmail,
+        code: null,
+        error: 'CODE_NOT_FOUND',
+        message: '未找到最近的 6 位验证码邮件',
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      account,
+      mainAccount: mainAccountEmail,
+      code: result.code,
+      from: result.message.from || '',
+      subject: result.message.subject || '',
+      date: result.message.date || '',
+    });
+  } catch (error) {
+    const status = error.code === 'AUTH_FAILED' ? 401 : 502;
+    res.status(status).json({
+      ok: false,
+      account,
+      mainAccount: mainAccountEmail,
+      error: error.code || 'IMAP_ERROR',
+      message: error.message || 'IMAP 请求失败',
+    });
+  }
+}
+
+function isLocalRequest(req) {
+  const remoteAddress = String(req.ip || req.socket?.remoteAddress || '').toLowerCase();
+  return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remoteAddress);
+}
+
 function sendAccountApiError(res, error) {
   const status = error.code === 'AUTH_FAILED' ? 401 : 400;
   res.status(status).json({
@@ -452,6 +542,8 @@ function statusForApiError(code) {
     || code === 'JSON_FETCH_FAILED'
     || code === 'REPLACE_FAILED'
     || code === 'REPLACE_NOT_CONFIGURED'
+    || code === 'RUN_NOT_ACTIVE'
+    || code === 'RUN_STOP_FAILED'
   ) {
     return 502;
   }

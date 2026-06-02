@@ -1,6 +1,6 @@
 # CHG-012 Roxy OpenAI 手机验证页处理
 
-状态：implemented
+状态：merged
 
 创建日期：2026-06-02
 
@@ -39,3 +39,9 @@ Playwright codegen 录制确认 OpenAI 登录流程中还存在两个手机验�
 - `node --test src\auto\roxy_oauth_steps_manual_test.js` 通过，1/1 pass。
 - `node src\auto\roxy_oauth_steps_manual_test.js --help` 通过，help 包含新增 phone steps、`--sms-api`、`--code`。
 - `npm test` 未全量通过：失败仍在既有 `accountsWebApi.test.js` 的 `/系统设置/` 断言和 `test/test-verification-code.mjs` 本地服务连接。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-02
+- 备注：已合入可选手机验证方式和短信验证码处理要求。

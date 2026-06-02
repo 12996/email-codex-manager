@@ -1,6 +1,6 @@
 # CHG-011 Playwright codegen 录制优先规则
 
-状态：implemented
+状态：merged
 创建日期：2026-06-02
 关联 PRD：PRD-002
 关联 Issue：
@@ -22,3 +22,9 @@
 - [x] `AGENTS.md` 包含 Playwright codegen 录制优先规则。
 - [x] 规则明确禁止先自行推断补代码或写测试。
 - [x] 规则明确录制后再整理函数和测试。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-02
+- 备注：已合入自动化录制优先和运行时代码归属约束。

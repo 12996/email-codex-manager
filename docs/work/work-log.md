@@ -17,3 +17,8 @@
 | 2026-06-02 | Roxy OpenAI 邮箱验证码与 Codex 登录确认处理 | done | `2026-06-02-roxy-openai登录页邮箱处理与超时判断.md` |
 | 2026-06-02 | Roxy OpenAI 手机验证页处理 | done | `2026-06-02-roxy-openai登录页邮箱处理与超时判断.md` |
 | 2026-06-02 | Roxy OAuth 失败截图 | done | `2026-06-02-roxy-openai登录页邮箱处理与超时判断.md` |
+| 2026-06-02 | Roxy OAuth 自动生成 CPA JSON | done | `2026-06-02-roxy-openai登录页邮箱处理与超时判断.md` |
+| 2026-06-02 | 公开验证码 key 与本机免登录验证码接口 | done | `2026-06-02-roxy-openai登录页邮箱处理与超时判断.md` |
+| 2026-06-02 | 补号接口接入 Roxy OAuth 子进程自动化 | done | `2026-06-02-roxy-openai登录页邮箱处理与超时判断.md` |
+| 2026-06-02 | PRD-002 基线合并 | done | `2026-06-02-roxy-openai登录页邮箱处理与超时判断.md` |
+| 2026-06-02 | 补号子进程日志页面 | done | `2026-06-02-roxy-openai登录页邮箱处理与超时判断.md` |
