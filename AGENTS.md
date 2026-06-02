@@ -4,6 +4,12 @@
 
 AI 应根据任务目标自行判断需要阅读哪些文档，不要机械读取全部文档。
 
+## 0. 自动化录制优先规则
+
+当用户明确要求使用 Playwright codegen/录制模式，并表示会亲自走一遍页面流程时，AI 必须先启动对应的 codegen/recorder，让用户完成真实流程；不要先根据现有代码自行推断、补函数或写测试。
+
+录制完成后，AI 再基于实际录制结果整理 selector、流程函数和测试。Roxy OAuth 相关可复用运行时代码写入 `src/auto/roxy_oauth_login.js`，手动验证入口写入 `src/auto/roxy_oauth_steps_manual_test.js`。
+
 ## 1. 文档入口
 
 项目文档总入口：

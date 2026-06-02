@@ -1,8 +1,8 @@
 # CHG-005 合并邮箱账号页面到 web 前端
 
-状态：implemented
+状态：merged
 创建日期：2026-06-01
-关联 PRD：
+关联 PRD：PRD-002
 关联 Issue：
 影响范围：`web/accounts.html`、`web/accounts.js`、`web/styles.css`、`src/server.js`、`test/accountsWebApi.test.js`、`docs/project/api.md`、`docs/work/`
 
@@ -40,6 +40,6 @@
 
 ## 合并记录
 
-- 合并目标 PRD：
-- 合并日期：
-- 备注：当前 change 已实现。未合并的 implemented change 已达到 5 个，应安排 PRD 基线合并。
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-01
+- 备注：已成功合并入 PRD-002。

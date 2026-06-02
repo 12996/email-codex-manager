@@ -1,8 +1,8 @@
 # CHG-002 新增补号账号后端能力
 
-状态：implemented
+状态：merged
 创建日期：2026-06-01
-关联 PRD：
+关联 PRD：PRD-002
 关联 Issue：
 影响范围：`src/db.js`、`src/replacementAccounts.js`、`src/replacementServices.js`、`src/server.js`、`test/`、`docs/project/api.md`
 
@@ -31,6 +31,6 @@
 
 ## 合并记录
 
-- 合并目标 PRD：
-- 合并日期：
-- 备注：当前 change 已实现，等待后续用户要求或达到阈值时合并进 PRD。
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-01
+- 备注：已成功合并入 PRD-002。

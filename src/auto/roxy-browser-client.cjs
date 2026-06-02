@@ -4,6 +4,21 @@ function trimTrailingSlash(value) {
     return String(value || '').replace(/\/+$/, '');
 }
 
+function formatFetchError(error) {
+    const cause = error?.cause || {};
+    const parts = [];
+    if (cause.code) {
+        parts.push(cause.code);
+    }
+    if (cause.address || cause.port) {
+        parts.push(`${cause.address || 'unknown'}:${cause.port || 'unknown'}`);
+    }
+    if (parts.length > 0) {
+        return parts.join(' ');
+    }
+    return error?.message || String(error);
+}
+
 function resolveApiBaseUrl(options = {}) {
     if (options.apiBaseUrl) {
         return trimTrailingSlash(options.apiBaseUrl);
@@ -102,7 +117,12 @@ class RoxyBrowserClient {
             init.body = JSON.stringify(body);
         }
 
-        const resp = await fetch(url, init);
+        let resp;
+        try {
+            resp = await fetch(url, init);
+        } catch (error) {
+            throw new Error(`Roxy API 请求失败: ${method} ${url}; 原因=${formatFetchError(error)}; 请确认 RoxyBrowser API 已启用且 ROXY_API_BASE_URL/ROXY_API_PORT 指向正在监听的本机端口`);
+        }
         const text = await resp.text();
         let data;
         try {

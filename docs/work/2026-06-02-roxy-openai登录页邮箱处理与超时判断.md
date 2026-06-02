@@ -1,0 +1,44 @@
+# 2026-06-02-Roxy OpenAI 登录页邮箱处理与超时判断
+
+- 状态：done
+- 目标：在 Roxy OAuth 自动化脚本中加入可复用的 OpenAI 登录页邮箱处理函数，并保留 codegen 录制/调试入口。
+- 修改文件：`scripts/roxy-codegen.cjs`、`src/auto/roxy_oauth_login.js`、`src/auto/roxy_oauth_steps_manual_test.js`、`test/roxyCodegenFlow.test.js`、`test/roxyOauthLogin.test.js`、`docs/changes/CHG-008-roxy-openai-login-email-timeout.md`、`docs/changes/CHG-010-roxy-openai-email-code-and-codex-consent.md`、`docs/changes/CHG-012-roxy-openai-phone-verification.md`、`docs/changes/CHG-013-roxy-oauth-failure-screenshots.md`、`docs/work/`
+- 实现内容：
+  - 新增 `openAi_login(page, email, options)`：等待邮箱输入框、填入传入邮箱、点击 `Continue`。
+  - 根据 Playwright codegen 录制结果调整 `openAi_login(page, email, options)`：提交邮箱后等待进入 `/email-verification` 或出现 `Code` 输入框。
+  - 新增 `waitForOpenAiEmailVerification(page, options)`：封装邮箱提交后的验证码页等待逻辑。
+  - 保留 `session_check(page, email, options)`：作为旧登录页邮箱展示区域校验工具，不作为本次录制确认的主路径。
+  - 新增 `is_openai_login_page(page, options)`：判断当前页面是否为 OpenAI 邮箱输入页。
+  - 将可复用登录页函数补入 `src/auto/roxy_oauth_login.js` 并导出，`scripts/roxy-codegen.cjs` 保留录制/调试职责。
+  - `src/auto/roxy_oauth_steps_manual_test.js` 新增 `openai-page` 和 `openai-login` 手动验证步骤。
+  - 新增 `OPENAI_EMAIL_VERIFICATION_TIMEOUT` 和 `OPENAI_LOGIN_EMAIL_MISMATCH` 两类可识别错误。
+  - 为 `scripts/roxy-codegen.cjs` 增加 `require.main === module` 保护，使其可被测试导入而不启动真实 CDP。
+  - 第二步在 `src/auto/roxy_oauth_login.js` 新增 `is_email_code_page(page, options)`：基于英文关键词和 `Code` 输入框判断邮箱验证码页。
+  - 第二步在 `src/auto/roxy_oauth_login.js` 新增 `openAi_email_code(page, email, options)`：通过验证码 API 获取 6 位验证码，填入 `Code` 输入框并点击 `Continue`。
+  - 第二步在 `src/auto/roxy_oauth_login.js` 新增 `is_codex_login_page(page, options)`：基于 Codex/ChatGPT 英文关键词和 `Continue` 按钮判断 Codex 登录确认页。
+  - 第二步在 `src/auto/roxy_oauth_login.js` 新增 `codex_login(page, options)`：在 Codex 登录确认页点击 `Continue`。
+  - 新增 `src/auto/roxy_oauth_steps_manual_test.js`：手动连接 Roxy CDP，按传入参数调用验证码页和 Codex 页函数，便于实机验证。
+  - 第三步根据 Playwright codegen 手机页录制结果新增 `is_phone_verify_page(page, options)` 和 `openAi_phone_verify(page, options)`：判断 `Verify your phone number` 页面并选择 `Text Message` 后继续。
+  - 第三步新增 `is_phone_code_page(page, options)`、`fetchPhoneVerificationCode(options)` 和 `openAi_phone_code(page, options)`：判断 `Check your phone` / `Enter the verification code` 页面，从 SMS API 文本中提取连续 6 位验证码并提交。
+  - `src/auto/roxy_oauth_steps_manual_test.js` 新增 `phone-verify-page`、`phone-verify-submit`、`phone-code-page`、`phone-code-submit` 手动验证步骤。
+  - 第四步新增 `captureFailureScreenshot(page, error, step, options)`：页面操作函数失败时默认将截图保存到 `debug_image/`，文件名使用时间戳和步骤名。
+  - 第四步在 `openAi_login`、`openAi_email_code`、`openAi_phone_code_request`、`openAi_phone_verify`、`openAi_phone_code`、`codex_login` 外层接入失败截图；截图成功时将路径写入 `error.debugScreenshotPath`，截图失败不覆盖原始错误。
+- 验证结果：
+  - `npm test -- test/roxyCodegenFlow.test.js` 通过。
+  - `npm test -- test/roxyOauthLogin.test.js` 通过。
+  - `node src\auto\roxy_oauth_steps_manual_test.js --help` 通过。
+  - `node src\auto\roxy_oauth_login.js` 复用当前 Roxy CDP 成功导航到 OpenAI 登录页。
+  - `node src\auto\roxy_oauth_steps_manual_test.js --email jregkolpig+s4@gmail.com --step openai-login --timeout 60000` 实机通过，返回 `email-submitted` 和 `/email-verification`。
+  - `node src\auto\roxy_oauth_steps_manual_test.js --step email-code-page --timeout 10000` 实机通过，返回 `is_email_code_page=true`。
+  - `node --test test\roxyOauthLogin.test.js` 通过，24/24 pass。
+  - `node --test src\auto\roxy_oauth_steps_manual_test.js` 通过，1/1 pass。
+  - `node src\auto\roxy_oauth_steps_manual_test.js --help` 通过。
+  - 失败截图补充后 `npm test -- test\roxyOauthLogin.test.js` 通过，27/27 pass。
+  - 失败截图补充后 `node --check src\auto\roxy_oauth_login.js` 和 `node --check test\roxyOauthLogin.test.js` 通过。
+  - `npm test` 未全量通过：本次新增的 Roxy codegen 测试通过；失败项在既有 `accountsWebApi.test.js` 侧边栏断言和 `test/test-verification-code.mjs` 本地服务连接上。
+- 未完成 / 风险：
+  - OAuth callback 还未接入。
+  - `html/email_code.html` 当前为空文件；验证码页判断主要依据录制结果中的 `Code` 输入框和英文关键词。
+  - 手机验证页函数已完成单元测试，仍需在真实 Roxy 手机页上用手动测试入口跑一遍。
+- 下一步：
+  - 将 `openAi_login`、`openAi_email_code`、`openAi_phone_verify`、`openAi_phone_code`、`codex_login` 接到正式补号自动化流程，并继续实现 OAuth callback。

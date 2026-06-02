@@ -3,6 +3,7 @@ const state = {
   filtered: [],
   selectedId: null,
   activity: [],
+  fetchedMessages: [],
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -165,10 +166,13 @@ async function fetchMessages(account) {
       body: JSON.stringify({ readLocation, limit }),
     });
     addActivity('获取邮件', account.gmail_email);
-    renderMailResult(body.result || { title: `${account.gmail_email} 获取结果`, messages: body.messages || [] });
+    const result = body.result || { title: `${account.gmail_email} 获取结果`, messages: body.messages || [] };
+    state.fetchedMessages = result.messages || [];
+    renderMailResult(result);
     await loadAccounts();
   } catch (error) {
     addActivity('获取邮件失败', account.gmail_email);
+    state.fetchedMessages = [];
     renderMailResult({
       title: `${account.gmail_email} 获取失败`,
       messages: [],
@@ -195,19 +199,32 @@ async function deleteAccount(account) {
 function renderMailResult(result) {
   $('#mailResult').hidden = false;
   $('#mailResultTitle').textContent = result.title || '邮件结果';
+  const messages = result.messages || [];
   const content = result.error
     ? `<p class="error">${escapeHtml(result.error)}</p>`
-    : (result.messages || []).length
-    ? result.messages.map(renderMailRow).join('')
+    : messages.length
+    ? messages.map((message, index) => renderMailRow(message, index)).join('')
     : '<p class="muted">没有获取到邮件。</p>';
   $('#mailResultList').innerHTML = `<div class="mail-result-scroll">${content}</div>`;
+
+  // Bind click event to each mail summary to show the modal!
+  $('#mailResultList').querySelectorAll('.gmail-mail-summary').forEach((el) => {
+    el.addEventListener('click', () => {
+      const idx = Number(el.closest('.gmail-mail-row').dataset.index);
+      const message = state.fetchedMessages[idx];
+      if (message) {
+        openMailDetailDialog(message);
+      }
+    });
+  });
+
   document.getElementById('mailResult').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-function renderMailRow(message) {
+function renderMailRow(message, index) {
   return `
-    <details class="gmail-mail-row">
-      <summary class="gmail-mail-summary mail-row-summary">
+    <div class="gmail-mail-row" data-index="${index}">
+      <div class="gmail-mail-summary mail-row-summary">
         <span class="gmail-sender">${escapeHtml(senderName(message.from))}</span>
         <span class="gmail-main-line">
           <span class="gmail-subject">${escapeHtml(message.subject || '')}</span>
@@ -216,15 +233,28 @@ function renderMailRow(message) {
         </span>
         <span class="gmail-source">${escapeHtml(message.sourceMailbox || '')}</span>
         <span class="gmail-time">${escapeHtml(formatTime(message.date))}</span>
-      </summary>
-      <article class="gmail-mail-detail">
-        <h1>${escapeHtml(message.subject || '')}</h1>
-        <div class="gmail-detail-meta"><strong>${escapeHtml(senderName(message.from))}</strong><span>${escapeHtml(message.from || '')}</span></div>
-        <div class="gmail-detail-submeta"><span>${escapeHtml(message.date || '')}</span><span>${escapeHtml(message.sourceMailbox || '')}</span></div>
-        ${message.bodyHtml ? `<div class="gmail-body gmail-body-html">${message.bodyHtml}</div>` : `<div class="gmail-body">${escapeHtml(message.bodyText || message.preview || '')}</div>`}
-      </article>
-    </details>
+      </div>
+    </div>
   `;
+}
+
+function openMailDetailDialog(message) {
+  $('#mailDetailSubject').textContent = message.subject || '(无主题)';
+  $('#mailDetailSenderName').textContent = senderName(message.from);
+  $('#mailDetailSenderEmail').textContent = message.from || '';
+  $('#mailDetailDate').textContent = formatDate(message.date) || '';
+  $('#mailDetailSource').textContent = message.sourceMailbox || '';
+  
+  const bodyEl = $('#mailDetailBody');
+  if (message.bodyHtml) {
+    bodyEl.innerHTML = message.bodyHtml;
+    bodyEl.className = 'gmail-body gmail-body-html';
+  } else {
+    bodyEl.textContent = message.bodyText || message.preview || '';
+    bodyEl.className = 'gmail-body';
+  }
+  
+  $('#mailDetailDialog').showModal();
 }
 
 function clearMailResult() {

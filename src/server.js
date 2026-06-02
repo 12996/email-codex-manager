@@ -1,5 +1,6 @@
 import cookieParser from 'cookie-parser';
 import express from 'express';
+import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -119,7 +120,10 @@ export function createApp({
   });
 
   app.get('/replacement-ui', requireAuth, (req, res) => {
-    res.sendFile(join(webDir, 'index.html'));
+    const html = readFileSync(join(webDir, 'index.html'), 'utf8');
+    const sidebar = readFileSync(join(webDir, 'sidebar.html'), 'utf8')
+      .replace('id="nav-replacement"', 'id="nav-replacement" class="active"');
+    res.send(html.replace('<!-- SIDEBAR_PLACEHOLDER -->', sidebar));
   });
 
   app.get('/api/accounts', requireAuth, (req, res) => {
@@ -309,7 +313,10 @@ export function createApp({
   });
 
   app.get('/accounts', requireAuth, (req, res) => {
-    res.sendFile(join(webDir, 'accounts.html'));
+    const html = readFileSync(join(webDir, 'accounts.html'), 'utf8');
+    const sidebar = readFileSync(join(webDir, 'sidebar.html'), 'utf8')
+      .replace('id="nav-accounts"', 'id="nav-accounts" class="active"');
+    res.send(html.replace('<!-- SIDEBAR_PLACEHOLDER -->', sidebar));
   });
 
   app.post('/accounts', requireAuth, (req, res) => {

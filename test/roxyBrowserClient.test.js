@@ -78,6 +78,30 @@ test('RoxyBrowserClient 在 Roxy API 返回失败时抛出包含接口路径的�
   );
 });
 
+test('RoxyBrowserClient 在 Roxy API 连接失败时抛出包含地址和底层原因的错误', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    const error = new TypeError('fetch failed');
+    error.cause = { code: 'ECONNREFUSED', address: '127.0.0.1', port: 50000 };
+    throw error;
+  };
+
+  try {
+    const client = new RoxyBrowserClient({
+      apiBaseUrl: 'http://127.0.0.1:50000',
+      workspaceId: 1,
+      dirId: 'dir-1',
+    });
+
+    await assert.rejects(
+      () => client.listBrowsers(),
+      /Roxy API 请求失败: GET http:\/\/127\.0\.0\.1:50000\/browser\/list\?workspaceId=1&pageIndex=1&pageSize=100; 原因=ECONNREFUSED/
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('launchAndConnect 未传 dirId 时可按窗口序号解析目标窗口', async () => {
   const calls = [];
   const client = new RoxyBrowserClient({
