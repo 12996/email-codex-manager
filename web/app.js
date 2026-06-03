@@ -80,10 +80,15 @@ function accountRow(account) {
   return `
     <tr>
       <td><input class="row-check" type="checkbox" data-id="${account.id}" ${checked}></td>
-      <td><div class="email-main">${escapeHtml(account.email)}</div><div class="muted">ID: ${account.id}</div></td>
-      <td>${escapeHtml(maskPhone(account.phone))}</td>
-      <td><span class="status ${account.status}">${statusLabels[account.status] || account.status}</span></td>
+      <td><div class="email-main field-raw">${escapeHtml(account.email)}</div><div class="muted">ID: ${account.id}</div></td>
+      <td><span class="field-raw">${escapeHtml(account.phone || '-')}</span></td>
+      <td><span class="field-raw">${escapeHtml(account.sms_api || '-')}</span></td>
+      <td><span class="field-raw">${escapeHtml(account.sms_last_error || '-')}</span></td>
       <td>${escapeHtml(account.activation_method || '-')}</td>
+      <td><span class="field-raw">${escapeHtml(account.activated_at || '-')}</span></td>
+      <td><span class="status ${account.status}">${statusLabels[account.status] || account.status}</span></td>
+      <td><span class="field-raw">${escapeHtml(account.status_updated_at || '-')}</span></td>
+      <td><span class="field-raw">${escapeHtml(account.public_code_key || '-')}</span><div class="muted">${account.public_code_enabled ? '公开验证码已启用' : '公开验证码未启用'}</div></td>
       <td>${account.replacement_count || 0}</td>
       <td><span class="dot ${lastText.type}"></span>${escapeHtml(lastText.label)}<div class="muted">${escapeHtml(formatDate(account.last_replace_at || account.json_fetched_at || account.status_updated_at))}</div></td>
       <td>${escapeHtml(formatDate(account.updated_at))}</td>
@@ -91,9 +96,12 @@ function accountRow(account) {
         <div class="actions">
           <button class="primary action-toggle" type="button" data-id="${account.id}">操作⌄</button>
           <div class="action-menu" hidden>
+            <button type="button" data-action="edit" data-id="${account.id}">✎ 编辑账号</button>
+            <button type="button" data-action="toggle-public-code" data-id="${account.id}">${account.public_code_enabled ? '停用公开验证码' : '启用公开验证码'}</button>
             <button type="button" data-action="sms" data-id="${account.id}">▣ 获取验证码</button>
             <button type="button" data-action="json" data-id="${account.id}">▣ 获取 JSON</button>
             <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
+            <button type="button" data-action="copy-public-code-url" data-id="${account.id}">⧉ 复制公开验证码 URL</button>
             <button type="button" data-action="status" data-id="${account.id}">⊙ 状态设置</button>
             <button class="danger" type="button" data-action="delete" data-id="${account.id}">🗑 删除账号</button>
           </div>
@@ -133,12 +141,15 @@ function bindRowEvents() {
 async function handleAction(action, id) {
   const account = state.accounts.find((item) => item.id === id);
   if (!account) return;
+  if (action === 'edit') return openAccountDialog(account);
   if (action === 'detail') return openDetail(account);
   if (action === 'status') return openStatusDialog(account);
   if (action === 'delete') return deleteAccount(account);
   if (action === 'sms') return fetchSmsCode(account);
   if (action === 'json') return fetchJson(account);
   if (action === 'replace') return replaceAccount(account);
+  if (action === 'toggle-public-code') return togglePublicCode(account);
+  if (action === 'copy-public-code-url') return copyPublicCodeUrl(account);
 }
 
 function openAccountDialog(account = null) {
@@ -148,6 +159,8 @@ function openAccountDialog(account = null) {
   for (const field of ['id', 'email', 'phone', 'sms_api', 'activation_method', 'activated_at', 'status', 'remark']) {
     form.elements[field].value = account?.[field] || (field === 'status' ? 'pending' : '');
   }
+  form.elements.public_code_enabled.checked = Boolean(Number(account?.public_code_enabled || 0));
+  form.elements.public_code_key.value = account?.public_code_key || '';
   $('#accountDialog').showModal();
 }
 
@@ -157,6 +170,7 @@ async function saveAccount(event) {
   const data = Object.fromEntries(new FormData(form));
   const id = data.id;
   delete data.id;
+  data.public_code_enabled = form.elements.public_code_enabled.checked ? 1 : 0;
   try {
     await api(id ? `/replacement-accounts/${id}` : '/replacement-accounts', {
       method: id ? 'PUT' : 'POST',
@@ -167,6 +181,37 @@ async function saveAccount(event) {
     await loadAccounts();
   } catch (error) {
     toast(error.message);
+  }
+}
+
+async function copyPublicCodeUrl(account) {
+  if (!account.public_code_enabled || !account.public_code_key) {
+    toast('请先启用公开验证码接口并保存账号');
+    return;
+  }
+  const url = `${location.origin}/api/verification-code/public/latest?key=${encodeURIComponent(account.public_code_key)}`;
+  try {
+    await navigator.clipboard.writeText(url);
+    addActivity('复制公开验证码 URL', account.email);
+    toast('公开验证码 URL 已复制');
+  } catch (error) {
+    prompt('复制公开验证码 URL', url);
+  }
+}
+
+async function togglePublicCode(account) {
+  const enabled = !account.public_code_enabled;
+  try {
+    await api(`/replacement-accounts/${account.id}/public-code`, {
+      method: 'PATCH',
+      body: JSON.stringify({ enabled }),
+    });
+    addActivity(enabled ? '启用公开验证码' : '停用公开验证码', account.email);
+    toast(enabled ? '公开验证码已启用' : '公开验证码已停用');
+    await loadAccounts();
+  } catch (error) {
+    toast(error.message);
+    await loadAccounts();
   }
 }
 
@@ -364,13 +409,6 @@ function lastOperationText(account) {
   if (account.last_replace_at || account.status === 'replaced') return { type: '', label: '补号成功' };
   if (account.json_fetched_at) return { type: 'replacing', label: '获取 JSON' };
   return { type: 'empty', label: '-' };
-}
-
-function maskPhone(phone) {
-  if (!phone) return '-';
-  const text = String(phone);
-  if (text.length < 7) return text;
-  return `${text.slice(0, 3)}****${text.slice(-4)}`;
 }
 
 function formatDate(value) {

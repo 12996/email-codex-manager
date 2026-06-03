@@ -7,6 +7,11 @@ import { fileURLToPath } from 'node:url';
 import { config } from './config.js';
 import { createAccountRepository } from './accounts.js';
 import { createAuthMiddleware, clearAuthCookie, setAuthCookie } from './auth.js';
+import { createCpaClient } from './cpaClient.js';
+import { createCpaCredentialMonitor } from './cpaCredentialMonitor.js';
+import { startCpaCredentialMonitor } from './cpaCredentialMonitorRunner.js';
+import { createCpaRepairQueue } from './cpaRepairQueue.js';
+import { createCpaRepairWorker } from './cpaRepairWorker.js';
 import { createDatabase } from './db.js';
 import { createReplacementAutomationRunRepository } from './replacementAutomationRuns.js';
 import {
@@ -29,6 +34,8 @@ export function createApp({
   replacementAutomationRuns = createReplacementAutomationRunRepository(db),
   replacementServices = createReplacementServices({ automationRuns: replacementAutomationRuns }),
   mailService = { fetchMessages, testConnection },
+  cpaCredentialMonitor = null,
+  cpaRepairWorker = null,
 } = {}) {
   const app = express();
   const requireAuth = createAuthMiddleware();
@@ -249,6 +256,15 @@ export function createApp({
     }
   });
 
+  app.patch('/replacement-accounts/:id/public-code', requireAuth, (req, res) => {
+    try {
+      const account = replacementAccounts.updatePublicCodeAccess(req.params.id, req.body);
+      res.json({ ok: true, account });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
   app.post('/replacement-accounts/:id/fetch-sms-code', requireAuth, async (req, res) => {
     const account = replacementAccounts.getAccount(req.params.id);
     if (!account) {
@@ -289,6 +305,22 @@ export function createApp({
       return;
     }
 
+    if (cpaRepairWorker?.repair) {
+      try {
+        const result = await cpaRepairWorker.repair({ account, source: 'manual' });
+        if (result?.ok === false) {
+          const updated = result.account || replacementAccounts.getAccount(account.id);
+          sendApiError(res, Object.assign(new Error(result.error || 'CPA repair failed'), { code: 'REPLACE_FAILED' }), { account: updated });
+          return;
+        }
+        res.json({ ok: true, account: result.account || replacementAccounts.getAccount(account.id), ...(result?.run ? { run: result.run } : {}) });
+      } catch (error) {
+        const updated = replacementAccounts.getAccount(account.id);
+        sendApiError(res, error, { account: updated });
+      }
+      return;
+    }
+
     replacementAccounts.markReplacementStarted(account.id);
     try {
       const result = await replacementServices.replaceAccount(account);
@@ -297,6 +329,19 @@ export function createApp({
     } catch (error) {
       const updated = replacementAccounts.markReplacementFailure(account.id, error.message);
       sendApiError(res, error, { account: updated });
+    }
+  });
+
+  app.get('/cpa/auth-health', requireAuth, async (req, res) => {
+    if (!cpaCredentialMonitor?.runOnce) {
+      res.status(503).json(errorBody('CPA_MONITOR_NOT_CONFIGURED', 'CPA credential monitor is not configured'));
+      return;
+    }
+    try {
+      const result = await cpaCredentialMonitor.runOnce();
+      res.json({ ok: true, result });
+    } catch (error) {
+      sendApiError(res, error);
     }
   });
 
@@ -556,7 +601,36 @@ function stripErrorCodePrefix(message) {
 
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3000);
-  createApp().listen(port, () => {
+  const db = createDatabase(config.databasePath);
+  const replacementAccounts = createReplacementAccountRepository(db);
+  const replacementAutomationRuns = createReplacementAutomationRunRepository(db);
+  const replacementServices = createReplacementServices({ automationRuns: replacementAutomationRuns });
+  const cpaClient = createCpaClient(config.cpa);
+  const cpaRepairWorker = createCpaRepairWorker({
+    cpaClient,
+    replacementAccounts,
+    replacementServices,
+    cpaOutputDir: join(__dirname, 'auto', 'product_files', 'cpa'),
+  });
+  const cpaRepairQueue = createCpaRepairQueue({ worker: (job) => cpaRepairWorker.repair(job) });
+  const cpaCredentialMonitor = createCpaCredentialMonitor({
+    cpaClient,
+    replacementAccounts,
+    repairQueue: cpaRepairQueue,
+  });
+  startCpaCredentialMonitor({
+    enabled: config.cpa.monitorEnabled,
+    intervalMs: config.cpa.monitorIntervalMs,
+    monitor: cpaCredentialMonitor,
+  });
+  createApp({
+    db,
+    replacementAccounts,
+    replacementAutomationRuns,
+    replacementServices,
+    cpaCredentialMonitor,
+    cpaRepairWorker,
+  }).listen(port, () => {
     console.log(`Listening on http://localhost:${port}`);
   });
 }

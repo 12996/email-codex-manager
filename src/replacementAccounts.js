@@ -62,6 +62,17 @@ export function createReplacementAccountRepository(db) {
       `).get(Number(id));
     },
 
+    getAccountByEmail(email) {
+      const normalized = normalizeOptional(email);
+      if (!normalized) return undefined;
+      return db.prepare(`
+        SELECT * FROM replacement_accounts
+        WHERE lower(trim(email)) = lower(trim(?))
+          AND deleted_at IS NULL
+        LIMIT 1
+      `).get(normalized);
+    },
+
     updateAccount(id, input) {
       const existing = assertAccountExists(this.getAccount(id));
       const data = normalizeAccountInput(input, { requireEmail: true });
@@ -119,6 +130,24 @@ export function createReplacementAccountRepository(db) {
           AND deleted_at IS NULL
         LIMIT 1
       `).get(normalizedKey);
+    },
+
+    updatePublicCodeAccess(id, input) {
+      const existing = assertAccountExists(this.getAccount(id));
+      const enabled = normalizeBooleanFlag(input?.enabled);
+      const publicCodeKey = normalizeOptional(input?.public_code_key) || existing.public_code_key || generatePublicCodeKey();
+      const now = new Date().toISOString();
+
+      db.prepare(`
+        UPDATE replacement_accounts
+        SET
+          public_code_enabled = ?,
+          public_code_key = ?,
+          updated_at = ?
+        WHERE id = ?
+      `).run(enabled, publicCodeKey, now, existing.id);
+
+      return this.getAccount(existing.id);
     },
 
     deleteAccount(id) {

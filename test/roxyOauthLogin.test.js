@@ -266,6 +266,105 @@ test('openAi_email_code sends configured admin_auth cookie when fetching email c
   });
 });
 
+test('openAi_email_code polls email verification API until a valid code is available', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
+  const waits = [];
+  let attempts = 0;
+  page.request.post = async (url, options) => {
+    calls.push(['request.post', url, options]);
+    attempts += 1;
+    return {
+      async json() {
+        return attempts < 3
+          ? { ok: true, code: '' }
+          : { ok: true, code: '112233' };
+      },
+    };
+  };
+
+  const result = await openAi_email_code(page, 'jregkolpig+s2@gmail.com', {
+    timeoutMs: 100,
+    codePollIntervalMs: 1,
+    codePollMaxAttempts: 3,
+    waitForTimeout: async (ms) => waits.push(ms),
+  });
+
+  assert.equal(result.code, '112233');
+  assert.equal(calls.filter((call) => call[0] === 'request.post').length, 3);
+  assert.deepEqual(waits, [1, 1]);
+});
+
+test('openAi_email_code stops filling when email code polling lands on Codex consent page', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  let stage = 'email-code';
+  const roleCodeInput = {
+    async isVisible() { calls.push(['roleCode.isVisible', stage]); return stage === 'email-code'; },
+    async waitFor() {
+      calls.push(['roleCode.waitFor', stage]);
+      if (stage !== 'email-code') throw new Error('Code input is gone');
+    },
+    async click() { calls.push(['roleCode.click']); },
+    async fill(value) { calls.push(['roleCode.fill', value]); },
+  };
+  const continueButton = {
+    async isVisible() { calls.push(['continue.isVisible', stage]); return true; },
+    async click(options) { calls.push(['continue.click', options, stage]); },
+  };
+  const fallbackInput = {
+    async waitFor(options) {
+      calls.push(['fallback.waitFor', options, stage]);
+      if (stage !== 'email-code') throw new Error('fallback input is gone');
+    },
+    async click() { calls.push(['fallback.click']); },
+    async fill(value) { calls.push(['fallback.fill', value]); },
+  };
+  const page = {
+    getByRole(role) {
+      calls.push(['getByRole', role, stage]);
+      if (role === 'textbox') return roleCodeInput;
+      return continueButton;
+    },
+    locator(selector) {
+      calls.push(['locator', selector, stage]);
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            if (stage === 'email-code') return 'Enter the code sent to your email. Code Continue';
+            return 'Sign in to Codex with ChatGPT. Codex will not receive your chat history. Continue';
+          },
+        };
+      }
+      return { first: () => fallbackInput };
+    },
+    request: {
+      async post() {
+        calls.push(['request.post', stage]);
+        stage = 'codex';
+        return { async json() { return { ok: true, code: '112233' }; } };
+      },
+    },
+    url() {
+      return stage === 'email-code'
+        ? 'https://auth.openai.com/email-verification'
+        : 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent';
+    },
+    title: async () => 'OAuth',
+    async textContent() {
+      if (stage === 'email-code') return 'Enter the code sent to your email. Code Continue';
+      return 'Sign in to Codex with ChatGPT. Codex will not receive your chat history. Continue';
+    },
+  };
+
+  const result = await openAi_email_code(page, 'jregkolpig+s2@gmail.com', { timeoutMs: 100 });
+
+  assert.deepEqual(result, { status: 'next-stage', next: 'codex-login' });
+  assert.equal(calls.some((call) => call[0] === 'roleCode.fill'), false);
+  assert.equal(calls.some((call) => call[0] === 'fallback.fill'), false);
+  assert.equal(calls.some((call) => call[0] === 'continue.click'), false);
+});
+
 test('openAi_email_code falls back to numeric input selector when role Code is unstable', async () => {
   const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
   const calls = [];
@@ -378,6 +477,7 @@ test('openAi_email_code captures failure screenshot and preserves the original e
       () => openAi_email_code(page, 'smiro4099+s1@gmail.com', {
         verificationApiUrl: 'http://127.0.0.1:3000/api/verification-code/latest',
         timeoutMs: 100,
+        codePollMaxAttempts: 1,
         debugImageDir,
       }),
       (error) => {
@@ -467,6 +567,34 @@ test('fetchPhoneVerificationCode extracts a continuous 6-digit code from SMS API
   ]);
 });
 
+test('fetchPhoneVerificationCode polls SMS API until a valid code is available', async () => {
+  const { fetchPhoneVerificationCode } = require('../src/auto/roxy_oauth_login.js');
+  const waits = [];
+  const calls = [];
+  let attempts = 0;
+
+  const code = await fetchPhoneVerificationCode({
+    smsApiUrl: 'https://cdc.smslease.link/adminapi/jsscript/smsInfo/ABC_sms?key=test',
+    timeoutMs: 100,
+    codePollIntervalMs: 1,
+    codePollMaxAttempts: 3,
+    waitForTimeout: async (ms) => waits.push(ms),
+    fetch: async (url, options) => {
+      calls.push(['fetch', url, options.method]);
+      attempts += 1;
+      return {
+        async text() {
+          return attempts < 3 ? 'no sms yet' : 'yes|Your OpenAI verification code is: 798824';
+        },
+      };
+    },
+  });
+
+  assert.equal(code, '798824');
+  assert.equal(calls.length, 3);
+  assert.deepEqual(waits, [1, 1]);
+});
+
 test('openAi_phone_code fills Code and clicks Continue with a direct code', async () => {
   const { openAi_phone_code } = require('../src/auto/roxy_oauth_login.js');
   const { page, calls } = createPhoneVerifyPageHarness('Check your phone Enter the verification code Code Continue');
@@ -484,6 +612,64 @@ test('openAi_phone_code fills Code and clicks Continue with a direct code', asyn
     ['code.fill', '798824'],
     ['continue.click', { timeout: 100 }],
   ]);
+});
+
+test('openAi_phone_code stops filling when SMS polling lands on Codex consent page', async () => {
+  const { openAi_phone_code } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  let stage = 'phone-code';
+  const page = {
+    getByRole(role, options) {
+      calls.push(['getByRole', role, options, stage]);
+      if (role === 'textbox') {
+        return {
+          async isVisible() { return stage === 'phone-code'; },
+          async waitFor() {
+            calls.push(['code.waitFor', stage]);
+            if (stage !== 'phone-code') throw new Error('Code input is gone');
+          },
+          async click() { calls.push(['code.click']); },
+          async fill(value) { calls.push(['code.fill', value]); },
+        };
+      }
+      return {
+        async isVisible() { return true; },
+        async click(options) { calls.push(['continue.click', options, stage]); },
+      };
+    },
+    locator() {
+      return {
+        async textContent() {
+          if (stage === 'phone-code') return 'Check your phone Enter the verification code Code Continue';
+          return 'Sign in to Codex with ChatGPT. Codex will not receive your chat history. Continue';
+        },
+      };
+    },
+    url() {
+      return stage === 'phone-code'
+        ? 'https://auth.openai.com/phone-verification'
+        : 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent';
+    },
+    async title() { return 'OAuth'; },
+    async textContent() {
+      if (stage === 'phone-code') return 'Check your phone Enter the verification code Code Continue';
+      return 'Sign in to Codex with ChatGPT. Codex will not receive your chat history. Continue';
+    },
+  };
+
+  const result = await openAi_phone_code(page, {
+    timeoutMs: 100,
+    fetch: async () => ({
+      async text() {
+        stage = 'codex';
+        return 'yes|Your OpenAI verification code is: 798824';
+      },
+    }),
+  });
+
+  assert.deepEqual(result, { status: 'next-stage', next: 'codex-login' });
+  assert.equal(calls.some((call) => call[0] === 'code.fill'), false);
+  assert.equal(calls.some((call) => call[0] === 'continue.click'), false);
 });
 
 test('is_codex_login_page detects Codex consent page from English keywords', async () => {
@@ -507,6 +693,54 @@ test('codex_login clicks Continue on the Codex consent page', async () => {
   assert.deepEqual(calls.filter((call) => call[0] === 'continue.click'), [
     ['continue.click', { timeout: 100 }],
   ]);
+});
+
+test('automation page actions log each visible step without leaking verification codes', async () => {
+  const {
+    codex_login,
+    openAi_email_code,
+    openAi_login,
+    openAi_phone_code,
+    openAi_phone_verify,
+  } = require('../src/auto/roxy_oauth_login.js');
+  const messages = [];
+  const logger = {
+    log(message) { messages.push(String(message)); },
+    warn() {},
+    error() {},
+  };
+
+  await openAi_login(
+    createOpenAiLoginPageHarness({ subtitleText: 'user@example.com' }).page,
+    'user@example.com',
+    { timeoutMs: 100, logger },
+  );
+  await openAi_email_code(
+    createOpenAiPageHarness('Enter the code sent to your email. Code Continue').page,
+    'user@example.com',
+    { timeoutMs: 100, logger },
+  );
+  await openAi_phone_verify(
+    createPhoneVerifyPageHarness('Verify your phone number Text Message Continue').page,
+    { timeoutMs: 100, logger },
+  );
+  await openAi_phone_code(
+    createPhoneVerifyPageHarness('Check your phone Enter the verification code Code Continue').page,
+    { code: '798824', timeoutMs: 100, logger },
+  );
+  await codex_login(
+    createOpenAiPageHarness('Sign in to Codex with ChatGPT. Codex will not receive your chat history. Continue').page,
+    { timeoutMs: 100, logger },
+  );
+
+  const text = messages.join('\n');
+  assert.match(text, /phase=openai-email action=填写邮箱/);
+  assert.match(text, /phase=openai-email-code action=请求邮箱验证码/);
+  assert.match(text, /phase=openai-email-code action=填写邮箱验证码/);
+  assert.match(text, /phase=openai-phone-verify action=选择短信验证方式/);
+  assert.match(text, /phase=openai-phone-code action=填写手机验证码/);
+  assert.match(text, /phase=codex-login action=点击授权继续/);
+  assert.doesNotMatch(text, /687664|798824/);
 });
 
 test('codex_login treats click timeout as success when callback URL is already reached', async () => {
@@ -536,6 +770,90 @@ test('codex_login treats click timeout as success when callback URL is already r
   const result = await codex_login(page, { timeoutMs: 100 });
 
   assert.deepEqual(result, { status: 'codex-login-submitted', callbackReached: true });
+});
+
+test('codex_login listens for OAuth callback request before clicking Continue', async () => {
+  const { codex_login } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  const messages = [];
+  let callbackResolver;
+  const page = {
+    waitForRequest(predicate) {
+      calls.push(['waitForRequest']);
+      const req = { url: () => 'http://localhost:1455/auth/callback?code=code_req&state=state_req' };
+      assert.equal(predicate(req), true);
+      return new Promise((resolve) => {
+        callbackResolver = () => resolve(req);
+      });
+    },
+    getByRole(role) {
+      if (role === 'button') {
+        return {
+          async isVisible() { return true; },
+          async click() {
+            calls.push(['continue.click']);
+            callbackResolver();
+            await new Promise((resolve) => setTimeout(resolve, 30));
+            throw new Error('locator.click: Timeout 30000ms exceeded');
+          },
+        };
+      }
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return { async textContent() { return 'Sign in to Codex with ChatGPT. Continue'; } };
+    },
+    url: () => 'chrome-error://chromewebdata/',
+    title: async () => 'localhost',
+    textContent: async () => 'Sign in to Codex with ChatGPT. Continue',
+  };
+
+  const result = await codex_login(page, {
+    timeoutMs: 100,
+    state: 'state_req',
+    logger: { log: (message) => messages.push(String(message)), warn() {}, error() {} },
+  });
+
+  assert.deepEqual(result, { status: 'codex-login-submitted', callbackReached: true });
+  assert.deepEqual(calls, [['waitForRequest'], ['continue.click']]);
+  assert.match(messages.join('\n'), /phase=codex-login action=监听 OAuth callback/);
+  assert.match(messages.join('\n'), /phase=codex-login action=捕获 OAuth callback source=request/);
+});
+
+test('codex_login treats a changed URL with matching code and state as OAuth success', async () => {
+  const { codex_login } = require('../src/auto/roxy_oauth_login.js');
+  const messages = [];
+  let currentUrl = 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent';
+  const page = {
+    getByRole(role) {
+      if (role === 'button') {
+        return {
+          async isVisible() { return true; },
+          async click() {
+            currentUrl = 'https://auth.openai.com/oauth/complete?code=code_url&state=state_url';
+          },
+        };
+      }
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return { async textContent() { return 'Sign in to Codex with ChatGPT. Continue'; } };
+    },
+    url: () => currentUrl,
+    title: async () => 'Sign in to Codex with ChatGPT - OpenAI',
+    textContent: async () => 'Sign in to Codex with ChatGPT. Continue',
+    waitForTimeout: async () => {},
+  };
+
+  const result = await codex_login(page, {
+    timeoutMs: 100,
+    state: 'state_url',
+    logger: { log: (message) => messages.push(String(message)), warn() {}, error() {} },
+  });
+
+  assert.deepEqual(result, { status: 'codex-login-submitted', callbackReached: true });
+  assert.match(messages.join('\n'), /phase=codex-login action=URL 变化且包含 OAuth code\/state/);
+  assert.match(messages.join('\n'), /phase=codex-login action=捕获 OAuth callback source=url-code-state/);
 });
 
 function unsignedJwt(payload) {
@@ -724,7 +1042,12 @@ test('exchangeToken prefers browser page fetch over request context for token ex
   try {
     await exchangeToken('code_page', 'verifier_page', 'jregkolpig+s2@gmail.com', '', {
       outputRootDir,
+      tokenPageSettleMs: 1,
+      tokenPageTimeoutMs: 100,
       page: {
+        async waitForTimeout(ms) {
+          calls.push(['page.waitForTimeout', ms]);
+        },
         async evaluate(fn, arg) {
           calls.push(['page.evaluate', arg.url, arg.payload]);
           return {
@@ -740,15 +1063,70 @@ test('exchangeToken prefers browser page fetch over request context for token ex
       },
       request: {
         async post() {
-          throw new Error('request should not be used');
+          throw new Error('request should not be used when page context exists');
         },
       },
       logger: { log: () => {}, warn: () => {}, error: () => {} },
     });
 
-    assert.equal(calls[0][0], 'page.evaluate');
-    assert.equal(calls[0][1], 'https://auth.openai.com/oauth/token');
-    assert.equal(calls[0][2].code, 'code_page');
+    assert.deepEqual(calls.map((call) => call[0]), ['page.waitForTimeout', 'page.evaluate']);
+    assert.equal(calls[1][1], 'https://auth.openai.com/oauth/token');
+    assert.equal(calls[1][2].code, 'code_page');
+  } finally {
+    await rm(outputRootDir, { recursive: true, force: true });
+  }
+});
+
+test('exchangeToken falls back when browser page evaluation context is destroyed', async () => {
+  const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
+  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-fallback-'));
+  const calls = [];
+  const messages = [];
+  const warnings = [];
+  const accessToken = unsignedJwt({
+    exp: 1780000000,
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_fallback' },
+  });
+
+  try {
+    await exchangeToken('code_fallback', 'verifier_fallback', 'jregkolpig+s2@gmail.com', '', {
+      outputRootDir,
+      tokenPageSettleMs: 1,
+      tokenPageTimeoutMs: 100,
+      page: {
+        async waitForTimeout(ms) {
+          calls.push(['page.waitForTimeout', ms]);
+        },
+        async evaluate() {
+          calls.push(['page.evaluate']);
+          throw new Error('page.evaluate: Execution context was destroyed, most likely because of a navigation');
+        },
+      },
+      fetch: async (url, options) => {
+        calls.push(['fetch', url, JSON.parse(options.body)]);
+        return {
+          ok: true,
+          async json() {
+            return {
+              access_token: accessToken,
+              id_token: unsignedJwt({ sub: 'sub_fallback' }),
+              refresh_token: 'refresh_fallback',
+              expires_in: 3600,
+            };
+          },
+        };
+      },
+      logger: {
+        log: (message) => messages.push(String(message)),
+        warn: (message) => warnings.push(String(message)),
+        error: () => {},
+      },
+    });
+
+    assert.deepEqual(calls.map((call) => call[0]), ['page.waitForTimeout', 'page.evaluate', 'fetch']);
+    assert.equal(calls[2][2].code, 'code_fallback');
+    assert.match(warnings.join('\n'), /页面上下文换 Token 失败，回退 fetch/);
+    assert.match(messages.join('\n'), /phase=token action=使用 Node fetch 换 Token/);
   } finally {
     await rm(outputRootDir, { recursive: true, force: true });
   }
@@ -1436,6 +1814,96 @@ test('roxy_oauth_login 在 dotenv 后读取 ROXY_KEEP_OPEN 并可关闭 Roxy 窗
   assert.equal(result.keepOpen, false);
   assert.equal(result.disconnectMode, 'close');
   assert.deepEqual(calls.slice(-2), [['browser.close'], ['closeBrowser']]);
+});
+
+test('roxy_oauth_login 默认按 ROXY_KEEP_OPEN 推导 Roxy headless 参数', async () => {
+  const openedArgs = [];
+
+  class FakeRoxyBrowserClient {
+    constructor() {
+      this.dirId = 'dir-1';
+      this.workspaceId = 1;
+    }
+    async resolveDirId() { return 'dir-1'; }
+    async closeBrowser() {}
+    async clearLocalCache() {}
+    async clearServerCache() {}
+    async randomFingerprint() {}
+    async openBrowser(args) { openedArgs.push(args); }
+    async getConnectionInfo() { return { ws: 'ws://127.0.0.1:9222/devtools/browser/abc' }; }
+    async connectPlaywright() {
+      return {
+        browser: { close: async () => {} },
+        page: {
+          goto: async () => {},
+          waitForLoadState: async () => {},
+          url: () => 'https://auth.openai.com/log-in',
+          title: async () => 'Welcome back - OpenAI',
+        },
+      };
+    }
+  }
+
+  const { run } = require('../src/auto/roxy_oauth_login.js');
+
+  await run([], {
+    RoxyBrowserClient: FakeRoxyBrowserClient,
+    dotenv: { config: () => {} },
+    logger: { log: () => {}, error: () => {}, warn: () => {} },
+    env: {
+      ROXY_API_BASE_URL: 'http://127.0.0.1:59325',
+      ROXY_WORKSPACE_ID: '1',
+      ROXY_BROWSER_DIR_ID: 'dir-1',
+      ROXY_KEEP_OPEN: '0',
+    },
+  });
+
+  assert.deepEqual(openedArgs[0], ['--headless=new']);
+});
+
+test('roxy_oauth_login 调试保留浏览器时默认有头运行', async () => {
+  const openedArgs = [];
+
+  class FakeRoxyBrowserClient {
+    constructor() {
+      this.dirId = 'dir-1';
+      this.workspaceId = 1;
+    }
+    async resolveDirId() { return 'dir-1'; }
+    async closeBrowser() {}
+    async clearLocalCache() {}
+    async clearServerCache() {}
+    async randomFingerprint() {}
+    async openBrowser(args) { openedArgs.push(args); }
+    async getConnectionInfo() { return { ws: 'ws://127.0.0.1:9222/devtools/browser/abc' }; }
+    async connectPlaywright() {
+      return {
+        browser: { disconnect: async () => {} },
+        page: {
+          goto: async () => {},
+          waitForLoadState: async () => {},
+          url: () => 'https://auth.openai.com/log-in',
+          title: async () => 'Welcome back - OpenAI',
+        },
+      };
+    }
+  }
+
+  const { run } = require('../src/auto/roxy_oauth_login.js');
+
+  await run([], {
+    RoxyBrowserClient: FakeRoxyBrowserClient,
+    dotenv: { config: () => {} },
+    logger: { log: () => {}, error: () => {}, warn: () => {} },
+    env: {
+      ROXY_API_BASE_URL: 'http://127.0.0.1:59325',
+      ROXY_WORKSPACE_ID: '1',
+      ROXY_BROWSER_DIR_ID: 'dir-1',
+      ROXY_KEEP_OPEN: '1',
+    },
+  });
+
+  assert.deepEqual(openedArgs[0], []);
 });
 
 test('runCli 打印可复用的 CDP endpoint', async () => {

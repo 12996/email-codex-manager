@@ -182,6 +182,45 @@ test('replaceAccount creates automation run and writes child logs', async () => 
   assert.deepEqual(statuses, [{ id: 101, status: 'succeeded', result: { exitCode: 0 } }]);
 });
 
+test('replaceAccount writes orchestration step logs around child process execution', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-logs-'));
+  let logPath;
+  const services = createReplacementServices({
+    logDir: dir,
+    automationRuns: {
+      createRun(input) {
+        logPath = input.log_path;
+        return { id: 303, ...input };
+      },
+      markSucceeded() {},
+    },
+    spawnImpl() {
+      const child = new EventEmitter();
+      child.pid = 6363;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.emit('close', 0);
+      });
+      return child;
+    },
+  });
+
+  await services.replaceAccount({
+    id: 9,
+    email: 'user@example.com',
+    sms_api: 'https://example.invalid/sms',
+  });
+
+  const log = readFileSync(logPath, 'utf8');
+  assert.match(log, /step=validate-account action=validated replacement account/);
+  assert.match(log, /step=prepare-env action=prepared child process environment/);
+  assert.match(log, /step=spawn-child action=spawning automation child process/);
+  assert.match(log, /step=create-run action=created automation run run_id=303 pid=6363/);
+  assert.match(log, /step=wait-child action=waiting for automation child process to finish/);
+  assert.match(log, /step=mark-succeeded action=marked automation run succeeded exit_code=0/);
+});
+
 test('stopReplacementRun stops an active child created by the service', async () => {
   let killed = false;
   const services = createReplacementServices({

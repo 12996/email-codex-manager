@@ -111,6 +111,12 @@ function runChildProcess({ spawnImpl, command, args, env, account, automationRun
       `command=${command} ${args.join(' ')}`,
       '',
     ].join('\n'));
+    writeStepLog(logPath, 'validate-account', 'validated replacement account', `account_id=${account?.id ?? ''} email=${normalizeOptional(account?.email)}`);
+    writeStepLog(logPath, 'prepare-env', 'prepared child process environment', [
+      `ROXY_OAUTH_EMAIL=${env.ROXY_OAUTH_EMAIL ? 'set' : 'unset'}`,
+      `PHONE_VERIFICATION_SMS_API_URL=${env.PHONE_VERIFICATION_SMS_API_URL ? 'set' : 'unset'}`,
+    ].join(' '));
+    writeStepLog(logPath, 'spawn-child', 'spawning automation child process', `command=${command} args=${args.join(' ')}`);
 
     const child = spawnImpl(command, args, {
       env,
@@ -127,11 +133,15 @@ function runChildProcess({ spawnImpl, command, args, env, account, automationRun
       : null;
     if (run?.id) {
       activeChildren.set(run.id, child);
+      writeStepLog(logPath, 'create-run', 'created automation run', `run_id=${run.id} pid=${child.pid || ''}`);
+    } else {
+      writeStepLog(logPath, 'create-run', 'skipped automation run persistence', 'automationRuns.createRun not configured');
     }
     let stdout = '';
     let stderr = '';
     let stopRequested = false;
 
+    writeStepLog(logPath, 'stream-output', 'attached stdout and stderr log listeners');
     child.stdout?.on('data', (chunk) => {
       const text = String(chunk);
       stdout += text;
@@ -142,17 +152,20 @@ function runChildProcess({ spawnImpl, command, args, env, account, automationRun
       stderr += text;
       writeLog(logPath, text);
     });
+    writeStepLog(logPath, 'wait-child', 'waiting for automation child process to finish');
     child.on('error', (error) => {
       if (run?.id) {
         activeChildren.delete(run.id);
         automationRuns.markFailed?.(run.id, { errorMessage: error.message });
+        writeStepLog(logPath, 'mark-failed', 'marked automation run failed', `run_id=${run.id} error=${error.message}`);
       }
-      writeLog(logPath, `\n[${new Date().toISOString()}] Child process error: ${error.message}\n`);
+      writeStepLog(logPath, 'child-error', 'child process emitted error', `error=${error.message}`);
       reject(codedError('REPLACE_FAILED', error.message));
     });
     child.on('exit', (_exitCode, signal) => {
       if (signal) {
         stopRequested = true;
+        writeStepLog(logPath, 'child-exit', 'child process received stop signal', `signal=${signal}`);
       }
     });
     child.on('close', (exitCode) => {
@@ -162,8 +175,9 @@ function runChildProcess({ spawnImpl, command, args, env, account, automationRun
       if (exitCode === 0) {
         if (run?.id) {
           automationRuns?.markSucceeded?.(run.id, { exitCode });
+          writeStepLog(logPath, 'mark-succeeded', 'marked automation run succeeded', `exit_code=${exitCode}`);
         }
-        writeLog(logPath, `\n[${new Date().toISOString()}] Child process completed with code 0\n`);
+        writeStepLog(logPath, 'child-close', 'child process completed successfully', `exit_code=${exitCode}`);
         resolve({ ok: true, exitCode, stdout, stderr, ...(run ? { run } : {}) });
         return;
       }
@@ -171,11 +185,13 @@ function runChildProcess({ spawnImpl, command, args, env, account, automationRun
       if (run?.id) {
         if (stopRequested) {
           automationRuns?.markStopped?.(run.id, { exitCode, errorMessage: 'Stopped by user' });
+          writeStepLog(logPath, 'mark-stopped', 'marked automation run stopped', `exit_code=${exitCode}`);
         } else {
           automationRuns?.markFailed?.(run.id, { exitCode, errorMessage: details.trim() });
+          writeStepLog(logPath, 'mark-failed', 'marked automation run failed', `exit_code=${exitCode}`);
         }
       }
-      writeLog(logPath, `\n[${new Date().toISOString()}] Child process failed with code ${exitCode}\n`);
+      writeStepLog(logPath, 'child-close', 'child process finished with failure', `exit_code=${exitCode}`);
       reject(codedError('REPLACE_FAILED', details.trim()));
     });
   });
@@ -252,4 +268,9 @@ function writeLog(logPath, text) {
   } catch {
     writeFileSync(logPath, text, 'utf8');
   }
+}
+
+function writeStepLog(logPath, step, action, details = '') {
+  const suffix = details ? ` ${details}` : '';
+  writeLog(logPath, `[${new Date().toISOString()}] step=${step} action=${action}${suffix}\n`);
 }

@@ -8,6 +8,10 @@ const path = require('path');
 const DEFAULT_TARGET_URL = 'https://chatgpt.com/';
 const DEFAULT_NAVIGATION_TIMEOUT_MS = 60000;
 const DEFAULT_IDLE_TIMEOUT_MS = 10000;
+const DEFAULT_CODE_POLL_INTERVAL_MS = 5000;
+const DEFAULT_CODE_POLL_MAX_ATTEMPTS = 12;
+const DEFAULT_TOKEN_PAGE_SETTLE_MS = 6000;
+const DEFAULT_TOKEN_PAGE_TIMEOUT_MS = 6000;
 const Default_EMAIL='jregkolpig+s4@gmail.com';
 const DEFAULT_VERIFICATION_API_URL = 'http://127.0.0.1:3000/api/verification-code/latest';
 const DEFAULT_PHONE_VERIFICATION_SMS_API_URL = 'https://cdc.smslease.link/adminapi/jsscript/smsInfo/ABC_sms?key=3b7c79633a6a3cd91862eb32e5f3f5cd';
@@ -23,6 +27,12 @@ function pickLogger(logger) {
 function log(logger, phase, action, details = '') {
     const suffix = details ? ` ${details}` : '';
     logger.log(`[roxy-oauth-login] phase=${phase} action=${action}${suffix}`);
+}
+
+function logConfigured(options, phase, action, details = '') {
+    if (options?.logger) {
+        log(pickLogger(options.logger), phase, action, details);
+    }
 }
 
 function createAutomationError(code, message, details = {}) {
@@ -176,6 +186,28 @@ function withTimeout(promise, timeoutMs, onTimeout) {
     return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
 }
 
+function sleepMs(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitBeforeNextCodePoll(options = {}, page = null) {
+    const intervalMs = normalizePositiveInteger(options.codePollIntervalMs, DEFAULT_CODE_POLL_INTERVAL_MS);
+    if (typeof options.waitForTimeout === 'function') {
+        await options.waitForTimeout(intervalMs);
+        return;
+    }
+    if (page && typeof page.waitForTimeout === 'function') {
+        await page.waitForTimeout(intervalMs);
+        return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, intervalMs));
+}
+
+function normalizePositiveInteger(value, fallback) {
+    const number = Number(value);
+    return Number.isInteger(number) && number > 0 ? number : fallback;
+}
+
 async function getBodyText(page, timeoutMs) {
     if (typeof page.locator === 'function') {
         const body = page.locator('body');
@@ -285,13 +317,17 @@ async function openAi_login(page, email, options = {}) {
         }
 
         // 使用 codegen 录制到的稳定 role selector 填写邮箱并提交。
+        logConfigured(options, 'openai-email', '填写邮箱');
         const emailInput = page.getByRole('textbox', { name: 'Email address' });
         await emailInput.waitFor({ state: 'visible', timeout: timeoutMs });
         await emailInput.click();
         await emailInput.fill(normalizedEmail);
+        logConfigured(options, 'openai-email', '点击 Continue');
         await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
 
+        logConfigured(options, 'openai-email', '等待邮箱验证码页');
         const verification = await waitForOpenAiEmailVerification(page, options);
+        logConfigured(options, 'openai-email', '邮箱提交完成', `next=${verification.status}`);
         return {
             status: 'email-submitted',
             email: normalizedEmail,
@@ -340,18 +376,41 @@ async function fillVerificationCodeInput(page, code, timeoutMs) {
 }
 
 async function fetchEmailVerificationCode(page, email, options) {
+    const maxAttempts = normalizePositiveInteger(options.codePollMaxAttempts, DEFAULT_CODE_POLL_MAX_ATTEMPTS);
+    let result;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        result = await fetchEmailVerificationCodeOnce(page, email, options, attempt, maxAttempts);
+        if (result.code) {
+            logConfigured(options, 'openai-email-code', '邮箱验证码获取完成', 'code=received');
+            return result.code;
+        }
+        if (attempt < maxAttempts) {
+            logConfigured(options, 'openai-email-code', '邮箱验证码暂未返回', `attempt=${attempt}/${maxAttempts}`);
+            await waitBeforeNextCodePoll(options, page);
+        }
+    }
+    throw createAutomationError('OPENAI_EMAIL_CODE_FETCH_FAILED', '邮箱验证码 API 未返回有效 6 位验证码', {
+        email,
+        apiResult: result?.apiResult,
+        attempts: maxAttempts
+    });
+}
+
+async function fetchEmailVerificationCodeOnce(page, email, options, attempt = 1, maxAttempts = 1) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
     const verificationApiUrl = options.verificationApiUrl
         || process.env.VERIFICATION_CODE_API_URL
         || DEFAULT_VERIFICATION_API_URL;
 
-    let data;
     const apiRequest = options.request || page.request || (typeof page.context === 'function' ? page.context().request : null);
     const configuredAdminAuth = options.adminAuthCookie || options.adminAuth || admin_auth;
     const requestHeaders = configuredAdminAuth
         ? { Cookie: `admin_auth=${configuredAdminAuth}` }
         : undefined;
+    let data;
 
+    logConfigured(options, 'openai-email-code', '请求邮箱验证码', `attempt=${attempt}/${maxAttempts} api=${verificationApiUrl} admin_auth=${configuredAdminAuth ? 'set' : 'unset'}`);
     if (apiRequest && typeof apiRequest.post === 'function') {
         const response = await apiRequest.post(verificationApiUrl, {
             data: { account: email },
@@ -375,18 +434,16 @@ async function fetchEmailVerificationCode(page, email, options) {
     }
 
     const code = String(data?.code || '').trim();
-    if (!data?.ok || !/^\d{6}$/.test(code)) {
-        throw createAutomationError('OPENAI_EMAIL_CODE_FETCH_FAILED', '邮箱验证码 API 未返回有效 6 位验证码', {
-            email,
-            apiResult: data
-        });
-    }
-    return code;
+    return {
+        code: data?.ok && /^\d{6}$/.test(code) ? code : '',
+        apiResult: data
+    };
 }
 
 async function openAi_email_code(page, email, options = {}) {
     return withFailureScreenshot(page, options, 'openAi_email_code', async () => {
         const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+        const maxAttempts = normalizePositiveInteger(options.codePollMaxAttempts, DEFAULT_CODE_POLL_MAX_ATTEMPTS);
         const normalizedEmail = String(email || '').trim();
         const hasDirectCode = options.code !== undefined && options.code !== null && String(options.code).trim() !== '';
         if (!normalizedEmail && !hasDirectCode) {
@@ -400,7 +457,35 @@ async function openAi_email_code(page, email, options = {}) {
         }
 
         // 手动测试已传入验证码时，不再强制依赖邮箱和验证码 API。
-        const code = hasDirectCode ? String(options.code).trim() : await fetchEmailVerificationCode(page, normalizedEmail, options);
+        if (hasDirectCode) {
+            logConfigured(options, 'openai-email-code', '使用手动邮箱验证码', 'code=provided');
+        }
+        let code = hasDirectCode ? String(options.code).trim() : '';
+        if (!hasDirectCode) {
+            let lastResult;
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+                const currentStage = await detectPostEmailCodeStage(page, options);
+                if (currentStage) return currentStage;
+
+                lastResult = await fetchEmailVerificationCodeOnce(page, normalizedEmail, options, attempt, maxAttempts);
+                if (lastResult.code) {
+                    logConfigured(options, 'openai-email-code', '邮箱验证码获取完成', 'code=received');
+                    code = lastResult.code;
+                    break;
+                }
+                if (attempt < maxAttempts) {
+                    logConfigured(options, 'openai-email-code', '邮箱验证码暂未返回', `attempt=${attempt}/${maxAttempts}`);
+                    await waitBeforeNextCodePoll(options, page);
+                }
+            }
+            if (!code) {
+                throw createAutomationError('OPENAI_EMAIL_CODE_FETCH_FAILED', '邮箱验证码 API 未返回有效 6 位验证码', {
+                    email: normalizedEmail,
+                    apiResult: lastResult?.apiResult,
+                    attempts: maxAttempts
+                });
+            }
+        }
         if (!/^\d{6}$/.test(String(code))) {
             throw createAutomationError('OPENAI_EMAIL_CODE_INVALID', '邮箱验证码必须是 6 位数字', {
                 email: normalizedEmail,
@@ -408,15 +493,39 @@ async function openAi_email_code(page, email, options = {}) {
             });
         }
 
+        const nextStage = await detectPostEmailCodeStage(page, options);
+        if (nextStage) return nextStage;
+
+        logConfigured(options, 'openai-email-code', '填写邮箱验证码', 'code=received');
         await fillVerificationCodeInput(page, code, timeoutMs);
+        logConfigured(options, 'openai-email-code', '点击 Continue');
         await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
 
+        logConfigured(options, 'openai-email-code', '邮箱验证码提交完成');
         return {
             status: 'email-code-submitted',
             email: normalizedEmail,
             code: String(code)
         };
     });
+}
+
+async function detectPostEmailCodeStage(page, options = {}) {
+    const timeoutMs = Math.min(options.stageDetectTimeoutMs || 1000, options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS);
+    if (getCurrentOAuthCallback(page, options.state)) {
+        return { status: 'next-stage', next: 'callback' };
+    }
+    const detectOptions = { ...options, timeoutMs };
+    if (await is_codex_login_page(page, detectOptions)) {
+        return { status: 'next-stage', next: 'codex-login' };
+    }
+    if (await is_phone_verify_page(page, detectOptions)) {
+        return { status: 'next-stage', next: 'phone-verify' };
+    }
+    if (await is_phone_code_page(page, detectOptions)) {
+        return { status: 'next-stage', next: 'phone-code' };
+    }
+    return null;
 }
 
 async function is_phone_verify_page(page, options = {}) {
@@ -439,8 +548,11 @@ async function submitOpenAiPhoneVerify(page, options = {}) {
     }
 
     const textMessageRadio = page.getByRole('radio', { name: 'Text Message' });
+    logConfigured(options, 'openai-phone-verify', '选择短信验证方式');
     await textMessageRadio.check({ timeout: timeoutMs });
+    logConfigured(options, 'openai-phone-verify', '点击 Continue');
     await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+    logConfigured(options, 'openai-phone-verify', '手机验证方式提交完成');
     return { status: 'phone-verify-submitted', method: 'Text Message' };
 }
 
@@ -468,12 +580,39 @@ async function is_phone_code_page(page, options = {}) {
 
 async function fetchPhoneVerificationCode(options = {}) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
-    const smsApiUrl = options.smsApiUrl
+    const maxAttempts = normalizePositiveInteger(options.codePollMaxAttempts, DEFAULT_CODE_POLL_MAX_ATTEMPTS);
+    let result;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        result = await fetchPhoneVerificationCodeOnce(options, attempt, maxAttempts);
+        if (result.code) {
+            logConfigured(options, 'openai-phone-code', '手机验证码获取完成', 'code=received');
+            return result.code;
+        }
+        if (attempt < maxAttempts) {
+            logConfigured(options, 'openai-phone-code', '手机验证码暂未返回', `attempt=${attempt}/${maxAttempts}`);
+            await waitBeforeNextCodePoll(options);
+        }
+    }
+    throw createAutomationError('OPENAI_PHONE_CODE_FETCH_FAILED', '短信验证码 API 未返回连续 6 位验证码', {
+        smsApiUrl: result?.smsApiUrl || resolvePhoneVerificationSmsApiUrl(options),
+        attempts: maxAttempts
+    });
+}
+
+function resolvePhoneVerificationSmsApiUrl(options = {}) {
+    return options.smsApiUrl
         || process.env.PHONE_VERIFICATION_SMS_API_URL
         || DEFAULT_PHONE_VERIFICATION_SMS_API_URL;
+}
+
+async function fetchPhoneVerificationCodeOnce(options = {}, attempt = 1, maxAttempts = 1) {
+    const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+    const smsApiUrl = resolvePhoneVerificationSmsApiUrl(options);
     const fetchImpl = options.fetch || (typeof fetch === 'function' ? fetch : null);
     let text;
 
+    logConfigured(options, 'openai-phone-code', '请求手机验证码', `attempt=${attempt}/${maxAttempts} api=${smsApiUrl}`);
     if (options.request && typeof options.request.get === 'function') {
         const response = await options.request.get(smsApiUrl, { timeout: timeoutMs });
         if (typeof response.text === 'function') {
@@ -493,41 +632,76 @@ async function fetchPhoneVerificationCode(options = {}) {
     }
 
     const match = String(text || '').match(/\b\d{6}\b/);
-    if (!match) {
-        throw createAutomationError('OPENAI_PHONE_CODE_FETCH_FAILED', '短信验证码 API 未返回连续 6 位验证码', {
-            smsApiUrl
-        });
-    }
-    return match[0];
+    return {
+        code: match ? match[0] : '',
+        smsApiUrl
+    };
 }
 
 async function openAi_phone_code(page, options = {}) {
     return withFailureScreenshot(page, options, 'openAi_phone_code', async () => {
         const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+        const maxAttempts = normalizePositiveInteger(options.codePollMaxAttempts, DEFAULT_CODE_POLL_MAX_ATTEMPTS);
         if (!await is_phone_code_page(page, options)) {
             throw createAutomationError('OPENAI_PHONE_CODE_PAGE_NOT_FOUND', '当前页面不是手机验证码输入页', {
                 ...(await collectPageDebug(page))
             });
         }
 
-        const code = options.code !== undefined && options.code !== null && String(options.code).trim() !== ''
-            ? String(options.code).trim()
-            : await fetchPhoneVerificationCode(options);
+        const hasDirectCode = options.code !== undefined && options.code !== null && String(options.code).trim() !== '';
+        let code = hasDirectCode ? String(options.code).trim() : '';
+        if (hasDirectCode) {
+            logConfigured(options, 'openai-phone-code', '使用手动手机验证码', 'code=provided');
+        } else {
+            for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+                const currentStage = await detectPostPhoneCodeStage(page, options);
+                if (currentStage) return currentStage;
+
+                const result = await fetchPhoneVerificationCodeOnce(options, attempt, maxAttempts);
+                if (result.code) {
+                    logConfigured(options, 'openai-phone-code', '手机验证码获取完成', 'code=received');
+                    code = result.code;
+                    break;
+                }
+                if (attempt < maxAttempts) {
+                    logConfigured(options, 'openai-phone-code', '手机验证码暂未返回', `attempt=${attempt}/${maxAttempts}`);
+                    await waitBeforeNextCodePoll(options, page);
+                }
+            }
+        }
         if (!/^\d{6}$/.test(code)) {
             throw createAutomationError('OPENAI_PHONE_CODE_INVALID', '手机验证码必须是 6 位数字', { code });
         }
 
+        const nextStage = await detectPostPhoneCodeStage(page, options);
+        if (nextStage) return nextStage;
+
         const codeInput = page.getByRole('textbox', { name: 'Code' });
         await codeInput.waitFor({ state: 'visible', timeout: timeoutMs });
         await codeInput.click();
+        logConfigured(options, 'openai-phone-code', '填写手机验证码', 'code=received');
         await codeInput.fill(code);
+        logConfigured(options, 'openai-phone-code', '点击 Continue');
         await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
 
+        logConfigured(options, 'openai-phone-code', '手机验证码提交完成');
         return {
             status: 'phone-code-submitted',
             code
         };
     });
+}
+
+async function detectPostPhoneCodeStage(page, options = {}) {
+    const timeoutMs = Math.min(options.stageDetectTimeoutMs || 1000, options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS);
+    if (getCurrentOAuthCallback(page, options.state)) {
+        return { status: 'next-stage', next: 'callback' };
+    }
+    const detectOptions = { ...options, timeoutMs };
+    if (await is_codex_login_page(page, detectOptions)) {
+        return { status: 'next-stage', next: 'codex-login' };
+    }
+    return null;
 }
 
 async function is_codex_login_page(page, options = {}) {
@@ -542,23 +716,77 @@ async function is_codex_login_page(page, options = {}) {
 
 async function codex_login(page, options = {}) {
     return withFailureScreenshot(page, options, 'codex_login', async () => {
+        const logger = pickLogger(options.logger);
         const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+        const clickTimeoutMs = normalizePositiveInteger(
+            options.codexClickTimeoutMs,
+            Math.min(timeoutMs, 8000)
+        );
+        const callbackWaitMs = normalizePositiveInteger(
+            options.codexCallbackWaitMs,
+            Math.min(timeoutMs, 10000)
+        );
         if (!await is_codex_login_page(page, options)) {
             throw createAutomationError('CODEX_LOGIN_PAGE_NOT_FOUND', '当前页面不是 Codex 登录确认页', {
                 ...(await collectPageDebug(page))
             });
         }
 
+        const initialUrl = typeof page.url === 'function' ? String(page.url() || '') : '';
+        const callbackPromise = waitForOAuthCallbackSignal(page, options.state, {
+            ...options,
+            timeoutMs: callbackWaitMs,
+            logger,
+            phase: 'codex-login',
+            initialUrl
+        });
+        const continueButton = page.getByRole('button', { name: 'Continue', exact: true });
+        let clickResult;
         try {
-            await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+            logConfigured(options, 'codex-login', '点击授权继续', `clickTimeoutMs=${clickTimeoutMs}`);
+            clickResult = await Promise.race([
+                continueButton.click({ timeout: clickTimeoutMs }).then(() => ({ status: 'clicked' })),
+                callbackPromise.then((callback) => callback
+                    ? { status: 'callback', callback }
+                    : new Promise(() => {}))
+            ]);
         } catch (error) {
             const currentUrl = typeof page.url === 'function' ? page.url() : '';
             const message = String(error?.message || error);
             if (currentUrl.includes('localhost:1455/auth/callback') || message.includes('localhost:1455/auth/callback')) {
+                logConfigured(options, 'codex-login', '已到达 OAuth callback', 'source=click-timeout');
+                return { status: 'codex-login-submitted', callbackReached: true };
+            }
+            const lateCallback = await callbackPromise;
+            if (lateCallback) {
+                logConfigured(options, 'codex-login', '捕获 OAuth callback', `source=${lateCallback.source}`);
                 return { status: 'codex-login-submitted', callbackReached: true };
             }
             throw error;
         }
+
+        if (clickResult?.status === 'callback' && clickResult.callback) {
+            logConfigured(options, 'codex-login', '捕获 OAuth callback', `source=${clickResult.callback.source}`);
+            return { status: 'codex-login-submitted', callbackReached: true };
+        }
+
+        const changedUrlCallback = getOAuthCallbackFromChangedUrl(page, options.state, initialUrl, {
+            ...options,
+            phase: 'codex-login'
+        });
+        if (changedUrlCallback) {
+            logConfigured(options, 'codex-login', '捕获 OAuth callback', `source=${changedUrlCallback.source}`);
+            return { status: 'codex-login-submitted', callbackReached: true };
+        }
+
+        logConfigured(options, 'codex-login', '授权继续点击完成');
+        logConfigured(options, 'codex-login', '等待授权跳转完成', `callbackWaitMs=${callbackWaitMs}`);
+        const callback = await callbackPromise;
+        if (callback) {
+            logConfigured(options, 'codex-login', '捕获 OAuth callback', `source=${callback.source}`);
+            return { status: 'codex-login-submitted', callbackReached: true };
+        }
+        logConfigured(options, 'codex-login', '授权跳转等待超时，交回状态机继续识别');
         return { status: 'codex-login-submitted' };
     });
 }
@@ -591,6 +819,17 @@ function shouldEnsureClosed(env) {
 
 function shouldKeepOpen(env) {
     return String(env.ROXY_KEEP_OPEN || '1') !== '0';
+}
+
+function shouldRunRoxyHeadless(env) {
+    const configured = String(env.ROXY_HEADLESS || 'auto').trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(configured)) return true;
+    if (['0', 'false', 'no', 'off'].includes(configured)) return false;
+    return !shouldKeepOpen(env);
+}
+
+function resolveRoxyOpenArgs(env) {
+    return shouldRunRoxyHeadless(env) ? ['--headless=new'] : [];
 }
 
 async function disconnectPlaywright(browser, logger) {
@@ -674,8 +913,9 @@ async function openRoxyBrowserForAutomation(deps = {}) {
     log(logger, 'prepare', '随机指纹', `dirId=${dirId}`);
     await client.randomFingerprint();
 
-    log(logger, 'open', '打开窗口', `dirId=${dirId}`);
-    await client.openBrowser();
+    const openArgs = resolveRoxyOpenArgs(env);
+    log(logger, 'open', '打开窗口', `dirId=${dirId} headless=${openArgs.length > 0 ? 'true' : 'false'}`);
+    await client.openBrowser(openArgs);
 
     log(logger, 'cdp', '获取 CDP', `dirId=${dirId}`);
     const connectionInfo = await client.getConnectionInfo();
@@ -736,39 +976,51 @@ async function exchangeToken(code, verifier, email, proxyValue = '', options = {
         let data;
         let ok = true;
         if (options.page && typeof options.page.evaluate === 'function') {
-            const result = await options.page.evaluate(async ({ url: tokenUrl, payload: tokenPayload }) => {
-                const response = await fetch(tokenUrl, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(tokenPayload)
-                });
-                return {
-                    ok: response.ok,
-                    data: await response.json()
-                };
-            }, { url, payload });
-            ok = result.ok !== false;
-            data = result.data;
-        } else if (options.request && typeof options.request.post === 'function') {
-            const resp = await options.request.post(url, {
-                data: payload,
-                headers: { 'Content-Type': 'application/json' },
-                timeout: options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS
-            });
-            ok = typeof resp.ok === 'function' ? resp.ok() : resp.ok !== false;
-            data = await resp.json();
-        } else {
-            const fetchImpl = options.fetch || (typeof fetch === 'function' ? fetch : null);
-            if (!fetchImpl) {
-                throw createAutomationError('OPENAI_TOKEN_EXCHANGE_FAILED', '当前运行环境不支持 fetch，无法换取 Token');
+            log(logger, 'token', '等待页面导航稳定后换 Token', `settleMs=${normalizePositiveInteger(options.tokenPageSettleMs, DEFAULT_TOKEN_PAGE_SETTLE_MS)}`);
+            await waitBeforeTokenPageExchange(options, options.page);
+            try {
+                log(logger, 'token', '使用页面上下文换 Token', `timeoutMs=${normalizePositiveInteger(options.tokenPageTimeoutMs, DEFAULT_TOKEN_PAGE_TIMEOUT_MS)}`);
+                const result = await withTimeout(
+                    options.page.evaluate(async ({ url: tokenUrl, payload: tokenPayload }) => {
+                        const response = await fetch(tokenUrl, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(tokenPayload)
+                        });
+                        return {
+                            ok: response.ok,
+                            data: await response.json()
+                        };
+                    }, { url, payload }),
+                    normalizePositiveInteger(options.tokenPageTimeoutMs, DEFAULT_TOKEN_PAGE_TIMEOUT_MS),
+                    () => createAutomationError('OPENAI_TOKEN_PAGE_EXCHANGE_TIMEOUT', '页面上下文换取 Token 超时', {
+                        timeoutMs: normalizePositiveInteger(options.tokenPageTimeoutMs, DEFAULT_TOKEN_PAGE_TIMEOUT_MS)
+                    })
+                );
+                ok = result.ok !== false;
+                data = result.data;
+            } catch (error) {
+                const message = String(error?.message || error);
+                if (options.request && typeof options.request.post === 'function') {
+                    logger.warn(`[roxy-oauth-login] phase=token action=页面上下文换 Token 失败，回退 request 诊断=${message}`);
+                    const requestResult = await exchangeTokenWithRequest(url, payload, options);
+                    ok = requestResult.ok;
+                    data = requestResult.data;
+                } else {
+                    logger.warn(`[roxy-oauth-login] phase=token action=页面上下文换 Token 失败，回退 fetch 诊断=${message}`);
+                    const fetchResult = await exchangeTokenWithFetch(url, payload, options);
+                    ok = fetchResult.ok;
+                    data = fetchResult.data;
+                }
             }
-            const resp = await fetchImpl(url, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload)
-            });
-            ok = resp.ok !== false;
-            data = await resp.json();
+        } else if (options.request && typeof options.request.post === 'function') {
+            const requestResult = await exchangeTokenWithRequest(url, payload, options);
+            ok = requestResult.ok;
+            data = requestResult.data;
+        } else {
+            const fetchResult = await exchangeTokenWithFetch(url, payload, options);
+            ok = fetchResult.ok;
+            data = fetchResult.data;
         }
         if (!ok) {
             throw createAutomationError('OPENAI_TOKEN_EXCHANGE_FAILED', 'OpenAI token endpoint 返回失败', {
@@ -816,12 +1068,64 @@ async function exchangeToken(code, verifier, email, proxyValue = '', options = {
     }
 }
 
+async function waitBeforeTokenPageExchange(options = {}, page = null) {
+    const settleMs = normalizePositiveInteger(options.tokenPageSettleMs, DEFAULT_TOKEN_PAGE_SETTLE_MS);
+    if (settleMs <= 0) return;
+    if (typeof options.waitForTimeout === 'function') {
+        await options.waitForTimeout(settleMs);
+        return;
+    }
+    if (page && typeof page.waitForTimeout === 'function') {
+        await page.waitForTimeout(settleMs);
+        return;
+    }
+    await sleepMs(settleMs);
+}
+
+async function exchangeTokenWithRequest(url, payload, options = {}) {
+    const logger = pickLogger(options.logger);
+    log(logger, 'token', '使用 Playwright request 换 Token');
+    const resp = await options.request.post(url, {
+        data: payload,
+        headers: { 'Content-Type': 'application/json' },
+        timeout: normalizePositiveInteger(options.tokenRequestTimeoutMs, Math.min(options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS, DEFAULT_TOKEN_PAGE_TIMEOUT_MS))
+    });
+    return {
+        ok: typeof resp.ok === 'function' ? resp.ok() : resp.ok !== false,
+        data: await resp.json()
+    };
+}
+
+async function exchangeTokenWithFetch(url, payload, options = {}) {
+    const logger = pickLogger(options.logger);
+    log(logger, 'token', '使用 Node fetch 换 Token');
+    const fetchImpl = options.fetch || (typeof fetch === 'function' ? fetch : null);
+    if (!fetchImpl) {
+        throw createAutomationError('OPENAI_TOKEN_EXCHANGE_FAILED', '当前运行环境不支持 fetch，无法换取 Token');
+    }
+    const resp = await fetchImpl(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        ...(typeof AbortSignal !== 'undefined' && typeof AbortSignal.timeout === 'function'
+            ? { signal: AbortSignal.timeout(normalizePositiveInteger(options.tokenFetchTimeoutMs, DEFAULT_TOKEN_PAGE_TIMEOUT_MS)) }
+            : {})
+    });
+    return {
+        ok: resp.ok !== false,
+        data: await resp.json()
+    };
+}
+
 function parseOAuthCallbackUrl(callbackUrl, expectedState) {
-    const parsed = new URL(callbackUrl);
-    const code = parsed.searchParams.get('code');
-    const state = parsed.searchParams.get('state');
+    const parsed = parseOAuthCodeStateFromUrl(callbackUrl);
+    const code = parsed.code;
+    const state = parsed.state;
     if (!code) {
         throw createAutomationError('OAUTH_CALLBACK_CODE_MISSING', 'OAuth callback URL 中没有 code', { callbackUrl });
+    }
+    if (!state) {
+        throw createAutomationError('OAUTH_CALLBACK_STATE_MISSING', 'OAuth callback URL 中没有 state', { callbackUrl });
     }
     if (expectedState && state !== expectedState) {
         throw createAutomationError('OAUTH_CALLBACK_STATE_MISMATCH', 'OAuth callback state 与本次请求不一致', {
@@ -832,11 +1136,120 @@ function parseOAuthCallbackUrl(callbackUrl, expectedState) {
     return { code, state, callbackUrl };
 }
 
+function parseOAuthCodeStateFromUrl(candidateUrl) {
+    const parsed = new URL(candidateUrl);
+    const searchParams = parsed.searchParams;
+    let code = searchParams.get('code');
+    let state = searchParams.get('state');
+
+    if ((!code || !state) && parsed.hash) {
+        const hashValue = parsed.hash.replace(/^#/, '');
+        const hashQuery = hashValue.includes('?') ? hashValue.slice(hashValue.indexOf('?') + 1) : hashValue;
+        const hashParams = new URLSearchParams(hashQuery);
+        code = code || hashParams.get('code');
+        state = state || hashParams.get('state');
+    }
+
+    return { code, state };
+}
+
+function getOAuthCallbackFromChangedUrl(page, expectedState, initialUrl, options = {}) {
+    const currentUrl = typeof page.url === 'function' ? String(page.url() || '') : '';
+    if (!currentUrl || !initialUrl || currentUrl === initialUrl) {
+        return null;
+    }
+
+    let parsed;
+    try {
+        parsed = parseOAuthCodeStateFromUrl(currentUrl);
+    } catch {
+        logConfigured(options, options.phase || 'oauth-flow', 'URL 已变化但无法解析 OAuth 参数');
+        return null;
+    }
+
+    if (!parsed.code || !parsed.state) {
+        logConfigured(options, options.phase || 'oauth-flow', 'URL 已变化但未包含 OAuth code/state');
+        return null;
+    }
+
+    if (expectedState && parsed.state !== expectedState) {
+        throw createAutomationError('OAUTH_CALLBACK_STATE_MISMATCH', 'OAuth callback state 与本次请求不一致', {
+            expectedState,
+            actualState: parsed.state
+        });
+    }
+
+    logConfigured(options, options.phase || 'oauth-flow', 'URL 变化且包含 OAuth code/state', 'source=url-code-state');
+    return {
+        source: 'url-code-state',
+        code: parsed.code,
+        state: parsed.state,
+        callbackUrl: currentUrl
+    };
+}
+
 function getCurrentOAuthCallback(page, expectedState) {
     const currentUrl = typeof page.url === 'function' ? page.url() : '';
     if (String(currentUrl).includes('localhost:1455/auth/callback')) {
         return parseOAuthCallbackUrl(currentUrl, expectedState);
     }
+    return null;
+}
+
+async function waitForOAuthCallbackSignal(page, expectedState, options = {}) {
+    const phase = options.phase || 'oauth-flow';
+    const timeoutMs = normalizePositiveInteger(options.timeoutMs, DEFAULT_NAVIGATION_TIMEOUT_MS);
+    const pollIntervalMs = normalizePositiveInteger(options.callbackPollIntervalMs, 200);
+    const initialUrl = options.initialUrl || (typeof page.url === 'function' ? String(page.url() || '') : '');
+    const promises = [];
+
+    if (typeof page.waitForRequest === 'function') {
+        logConfigured(options, phase, '监听 OAuth callback', `source=request timeoutMs=${timeoutMs}`);
+        promises.push(page.waitForRequest((request) => {
+            const requestUrl = typeof request.url === 'function' ? request.url() : '';
+            return requestUrl.includes('localhost:1455/auth/callback');
+        }, { timeout: timeoutMs }).then((request) => {
+            const requestUrl = typeof request.url === 'function' ? request.url() : '';
+            return {
+                source: 'request',
+                ...parseOAuthCallbackUrl(requestUrl, expectedState)
+            };
+        }).catch(() => null));
+    } else {
+        logConfigured(options, phase, '监听 OAuth callback', `source=url timeoutMs=${timeoutMs}`);
+    }
+
+    promises.push((async () => {
+        const start = Date.now();
+        while (Date.now() - start < timeoutMs) {
+            const callback = getCurrentOAuthCallback(page, expectedState);
+            if (callback) {
+                return {
+                    source: 'url',
+                    ...callback
+                };
+            }
+            const changedUrlCallback = getOAuthCallbackFromChangedUrl(page, expectedState, initialUrl, {
+                ...options,
+                phase
+            });
+            if (changedUrlCallback) {
+                return changedUrlCallback;
+            }
+            if (typeof page.waitForTimeout === 'function') {
+                await page.waitForTimeout(pollIntervalMs);
+            } else {
+                await sleepMs(pollIntervalMs);
+            }
+        }
+        return null;
+    })());
+
+    const callback = await Promise.race(promises);
+    if (callback) {
+        return callback;
+    }
+    await Promise.allSettled(promises);
     return null;
 }
 
@@ -895,7 +1308,11 @@ async function processOAuthLoginFlow(page, options = {}) {
             await openAi_login(page, email, actionOptions);
         } else if (await is_codex_login_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到 Codex 授权确认页');
-            await codex_login(page, actionOptions);
+            const codexResult = await codex_login(page, actionOptions);
+            if (!codexResult?.callbackReached) {
+                log(logger, 'oauth-flow', '等待 Codex 授权后页面跳转');
+                await waitForStageTransition(page, actionOptions);
+            }
         } else if (await is_email_code_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到邮箱验证码页');
             await openAi_email_code(page, email, actionOptions);
@@ -1070,6 +1487,7 @@ module.exports = {
     openAi_phone_verify,
     openRoxyBrowserForAutomation,
     processOAuthLoginFlow,
+    resolveRoxyOpenArgs,
     run,
     runCli,
     saveIndividualAccountJson,

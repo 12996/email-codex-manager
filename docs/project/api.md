@@ -641,6 +641,17 @@ web/automation-logs.js
 页面入口需要后台登录态，前端通过 `/replacement-accounts*` JSON API 读取和操作数据。
 日志页面同样需要后台登录态，前端通过 `/replacement-automation-runs*` JSON API 读取运行记录、查看日志和停止运行中的子进程。
 
+补号管理页支持直接配置公开验证码接口：
+
+- 新增或编辑补号账号时，可勾选“允许公开验证码接口”，对应 `public_code_enabled = 1`。
+- “公开验证码 Key” 对应 `public_code_key`；留空时由后端自动生成，也可以手动覆盖为不可猜测字符串。
+- 补号列表会在邮箱下方显示公开验证码启用状态和 key。
+- 操作菜单中的“复制公开验证码 URL”会生成：
+
+```text
+<当前站点>/api/verification-code/public/latest?key=<public_code_key>
+```
+
 ### 字段说明
 
 SQLite 表：`replacement_accounts`
@@ -790,6 +801,51 @@ SQLite 表：`replacement_accounts`
 }
 ```
 
+### PATCH `/replacement-accounts/:id/public-code`
+
+启用或停用补号账号的公开验证码接口，不需要提交完整账号资料。
+
+请求体：
+
+```json
+{
+  "enabled": true
+}
+```
+
+也可以显式传入 `public_code_key`；未传时保留已有 key，缺失时自动生成：
+
+```json
+{
+  "enabled": true,
+  "public_code_key": "vc_..."
+}
+```
+
+成功：
+
+```json
+{
+  "ok": true,
+  "account": {
+    "id": 1,
+    "email": "user@example.com",
+    "public_code_enabled": 1,
+    "public_code_key": "vc_..."
+  }
+}
+```
+
+停用时设置：
+
+```json
+{
+  "enabled": false
+}
+```
+
+停用后同一 `public_code_key` 不再允许访问 `GET /api/verification-code/public/latest?key=...`。
+
 ### POST `/replacement-accounts/:id/fetch-sms-code`
 
 实时请求账号配置的 `sms_api` 并返回验证码。验证码只在响应中返回，不写入数据库。
@@ -864,7 +920,7 @@ src/auto/roxy_oauth_login.js
 | 复用 CDP | `.env` / 运行配置 | `ROXY_CDP_ENDPOINT`；配置后脚本跳过 Roxy 准备流程并直接连接现有浏览器。 |
 | 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`，默认 `http://127.0.0.1:3000/api/verification-code/latest`。 |
 | 后台 Cookie | `.env` / 运行配置 | `ADMIN_AUTH_COOKIE`；非本机调用邮箱验证码接口时使用。 |
-| 浏览器关闭策略 | `.env` / 运行配置 | `ROXY_KEEP_OPEN`、`ROXY_ENSURE_CLOSED`。 |
+| 浏览器关闭/有头无头策略 | `.env` / 运行配置 | `ROXY_KEEP_OPEN`、`ROXY_HEADLESS`、`ROXY_ENSURE_CLOSED`。`ROXY_HEADLESS=auto` 时，`ROXY_KEEP_OPEN=1` 默认有头并保留窗口，`ROXY_KEEP_OPEN=0` 默认无头并关闭窗口。 |
 | 代理提示 | `.env` / 运行配置 | `ROXY_PROXY`；当前 token 请求阶段仅记录提示，浏览器代理由 Roxy 窗口自身配置决定。 |
 
 脚本生成的数据：
@@ -876,7 +932,7 @@ src/auto/roxy_oauth_login.js
 | OAuth callback `code` | OpenAI/Codex OAuth 回调 | 脚本从当前页面或网络请求捕获。 |
 | `access_token`、`refresh_token`、`id_token` | OpenAI token endpoint | 脚本使用 callback code 换取。 |
 | `chatgpt_account_id`、`chatgpt_user_id`、`plan_type` | access token payload | 写入导出的账号 JSON。 |
-| 导出文件 | `src/auto/product_files/` | 默认写入 `sub2api/邮箱.json` 和 `cpa/邮箱.json`。 |
+| 导出文件 | `src/auto/product_files/` | 默认写入 `sub2api/邮箱.json` 和 `cpa/邮箱.json`；手动补号和自动补号生产链路都会在成功后上传 CPA JSON 并复查。 |
 
 成功响应：
 
@@ -922,12 +978,84 @@ src/auto/roxy_oauth_login.js
 - `replacement_count + 1`
 - `last_replace_at = 当前时间`
 - `last_error = null`
+- 生产注入 CPA repair worker 时，会上传 `src/auto/product_files/cpa/<email>.json` 到 CPA 并确认该邮箱凭证恢复健康。
 
 失败时：
 
 - `status = failed`
 - `last_error = 错误信息`
 - `replacement_count` 不变
+
+## CPA 凭证健康检测 API
+
+CPA 凭证健康检测接口复用后台登录态，调用前需要先登录后台并携带 `admin_auth` cookie。
+
+### 配置
+
+```env
+CPA_URL=http://localhost:8317
+CPA_MANAGEMENT_KEY=
+CPA_HEALTH_MONITOR_ENABLED=false
+CPA_HEALTH_MONITOR_INTERVAL_MS=600000
+```
+
+`CPA_URL` 可以是 CPA 服务根地址，也可以直接指向 `/v0/management`。`CPA_MANAGEMENT_KEY` 只用于后端请求 CPA 管理接口，不会出现在接口响应中。
+
+### GET `/cpa/auth-health`
+
+手动执行一次 CPA auth-files 健康检测。
+
+后端行为：
+
+1. 请求 CPA `GET /v0/management/auth-files`。
+2. 按 `provider + email` 生成凭证 key。
+3. 将凭证分类为 `healthy`、`banned`、`disabled`、`auth_expired`、`quota_limited` 或 `unknown_error`。
+4. 只有 `auth_expired` 会按邮箱匹配 `replacement_accounts.email`。
+5. 匹配到且账号未处于 `replacing`/`banned` 时，加入单并发补号队列并触发队列执行；`banned` 账号跳过原因为 `account_banned`。
+6. 补号子进程成功后，上传本地 `src/auto/product_files/cpa/<email>.json` 到 CPA，并再次检查该邮箱凭证是否恢复健康。
+
+成功响应示例：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "checked": 1,
+    "unhealthy": [
+      {
+        "key": "claude:user@example.com",
+        "provider": "claude",
+        "email": "user@example.com",
+        "category": "auth_expired",
+        "reasons": ["unavailable", "status:error", "message:auth_expired"]
+      }
+    ],
+    "enqueued": [
+      {
+        "key": "claude:user@example.com",
+        "provider": "claude",
+        "email": "user@example.com",
+        "category": "auth_expired",
+        "reasons": ["unavailable", "status:error", "message:auth_expired"],
+        "account_id": 7
+      }
+    ],
+    "skipped": []
+  }
+}
+```
+
+未配置 monitor：
+
+```json
+{
+  "ok": false,
+  "error": "CPA_MONITOR_NOT_CONFIGURED",
+  "message": "CPA credential monitor is not configured"
+}
+```
+
+敏感信息约束：响应和日志不得输出 `CPA_MANAGEMENT_KEY`。
 
 ## 补号子进程运行日志 API
 
@@ -953,6 +1081,19 @@ src/auto/roxy_oauth_login.js
 ```text
 data/automation-logs/
 ```
+
+日志内容包含两类信息：
+
+- 服务侧编排步骤：形如 `step=<步骤> action=<动作>`，覆盖账号校验、子进程环境准备、启动 child、创建 run、绑定 stdout/stderr、等待结束和最终状态标记。
+- 自动化脚本输出：`src/auto/roxy_oauth_login.js` 输出的 `stdout/stderr` 原文，包括 Roxy 准备、页面状态识别、填写邮箱、请求/填写邮箱验证码、选择短信验证、请求/填写手机验证码、Codex 授权、callback 和 token 导出等阶段日志。
+
+敏感信息约束：日志只记录验证码是否已获取/已填写、Cookie 是否配置和 token 解析/保存状态，不记录验证码、`admin_auth` Cookie、access token、refresh token 或完整短信响应。
+
+验证码轮询策略：
+
+- 邮箱验证码 API：默认每 5 秒请求一次，最多请求 12 次；仍未返回有效 6 位验证码时失败。
+- 手机短信验证码 API：默认每 5 秒请求一次，最多请求 12 次；仍未返回连续 6 位验证码时失败。
+- 日志会记录 `attempt=当前次数/总次数`，但不记录验证码明文。
 
 ### GET `/replacement-automation-runs`
 
@@ -1027,6 +1168,7 @@ data/automation-logs/
 | 修改账号 | `PUT /replacement-accounts/:id` | 修改基础信息 |
 | 删除账号 | `DELETE /replacement-accounts/:id` | 软删除 |
 | 修改状态 | `PATCH /replacement-accounts/:id/status` | 更新状态和备注 |
+| 启用/停用公开验证码 | `PATCH /replacement-accounts/:id/public-code` | 只更新 `public_code_enabled` 和必要的 `public_code_key` |
 | 获取验证码 | `POST /replacement-accounts/:id/fetch-sms-code` | 实时返回验证码，不入库 |
 | 获取 JSON | `POST /replacement-accounts/:id/fetch-json` | 保存 JSON 原文 |
 | 自动补号 | `POST /replacement-accounts/:id/replace` | 成功后补号次数加一 |

@@ -148,6 +148,15 @@ test('getPublicCodeAccountByKey returns only enabled non-deleted accounts', () =
   assert.equal(repo.getPublicCodeAccountByKey(''), undefined);
 });
 
+test('getAccountByEmail finds non-deleted account case-insensitively', () => {
+  const repo = createTestRepository();
+  const created = repo.createAccount({ email: 'User@Example.COM' });
+
+  assert.equal(repo.getAccountByEmail(' user@example.com ').id, created.id);
+  repo.deleteAccount(created.id);
+  assert.equal(repo.getAccountByEmail('user@example.com'), undefined);
+});
+
 test('createAccount rejects duplicate email case-insensitively', () => {
   const repo = createTestRepository();
 

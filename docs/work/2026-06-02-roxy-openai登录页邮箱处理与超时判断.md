@@ -102,14 +102,19 @@
   - 新增 `replacement_automation_runs` 表，用于记录补号自动化 run、账号、状态、PID、日志路径、开始/结束时间、退出码和错误摘要。
   - 新增 `src/replacementAutomationRuns.js` 运行记录仓库。
   - `replacementServices` 子进程适配器在执行时创建 run 记录，并将 stdout/stderr 实时追加到 `data/automation-logs/`。
+  - 追加补充：日志文件新增服务侧编排步骤记录，覆盖账号校验、环境准备、启动子进程、创建 run、绑定 stdout/stderr、等待结束和成功/失败/停止状态标记，避免子进程暂无输出时页面显示信息不足。
+  - 追加补充：`src/auto/roxy_oauth_login.js` 页面动作新增日志，覆盖填写邮箱、请求/填写邮箱验证码、选择短信验证、请求/填写手机验证码和 Codex 授权继续；日志不输出验证码、Cookie 或 token 明文。
+  - 追加补充：邮箱验证码和手机短信验证码获取改为轮询，默认每 5 秒请求一次，最多 12 次；日志记录 attempt 进度但不记录验证码明文。
   - 服务进程内通过 run id 追踪 active child，新增 `stopReplacementRun(runId)`，只停止当前服务会话内仍活跃的 child，不按历史 PID 盲杀系统进程。
   - 新增 `/replacement-automation-logs` 页面，支持查看运行列表、日志详情、running 状态轮询和停止子进程。
   - 新增 `GET /replacement-automation-runs`、`GET /replacement-automation-runs/:id`、`POST /replacement-automation-runs/:id/stop`。
 - 验证结果：
-  - `node --test .\test\replacementServices.test.js` 通过，10/10 pass。
+  - `node --test .\test\replacementServices.test.js` 通过，11/11 pass。
+  - `node --test .\test\roxyOauthLogin.test.js` 通过，45/45 pass。
   - `node --test .\test\replacementAccountsApi.test.js` 通过，5/5 pass。
   - `node --test .\test\replacementAccountsWeb.test.js` 通过，4/4 pass。
   - `node --test .\test\replacementAccounts.test.js` 通过，16/16 pass。
   - `node --check .\src\replacementServices.js` 通过。
+  - `node --check .\src\auto\roxy_oauth_login.js` 通过。
   - `node --check .\src\server.js` 通过。
   - `node --test` 全量运行仍有 2 个既有失败项：`test/accountsWebApi.test.js` 的旧侧边栏断言仍匹配到 `系统设置`，`test/test-verification-code.mjs` 依赖本地 3000 服务导致 `ECONNREFUSED`。

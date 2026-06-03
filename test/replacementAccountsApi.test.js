@@ -29,7 +29,7 @@ function authCookie() {
   return `admin_auth=${encodeURIComponent(`s:${signature.sign('1', config.sessionSecret)}`)}`;
 }
 
-function createTestContext(replacementServices = successfulServices()) {
+function createTestContext(replacementServices = successfulServices(), overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-service-'));
   const db = createDatabase(join(dir, 'test.db'));
   const replacementAccounts = createReplacementAccountRepository(db);
@@ -47,6 +47,7 @@ function createTestContext(replacementServices = successfulServices()) {
         return null;
       },
     },
+    ...overrides,
   });
 
   return { app, replacementAccounts, replacementAutomationRuns, dir };
@@ -185,6 +186,104 @@ test('replacement account action APIs update status and call injected services',
     assert.equal(replaced.response.status, 200);
     assert.equal(replaced.body.account.status, 'replaced');
     assert.equal(replaced.body.account.replacement_count, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test('manual replacement uses CPA repair worker when configured', async () => {
+  const events = [];
+  const services = {
+    ...successfulServices(),
+    async replaceAccount() {
+      events.push('direct-replace-service');
+      return { ok: true };
+    },
+  };
+  const cpaRepairWorker = {
+    async repair({ account }) {
+      events.push(['cpa-repair', account.id, account.email]);
+      return {
+        ok: true,
+        account: {
+          ...account,
+          status: 'replaced',
+          replacement_count: Number(account.replacement_count || 0) + 1,
+        },
+        upload: { status: 'ok' },
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services, { cpaRepairWorker });
+  const created = replacementAccounts.createAccount({ email: 'user@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace`);
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.account.status, 'replaced');
+    assert.deepEqual(events, [['cpa-repair', created.id, 'user@example.com']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('replacement account API can enable public verification code access', async () => {
+  const { app, replacementAccounts } = createTestContext();
+  const created = replacementAccounts.createAccount({
+    email: 'jregkolpig+s3@gmail.com',
+    public_code_enabled: 0,
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const updated = await jsonRequest(server, 'PUT', `/replacement-accounts/${created.id}`, {
+      email: created.email,
+      public_code_enabled: 1,
+      public_code_key: created.public_code_key,
+    });
+
+    assert.equal(updated.response.status, 200);
+    assert.equal(updated.body.account.public_code_enabled, 1);
+    assert.equal(
+      replacementAccounts.getPublicCodeAccountByKey(created.public_code_key).id,
+      created.id,
+    );
+  } finally {
+    await server.close();
+  }
+});
+
+test('replacement account public code API toggles access without editing the full account', async () => {
+  const { app, replacementAccounts } = createTestContext();
+  const created = replacementAccounts.createAccount({
+    email: 'jregkolpig+s3@gmail.com',
+    status: 'pending',
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const enabled = await jsonRequest(server, 'PATCH', `/replacement-accounts/${created.id}/public-code`, {
+      enabled: true,
+    });
+
+    assert.equal(enabled.response.status, 200);
+    assert.equal(enabled.body.account.public_code_enabled, 1);
+    assert.equal(enabled.body.account.public_code_key, created.public_code_key);
+    assert.equal(
+      replacementAccounts.getPublicCodeAccountByKey(created.public_code_key).id,
+      created.id,
+    );
+
+    const disabled = await jsonRequest(server, 'PATCH', `/replacement-accounts/${created.id}/public-code`, {
+      enabled: false,
+    });
+
+    assert.equal(disabled.response.status, 200);
+    assert.equal(disabled.body.account.public_code_enabled, 0);
+    assert.equal(replacementAccounts.getPublicCodeAccountByKey(created.public_code_key), undefined);
   } finally {
     await server.close();
   }
