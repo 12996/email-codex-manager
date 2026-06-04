@@ -1,6 +1,6 @@
 # CHG-019 CPA 凭证健康检测与自动补号
 
-- 状态：implemented
+- 状态：merged
 - 日期：2026-06-03
 - 关联 PRD：PRD-002
 
@@ -24,3 +24,9 @@ CPA 已提供 `/v0/management/auth-files` 运行时凭证状态接口，可用�
 - 失效凭证会按邮箱匹配补号账号并触发补号。
 - 已处于 `replacing` 的账号不会重复触发。
 - `disabled`、`quota_limited` 和未分类异常只报告，不自动补号。
+
+## 合并记录
+
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的 CPA 凭证健康检测与自动补号章节。

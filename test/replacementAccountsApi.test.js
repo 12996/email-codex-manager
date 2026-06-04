@@ -64,6 +64,9 @@ function successfulServices() {
     async replaceAccount() {
       return { ok: true };
     },
+    async registerAccount() {
+      return { ok: true, run: { id: 77 } };
+    },
   };
 }
 
@@ -225,6 +228,68 @@ test('manual replacement uses CPA repair worker when configured', async () => {
     assert.equal(response.body.ok, true);
     assert.equal(response.body.account.status, 'replaced');
     assert.deepEqual(events, [['cpa-repair', created.id, 'user@example.com']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/register starts registration automation', async () => {
+  const events = [];
+  const services = {
+    ...successfulServices(),
+    async registerAccount(account) {
+      events.push(['register', account.id, account.email]);
+      return { ok: true, run: { id: 88, status: 'running' } };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({ email: 'user@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/register`);
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.account.id, created.id);
+    assert.deepEqual(response.body.run, { id: 88, status: 'running' });
+    assert.deepEqual(events, [['register', created.id, 'user@example.com']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/register returns ACCOUNT_NOT_FOUND for missing account', async () => {
+  const { app } = createTestContext();
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', '/replacement-accounts/999/register');
+
+    assert.equal(response.response.status, 404);
+    assert.equal(response.body.error, 'ACCOUNT_NOT_FOUND');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/register returns REGISTER_FAILED with account on failure', async () => {
+  const services = {
+    ...successfulServices(),
+    async registerAccount() {
+      throw Object.assign(new Error('registration failed'), { code: 'REGISTER_FAILED' });
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({ email: 'user@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/register`);
+
+    assert.equal(response.response.status, 502);
+    assert.equal(response.body.error, 'REGISTER_FAILED');
+    assert.equal(response.body.account.id, created.id);
   } finally {
     await server.close();
   }

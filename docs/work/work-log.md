@@ -33,3 +33,5 @@
 | 2026-06-03 | Roxy Codex callback 点击守卫 | done | `2026-06-03-roxy-codex-callback-click-guard.md` |
 | 2026-06-03 | Roxy token 交换 request context 优先 | done | `2026-06-03-roxy-token-exchange-request-context-first.md` |
 | 2026-06-03 | Roxy token 交换页面上下文优先与短超时 | done | `2026-06-03-roxy-token-exchange-page-context-short-timeout.md` |
+| 2026-06-03 | 部署文档与数据库迁移说明 | done | `2026-06-03-deployment-database-migration.md` |
+| 2026-06-03 | PRD-002 change 基线合并 | done | `2026-06-03-prd-002-change-merge.md` |

@@ -7,6 +7,7 @@ import { codedError } from './replacementAccounts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROXY_OAUTH_SCRIPT = join(__dirname, 'auto', 'roxy_oauth_login.js');
+const DEFAULT_ROXY_REGISTER_SCRIPT = join(__dirname, 'auto', 'roxy_register_openai.js');
 const DEFAULT_LOG_DIR = join(__dirname, '..', 'data', 'automation-logs');
 const activeChildren = new Map();
 
@@ -16,18 +17,21 @@ export function createReplacementServices({
   spawnImpl = spawn,
   nodePath = process.execPath,
   scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
+  registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
 } = {}) {
-  const automation = replacementAutomation || createRoxyOAuthChildProcessAutomation({
+  const defaultAutomation = createRoxyChildProcessAutomation({
     spawnImpl,
     nodePath,
     scriptPath,
+    registerScriptPath,
     baseEnv,
     automationRuns,
     logDir,
   });
+  const automation = replacementAutomation || defaultAutomation;
 
   return {
     async fetchSmsCode(smsApi) {
@@ -64,6 +68,13 @@ export function createReplacementServices({
       return automation.replaceAccount(account);
     },
 
+    async registerAccount(account) {
+      if (automation?.registerAccount) {
+        return automation.registerAccount(account);
+      }
+      return defaultAutomation.registerAccount(account);
+    },
+
     stopReplacementRun(runId) {
       return stopReplacementRun(runId);
     },
@@ -74,6 +85,26 @@ export function createRoxyOAuthChildProcessAutomation({
   spawnImpl = spawn,
   nodePath = process.execPath,
   scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
+  baseEnv = process.env,
+  automationRuns,
+  logDir = DEFAULT_LOG_DIR,
+} = {}) {
+  return createRoxyChildProcessAutomation({
+    spawnImpl,
+    nodePath,
+    scriptPath,
+    registerScriptPath: DEFAULT_ROXY_REGISTER_SCRIPT,
+    baseEnv,
+    automationRuns,
+    logDir,
+  });
+}
+
+export function createRoxyChildProcessAutomation({
+  spawnImpl = spawn,
+  nodePath = process.execPath,
+  scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
+  registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
@@ -96,26 +127,60 @@ export function createRoxyOAuthChildProcessAutomation({
         account,
         automationRuns,
         logDir,
+        kind: 'replacement',
+        failureCode: 'REPLACE_FAILED',
+        envSummaryKeys: ['ROXY_OAUTH_EMAIL', 'PHONE_VERIFICATION_SMS_API_URL'],
+      });
+    },
+
+    registerAccount(account) {
+      const email = normalizeRequired(account?.email, 'REGISTER_FAILED', 'registration account email is required');
+      const env = {
+        ...baseEnv,
+        ROXY_REGISTER_EMAIL: email,
+        ROXY_OAUTH_EMAIL: email,
+      };
+      delete env.PHONE_VERIFICATION_SMS_API_URL;
+
+      return runChildProcess({
+        spawnImpl,
+        command: nodePath,
+        args: [registerScriptPath],
+        env,
+        account: { ...account, email },
+        automationRuns,
+        logDir,
+        kind: 'registration',
+        failureCode: 'REGISTER_FAILED',
+        envSummaryKeys: ['ROXY_REGISTER_EMAIL', 'ROXY_OAUTH_EMAIL', 'VERIFICATION_CODE_API_URL'],
       });
     },
   };
 }
 
-function runChildProcess({ spawnImpl, command, args, env, account, automationRuns, logDir }) {
+function runChildProcess({
+  spawnImpl,
+  command,
+  args,
+  env,
+  account,
+  automationRuns,
+  logDir,
+  kind = 'replacement',
+  failureCode = 'REPLACE_FAILED',
+  envSummaryKeys = [],
+}) {
   return new Promise((resolve, reject) => {
-    const logPath = createLogPath(logDir, account);
+    const logPath = createLogPath(logDir, account, kind);
     writeLog(logPath, [
-      `[${new Date().toISOString()}] Starting replacement automation`,
+      `[${new Date().toISOString()}] Starting ${kind} automation`,
       `account_id=${account?.id ?? ''}`,
       `email=${normalizeOptional(account?.email)}`,
       `command=${command} ${args.join(' ')}`,
       '',
     ].join('\n'));
     writeStepLog(logPath, 'validate-account', 'validated replacement account', `account_id=${account?.id ?? ''} email=${normalizeOptional(account?.email)}`);
-    writeStepLog(logPath, 'prepare-env', 'prepared child process environment', [
-      `ROXY_OAUTH_EMAIL=${env.ROXY_OAUTH_EMAIL ? 'set' : 'unset'}`,
-      `PHONE_VERIFICATION_SMS_API_URL=${env.PHONE_VERIFICATION_SMS_API_URL ? 'set' : 'unset'}`,
-    ].join(' '));
+    writeStepLog(logPath, 'prepare-env', 'prepared child process environment', summarizeEnv(env, envSummaryKeys));
     writeStepLog(logPath, 'spawn-child', 'spawning automation child process', `command=${command} args=${args.join(' ')}`);
 
     const child = spawnImpl(command, args, {
@@ -160,7 +225,7 @@ function runChildProcess({ spawnImpl, command, args, env, account, automationRun
         writeStepLog(logPath, 'mark-failed', 'marked automation run failed', `run_id=${run.id} error=${error.message}`);
       }
       writeStepLog(logPath, 'child-error', 'child process emitted error', `error=${error.message}`);
-      reject(codedError('REPLACE_FAILED', error.message));
+      reject(codedError(failureCode, error.message));
     });
     child.on('exit', (_exitCode, signal) => {
       if (signal) {
@@ -192,7 +257,7 @@ function runChildProcess({ spawnImpl, command, args, env, account, automationRun
         }
       }
       writeStepLog(logPath, 'child-close', 'child process finished with failure', `exit_code=${exitCode}`);
-      reject(codedError('REPLACE_FAILED', details.trim()));
+      reject(codedError(failureCode, details.trim()));
     });
   });
 }
@@ -254,23 +319,44 @@ function normalizeCode(value) {
   return /^\d{6}$/.test(normalized) ? normalized : null;
 }
 
-function createLogPath(logDir, account) {
+function createLogPath(logDir, account, kind = 'replacement') {
   mkdirSync(logDir, { recursive: true });
   const accountId = String(account?.id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  return join(logDir, `replacement-${accountId}-${timestamp}.log`);
+  const safeKind = String(kind || 'automation').replace(/[^a-zA-Z0-9_-]/g, '_');
+  return join(logDir, `${safeKind}-${accountId}-${timestamp}.log`);
 }
 
 function writeLog(logPath, text) {
+  const safeText = sanitizeLogText(text);
   mkdirSync(dirname(logPath), { recursive: true });
   try {
-    appendFileSync(logPath, text, 'utf8');
+    appendFileSync(logPath, safeText, 'utf8');
   } catch {
-    writeFileSync(logPath, text, 'utf8');
+    writeFileSync(logPath, safeText, 'utf8');
   }
 }
 
 function writeStepLog(logPath, step, action, details = '') {
   const suffix = details ? ` ${details}` : '';
   writeLog(logPath, `[${new Date().toISOString()}] step=${step} action=${action}${suffix}\n`);
+}
+
+function summarizeEnv(env, keys) {
+  return keys.map((key) => `${key}=${env[key] ? 'set' : 'unset'}`).join(' ');
+}
+
+function sanitizeLogText(text) {
+  return String(text)
+    .replace(/(Cookie:\s*)[^\r\n]+/gi, '$1[redacted]')
+    .replace(/(admin_auth=)[^\s;]+/gi, '$1[redacted]')
+    .replace(/(accessToken["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
+    .replace(/(access[_-]?token["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
+    .replace(/(refresh[_-]?token["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
+    .replace(/(id[_-]?token["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
+    .replace(/(proxyPassword["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
+    .replace(/\b(code=)\d{6}\b/gi, '$1[redacted-code]')
+    .replace(/(验证码[:：]?\s*)\d{6}/g, '$1[redacted-code]')
+    .replace(/(verification code[:：]?\s*)\d{6}/gi, '$1[redacted-code]')
+    .replace(/(提交验证码[:：]?\s*)\d{6}/g, '$1[redacted-code]');
 }

@@ -2,7 +2,7 @@
 
 状态：active
 创建日期：2026-06-01
-最近基线合并：2026-06-02
+最近基线合并：2026-06-03
 
 ## 1. 背景与目标
 
@@ -73,6 +73,10 @@
   - 系统为补号账号生成不可猜测的 `public_code_key`。
   - 只有 `public_code_enabled = 1` 且未删除的补号账号，才允许通过公开 GET 接口按 key 获取邮箱验证码。
   - 公开接口不接收邮箱明文，避免外部系统枚举任意邮箱验证码。
+  - 补号管理页必须展示公开验证码启用状态和 key。
+  - 新增/编辑补号账号时，管理员可配置是否启用公开验证码，并可查看或覆盖 `public_code_key`。
+  - 操作菜单应提供复制公开验证码 URL 的入口。
+  - 操作菜单应提供一键启用和一键停用公开验证码入口；启用时保留已有 key，缺失时自动生成。
 - **本机验证码获取**:
   - 本机自动化脚本调用 `POST /api/verification-code/latest` 可免后台登录态。
   - 非本机请求仍需要后台 Cookie 登录态。
@@ -83,10 +87,37 @@
   - 补号成功后，状态流转为 `replaced`，`replacement_count` 自动累加 1。
   - 补号失败后，状态流转为 `failed`，计数值不累加，将错误信息记录在最后操作信息中。
   - 正式补号入口默认以子进程执行自动化脚本，避免长流程直接占用主 Express 进程运行态。
+  - 子进程补号必须创建运行记录，记录账号、状态、PID、日志路径、开始/结束时间、退出码和错误摘要。
+  - 子进程 stdout/stderr 必须写入本地日志文件，并在补号日志页面可查看。
+  - 运行中的子进程可从日志页面停止；服务只能停止当前进程内启动且仍被追踪的 child，不按历史 PID 盲杀系统进程。
+  - 手动补号和 CPA 自动补号在配置 CPA repair worker 时必须统一执行：Roxy OAuth、读取本地 CPA JSON、上传 CPA、上传后健康复查和状态落库。
+  - 设置为 `banned` 的本地补号账号不得触发 CPA 自动补号。
+- **补号列表展示**:
+  - 补号列表主表必须展示 `email`、`phone`、`sms_api`、`sms_last_error`、`activation_method`、`activated_at`、`status`、`status_updated_at`、`public_code_key` 和 `replacement_count`。
+  - `phone` 在补号列表中显示原文，不做脱敏。
+  - 长字段不得省略为 `...`；页面宽度不足时，通过表格外层水平滚动查看所有列。
 
 ---
 
-### 2.3 浏览器自动化适配 (RoxyBrowser & Playwright)
+### 2.3 CPA 凭证健康检测与自动补号
+
+#### 功能细则
+- 系统支持通过 CPA 管理接口读取 `/v0/management/auth-files`，检查运行时凭证状态。
+- CPA 管理密钥不得出现在日志或接口响应中。
+- 凭证健康状态按 `provider + email` 分类聚合。
+- 健康凭证不触发补号。
+- `auth_expired` 凭证会按邮箱匹配本地补号账号并触发补号。
+- 已处于 `replacing` 的账号不得重复触发补号。
+- `disabled`、`quota_limited`、`banned` 和未分类异常只报告，不自动补号。
+- CPA auth file 自身 `status=banned` 时分类为 `banned`，不因 status_message 中的 token/refresh 关键词提升为 `auth_expired`。
+- 自动监控匹配到本地 `replacement_accounts.status = banned` 的账号时，必须跳过入队，并记录跳过原因 `account_banned`。
+- 可选启用周期性 CPA 健康监控；默认间隔为 10 分钟。
+- 补号成功后读取 `src/auto/product_files/cpa/<email>.json` 上传到 CPA，并再次检查凭证健康状态。
+- CPA 上传后复查时，`status=ready` 和 `status=active` 均视为健康状态。
+
+---
+
+### 2.4 浏览器自动化适配 (RoxyBrowser & Playwright)
 
 #### 功能细则
 - 提供 RoxyBrowser 连接控制器，自动化流程必须按以下步骤执行：
@@ -99,6 +130,10 @@
 - CLI 应输出完整 CDP WebSocket 地址，并输出可直接复制到环境变量的 `ROXY_CDP_ENDPOINT=...` 复用提示。
 - `ROXY_KEEP_OPEN` 和 `ROXY_ENSURE_CLOSED` 等关闭策略应在 `.env` 加载后生效。
 - 支持复用已有 CDP；复用失败时可回退到正常 Roxy 开窗流程。
+- Roxy 开窗有头/无头策略：
+  - `ROXY_KEEP_OPEN=1` 默认有头运行并在流程结束后保留窗口。
+  - `ROXY_KEEP_OPEN=0` 默认无头运行并在流程结束后关闭窗口。
+  - `ROXY_HEADLESS=true/false` 可显式覆盖，`auto` 表示按 `ROXY_KEEP_OPEN` 推导。
 
 #### OpenAI/Codex OAuth 自动化
 - 自动化运行时代码归属 `src/auto/roxy_oauth_login.js`。
@@ -113,8 +148,18 @@
   6. OAuth callback：捕获 `code/state`，校验 state，并使用授权码换取 token bundle。
 - 页面判断应优先使用稳定文本、ARIA role 和可见控件，不依赖易变 class。
 - 自动化应输出可识别错误码，并在超时或页面不匹配时附带当前 URL、title 和 body 摘要。
+- 自动化日志应记录关键页面动作，包括填写邮箱、请求/填写邮箱验证码、选择短信验证、请求/填写手机验证码、Codex 授权继续、callback 监听、callback 捕获和 token 交换路径；日志不得输出验证码、Cookie 或 token 明文。
 - 页面步骤失败时默认截图到 `debug_image/`，截图文件名不得包含邮箱、验证码、API key 或 URL 等敏感信息。
+- 邮箱验证码和手机验证码获取应支持轮询；验证码为空时只等待下一轮，不填写、不点击提交。
+- 邮箱验证码轮询期间若页面已进入手机验证、Codex 授权确认或 OAuth callback 等后续阶段，应交回外层状态机继续，不再等待旧输入框。
+- 手机验证码轮询期间若页面已进入 Codex 授权确认或 OAuth callback，应交回外层状态机继续，不再等待旧输入框。
+- Codex 授权确认页点击 `Continue` 前应先监听 OAuth callback 请求并轮询当前 URL。
+- 如果点击过程中捕获 `localhost:1455/auth/callback` 请求，应立即判定授权提交成功。
+- 如果 callback 请求未被捕获，但页面 URL 已变化且 query/hash 中包含匹配本次 `state` 的 `code/state`，也应判定授权提交成功。
+- Codex 授权点击应使用独立短超时，避免长时间卡在 Playwright click 等待。
 - Token 交换优先在浏览器页面上下文发起请求，以复用真实 Roxy 网络环境。
+- Token 交换前可短暂等待页面导航稳定，默认 6 秒；页面上下文换 token 使用短超时，默认 6 秒。
+- 页面上下文换 token 失败时，才回退到 request 或 Node fetch。
 - Token 交换成功后，应在本地生成账号认证 JSON：
   - `src/auto/product_files/sub2api/<email>.json`
   - `src/auto/product_files/cpa/<email>.json`
@@ -127,7 +172,7 @@
 
 ---
 
-### 2.4 后台系统界面规范
+### 2.5 后台系统界面规范
 
 - **单页静态结构**: 前端页面位于 `web/` 下，通过统一路由 `/accounts` 和 `/replacement-ui` 加载。
 - **通用侧边栏**: 
@@ -136,6 +181,7 @@
   - 页面包括：仪表盘、邮箱账号、补号管理。
 - **弹窗展示**: 所有的操作详情（如账号 JSON、邮件内容、编辑表单）必须使用 HTML5 原生 `<dialog>` 以模态遮罩弹窗（Modal）形式呈现，并具备磨砂玻璃半透明质感，支持 Esc 键快捷关闭。
 - **性能与排版**: 所有的长列表和操作记录面板最高显示 5 条可见行，超出后在容器内自动生成垂直滚动条，防止页面垂直拉升。
+- **补号日志页面**: 后台应提供补号自动化运行列表、日志详情和运行中停止操作入口，方便定位长流程卡点。
 
 ---
 
@@ -146,10 +192,18 @@
 - [x] 补号账号在数据库和业务层强制校验邮箱唯一性并做去空和转小写处理。
 - [x] 补号流程的状态流转与计数规则严谨无误（成功加 1，失败不加）。
 - [x] 公开验证码接口只通过启用的 `public_code_key` 定位补号邮箱，不暴露邮箱明文。
+- [x] 补号管理页支持展示、配置、复制、启用和停用公开验证码 key。
 - [x] 本机自动化脚本可免登录调用邮箱验证码接口。
 - [x] Roxy API 连接错误能暴露请求 URL 和底层网络原因。
 - [x] Roxy OAuth 自动化可完成邮箱验证码、可选手机验证、Codex 授权确认、OAuth callback 捕获、token 交换和本地认证 JSON 生成。
+- [x] 邮箱验证码、手机验证码和 Codex 授权阶段具备页面状态守卫，避免页面已跳转后仍等待旧输入框或旧点击。
+- [x] Token 交换优先使用页面上下文并具备短等待、短超时和兜底回退。
 - [x] 自动化失败时可生成失败截图，且截图文件名不泄露敏感信息。
 - [x] 正式补号入口通过子进程执行自动化，成功/失败结果能驱动补号账号状态流转。
+- [x] 补号子进程运行记录、日志查看和停止操作可用。
+- [x] CPA 凭证健康检测、失效分类、自动补号、CPA 上传和上传后复查可用。
+- [x] 本地 `banned` 补号账号不会触发 CPA 自动补号。
+- [x] 手动补号和 CPA 自动补号统一走 CPA repair worker。
+- [x] 补号列表完整显示关键字段，并支持水平滚动查看长字段。
 - [x] 侧边栏为统一模板加载，能够随当前路由自动匹配高亮。
 - [x] 整个系统的 UI 展现一致，符合现代磨砂透明和卡片化美学。

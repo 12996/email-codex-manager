@@ -100,6 +100,7 @@ function accountRow(account) {
             <button type="button" data-action="toggle-public-code" data-id="${account.id}">${account.public_code_enabled ? '停用公开验证码' : '启用公开验证码'}</button>
             <button type="button" data-action="sms" data-id="${account.id}">▣ 获取验证码</button>
             <button type="button" data-action="json" data-id="${account.id}">▣ 获取 JSON</button>
+            <button type="button" data-action="register" data-id="${account.id}">✚ 注册</button>
             <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
             <button type="button" data-action="copy-public-code-url" data-id="${account.id}">⧉ 复制公开验证码 URL</button>
             <button type="button" data-action="status" data-id="${account.id}">⊙ 状态设置</button>
@@ -147,6 +148,7 @@ async function handleAction(action, id) {
   if (action === 'delete') return deleteAccount(account);
   if (action === 'sms') return fetchSmsCode(account);
   if (action === 'json') return fetchJson(account);
+  if (action === 'register') return registerAccount(account);
   if (action === 'replace') return replaceAccount(account);
   if (action === 'toggle-public-code') return togglePublicCode(account);
   if (action === 'copy-public-code-url') return copyPublicCodeUrl(account);
@@ -280,6 +282,19 @@ async function replaceAccount(account) {
     await loadAccounts();
   } catch (error) {
     addActivity('补号失败', account.email);
+    toast(error.message);
+    await loadAccounts();
+  }
+}
+
+async function registerAccount(account) {
+  try {
+    await api(`/replacement-accounts/${account.id}/register`, { method: 'POST' });
+    addActivity('注册自动化已启动', account.email);
+    toast('已启动注册自动化，可在日志页面查看进度');
+    await loadAccounts();
+  } catch (error) {
+    addActivity('注册自动化失败', account.email);
     toast(error.message);
     await loadAccounts();
   }

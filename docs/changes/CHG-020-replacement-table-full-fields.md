@@ -1,6 +1,6 @@
 # CHG-020 补号列表完整显示关键字段
 
-- 状态：implemented
+- 状态：merged
 - 日期：2026-06-03
 - 关联 PRD：PRD-002
 
@@ -31,3 +31,9 @@
 - `phone` 显示原文。
 - `sms_api` 与 `public_code_key` 不被省略成 `...`。
 - 页面宽度不足时，可通过水平滚动查看所有列。
+
+## 合并记录
+
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的补号列表展示细则和验收标准。

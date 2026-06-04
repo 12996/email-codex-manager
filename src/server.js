@@ -332,6 +332,23 @@ export function createApp({
     }
   });
 
+  app.post('/replacement-accounts/:id/register', requireAuth, async (req, res) => {
+    const account = replacementAccounts.getAccount(req.params.id);
+    if (!account) {
+      res.status(404).json(errorBody('ACCOUNT_NOT_FOUND', 'replacement account not found'));
+      return;
+    }
+
+    try {
+      const result = await replacementServices.registerAccount(account);
+      const updated = replacementAccounts.getAccount(account.id) || account;
+      res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
+    } catch (error) {
+      const updated = replacementAccounts.getAccount(account.id) || account;
+      sendApiError(res, error, { account: updated });
+    }
+  });
+
   app.get('/cpa/auth-health', requireAuth, async (req, res) => {
     if (!cpaCredentialMonitor?.runOnce) {
       res.status(503).json(errorBody('CPA_MONITOR_NOT_CONFIGURED', 'CPA credential monitor is not configured'));
@@ -587,6 +604,7 @@ function statusForApiError(code) {
     || code === 'JSON_FETCH_FAILED'
     || code === 'REPLACE_FAILED'
     || code === 'REPLACE_NOT_CONFIGURED'
+    || code === 'REGISTER_FAILED'
     || code === 'RUN_NOT_ACTIVE'
     || code === 'RUN_STOP_FAILED'
   ) {

@@ -1,6 +1,6 @@
 # CHG-021 公开验证码启用/停用专用操作
 
-- 状态：implemented
+- 状态：merged
 - 日期：2026-06-03
 - 关联 PRD：PRD-002
 
@@ -23,3 +23,9 @@
 - 可以对已有补号账号一键停用公开验证码。
 - 启用后 `GET /api/verification-code/public/latest?key=...` 能通过 key 命中账号。
 - 停用后同一 key 不再命中账号。
+
+## 合并记录
+
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的公开验证码 key 功能细则和验收标准。

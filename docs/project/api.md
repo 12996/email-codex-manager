@@ -717,6 +717,7 @@ SQLite 表：`replacement_accounts`
 | `JSON_FETCH_FAILED` | 502 | JSON 请求或解析失败 |
 | `REPLACE_FAILED` | 502 | 自动补号失败 |
 | `REPLACE_NOT_CONFIGURED` | 502 | 自动补号适配器尚未配置 |
+| `REGISTER_FAILED` | 502 | OpenAI 注册自动化失败 |
 
 ### GET `/replacement-accounts`
 
@@ -876,6 +877,69 @@ SQLite 表：`replacement_accounts`
 ```json
 {
   "ok": true,
+  "account": {}
+}
+```
+
+### POST `/replacement-accounts/:id/register`
+
+管理员手动触发 OpenAI 注册自动化。这里的“手动”仅指后台按钮/API 手动触发；网页注册流程仍由后端子进程自动执行。
+
+自动化运行时代码位于：
+
+```text
+src/auto/roxy_register_openai.js
+```
+
+后端通过 `replacementServices.registerAccount(account)` 启动独立 Node 子进程，并复用 `replacement_automation_runs` 记录运行日志。注册脚本复用与 OAuth 补号一致的 RoxyBrowser 开窗/CDP 接管流程。该阶段只获取邮箱验证码，不使用 `replacement_accounts.sms_api`，也不会向子进程注入 `PHONE_VERIFICATION_SMS_API_URL`。
+
+请求体：
+
+```json
+{}
+```
+
+后端行为：
+
+1. 根据路径参数 `id` 读取 `replacement_accounts` 中未软删除账号。
+2. 默认适配器启动子进程调用 `src/auto/roxy_register_openai.js`。
+3. 子进程 env 使用 `replacement_accounts.email` 覆盖 `ROXY_REGISTER_EMAIL` 和 `ROXY_OAUTH_EMAIL`。
+4. 注册脚本从 `https://chatgpt.com/` 进入注册流程。
+5. 注册脚本通过 `POST /api/verification-code/latest`、请求体 `{ "account": "<email>" }` 获取邮箱验证码。
+6. 日志写入 `data/automation-logs/registration-<id>-<timestamp>.log`，包含 `step=...` 阶段日志，不记录验证码、Cookie、token 或代理密码明文。
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "account": {},
+  "run": {
+    "id": 12,
+    "account_id": 1,
+    "email": "jregkolpig+s2@gmail.com",
+    "status": "succeeded"
+  }
+}
+```
+
+账号不存在：
+
+```json
+{
+  "ok": false,
+  "error": "ACCOUNT_NOT_FOUND",
+  "message": "replacement account not found"
+}
+```
+
+失败响应：
+
+```json
+{
+  "ok": false,
+  "error": "REGISTER_FAILED",
+  "message": "注册自动化失败原因",
   "account": {}
 }
 ```
@@ -1085,7 +1149,7 @@ data/automation-logs/
 日志内容包含两类信息：
 
 - 服务侧编排步骤：形如 `step=<步骤> action=<动作>`，覆盖账号校验、子进程环境准备、启动 child、创建 run、绑定 stdout/stderr、等待结束和最终状态标记。
-- 自动化脚本输出：`src/auto/roxy_oauth_login.js` 输出的 `stdout/stderr` 原文，包括 Roxy 准备、页面状态识别、填写邮箱、请求/填写邮箱验证码、选择短信验证、请求/填写手机验证码、Codex 授权、callback 和 token 导出等阶段日志。
+- 自动化脚本输出：`src/auto/roxy_oauth_login.js` 或 `src/auto/roxy_register_openai.js` 输出的 `stdout/stderr`，包括 Roxy 准备、页面状态识别、填写邮箱、请求/填写邮箱验证码、选择短信验证、请求/填写手机验证码、Codex 授权、callback 和 token 导出等阶段日志。
 
 敏感信息约束：日志只记录验证码是否已获取/已填写、Cookie 是否配置和 token 解析/保存状态，不记录验证码、`admin_auth` Cookie、access token、refresh token 或完整短信响应。
 
@@ -1171,6 +1235,7 @@ data/automation-logs/
 | 启用/停用公开验证码 | `PATCH /replacement-accounts/:id/public-code` | 只更新 `public_code_enabled` 和必要的 `public_code_key` |
 | 获取验证码 | `POST /replacement-accounts/:id/fetch-sms-code` | 实时返回验证码，不入库 |
 | 获取 JSON | `POST /replacement-accounts/:id/fetch-json` | 保存 JSON 原文 |
+| 注册 OpenAI | `POST /replacement-accounts/:id/register` | 启动注册自动化子进程，邮箱验证码走 POST 内部接口 |
 | 自动补号 | `POST /replacement-accounts/:id/replace` | 成功后补号次数加一 |
 | 查看补号日志 | `GET /replacement-automation-runs` / `GET /replacement-automation-runs/:id` | 查看运行记录和 stdout/stderr |
 | 停止子进程 | `POST /replacement-automation-runs/:id/stop` | 停止当前服务会话内仍在运行的 child |

@@ -1,6 +1,6 @@
 # CHG-025 banned 账号不触发自动补号
 
-- 状态：implemented
+- 状态：merged
 - 日期：2026-06-03
 - 关联 PRD：PRD-002
 
@@ -19,3 +19,9 @@
 - [x] `classifyCpaAuthFile()` 将 `status=banned` 分类为 `banned`。
 - [x] 自动监控遇到本地 `banned` 补号账号时不会调用 `repairQueue.enqueue()`。
 - [x] 自动监控结果中返回 `skipped.reason=account_banned`。
+
+## 合并记录
+
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的 CPA 凭证健康检测与自动补号章节。

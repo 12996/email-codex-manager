@@ -1,6 +1,6 @@
 # CHG-017 补号子进程日志页面
 
-状态：implemented
+状态：merged
 创建日期：2026-06-02
 关联 PRD：PRD-002
 关联 Issue：
@@ -34,6 +34,6 @@
 
 ## 合并记录
 
-- 合并目标 PRD：
-- 合并日期：
-- 备注：
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的补号账号管理、后台界面规范和验收标准。

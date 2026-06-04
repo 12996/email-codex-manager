@@ -1,6 +1,6 @@
 # CHG-018 公开验证码 key 前端配置与复制入口
 
-状态：implemented
+状态：merged
 创建日期：2026-06-03
 关联 PRD：PRD-002
 关联 Issue：
@@ -25,3 +25,9 @@
 - [x] 管理员能在新增/编辑账号时查看或覆盖 `public_code_key`。
 - [x] 未启用或缺少 key 时，复制公开验证码 URL 会提示先启用并保存。
 - [x] 已启用且存在 key 时，复制公开验证码 URL 使用公开 GET 接口地址。
+
+## 合并记录
+
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的公开验证码 key 功能细则和验收标准。

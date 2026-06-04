@@ -1,6 +1,6 @@
 # CHG-026 Roxy Codex 授权 callback 竞态守卫
 
-状态：implemented
+状态：merged
 创建日期：2026-06-03
 关联 PRD：PRD-002
 影响范围：`src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/work/`
@@ -32,3 +32,9 @@ Roxy OAuth 自动化在 Codex 授权确认页点击 `Continue` 后，页面可�
 
 - `node --check .\src\auto\roxy_oauth_login.js`
 - `node --test .\test\roxyOauthLogin.test.js`
+
+## 合并记录
+
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的 OpenAI/Codex OAuth 自动化 callback 捕获与授权点击短超时要求。

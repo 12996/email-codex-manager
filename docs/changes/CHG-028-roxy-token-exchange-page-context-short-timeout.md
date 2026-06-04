@@ -1,6 +1,6 @@
 # CHG-028 Roxy token 交换页面上下文优先与短超时
 
-状态：implemented
+状态：merged
 创建日期：2026-06-03
 关联 PRD：PRD-002
 影响范围：`src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/work/`
@@ -33,3 +33,9 @@
 
 - `node --check .\src\auto\roxy_oauth_login.js`
 - `node --test .\test\roxyOauthLogin.test.js`
+
+## 合并记录
+
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的 token 交换页面上下文优先、短等待和短超时要求。

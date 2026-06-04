@@ -1,6 +1,6 @@
 # CHG-024 手动补号统一 CPA 上传链路与 Roxy 有头/无头策略
 
-- 状态：implemented
+- 状态：merged
 - 日期：2026-06-03
 - 关联 PRD：PRD-002
 
@@ -30,3 +30,9 @@
 - [x] `ROXY_KEEP_OPEN=0` 时默认传入 `--headless=new`。
 - [x] CPA 返回 `active` 时上传后复查通过。
 - [x] 补号运行日志能看到 CPA 上传和复查步骤。
+
+## 合并记录
+
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的补号链路、CPA 健康复查和 Roxy 有头/无头策略要求。

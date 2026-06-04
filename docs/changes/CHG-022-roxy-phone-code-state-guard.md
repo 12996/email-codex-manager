@@ -1,6 +1,6 @@
 # CHG-022 Roxy 手机验证码阶段状态守卫
 
-状态：implemented
+状态：merged
 创建日期：2026-06-03
 关联 PRD：PRD-002
 影响范围：`src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/work/`
@@ -26,3 +26,8 @@ Roxy OAuth 自动化在手机验证码阶段获取短信验证码时，页面可
 
 - `npm test -- test/roxyOauthLogin.test.js`
 
+## 合并记录
+
+- 合并目标 PRD：PRD-002
+- 合并日期：2026-06-03
+- 备注：已合并到 `docs/prd/PRD-002-account-management-system.md` 的 OpenAI/Codex OAuth 自动化状态守卫要求。

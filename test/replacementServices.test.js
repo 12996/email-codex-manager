@@ -274,3 +274,80 @@ test('replaceAccount reports child process failure as REPLACE_FAILED', async () 
     (error) => error.code === 'REPLACE_FAILED' && /oauth failed/.test(error.message),
   );
 });
+
+test('registerAccount runs roxy registration script without SMS env and writes registration logs', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-logs-'));
+  const spawnCalls = [];
+  const runCalls = [];
+  let logPath;
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    registerScriptPath: 'src/auto/roxy_register_openai.js',
+    logDir: dir,
+    baseEnv: {
+      EXISTING_ENV: '1',
+      PHONE_VERIFICATION_SMS_API_URL: 'https://old.example/sms',
+    },
+    automationRuns: {
+      createRun(input) {
+        runCalls.push(input);
+        logPath = input.log_path;
+        return { id: 404, ...input };
+      },
+      markSucceeded() {},
+    },
+    spawnImpl(command, args, options) {
+      spawnCalls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.pid = 7474;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', '[roxy-register-openai] step=done code=received\n');
+        child.emit('close', 0);
+      });
+      return child;
+    },
+  });
+
+  const result = await services.registerAccount({
+    id: 12,
+    email: ' user@example.com ',
+    sms_api: 'https://example.invalid/sms',
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.run.id, 404);
+  assert.equal(spawnCalls[0].command, 'node-bin');
+  assert.deepEqual(spawnCalls[0].args, ['src/auto/roxy_register_openai.js']);
+  assert.equal(spawnCalls[0].options.env.EXISTING_ENV, '1');
+  assert.equal(spawnCalls[0].options.env.ROXY_REGISTER_EMAIL, 'user@example.com');
+  assert.equal(spawnCalls[0].options.env.ROXY_OAUTH_EMAIL, 'user@example.com');
+  assert.equal(Object.hasOwn(spawnCalls[0].options.env, 'PHONE_VERIFICATION_SMS_API_URL'), false);
+  assert.equal(runCalls[0].email, 'user@example.com');
+  const log = readFileSync(logPath, 'utf8');
+  assert.match(log, /Starting registration automation/);
+  assert.match(log, /step=prepare-env action=prepared child process environment/);
+  assert.match(log, /ROXY_REGISTER_EMAIL=set/);
+  assert.doesNotMatch(log, /https:\/\/example\.invalid\/sms/);
+});
+
+test('registerAccount reports child process failure as REGISTER_FAILED', async () => {
+  const services = createReplacementServices({
+    spawnImpl() {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stderr.emit('data', 'registration failed');
+        child.emit('close', 1);
+      });
+      return child;
+    },
+  });
+
+  await assert.rejects(
+    () => services.registerAccount({ email: 'user@example.com' }),
+    (error) => error.code === 'REGISTER_FAILED' && /registration failed/.test(error.message),
+  );
+});
