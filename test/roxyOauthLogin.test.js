@@ -1272,7 +1272,7 @@ test('saveIndividualAccountJson writes CPA JSON locally and returns its path', a
   }
 });
 
-test('exchangeToken posts authorization code, parses tokens, and saves CPA JSON', async () => {
+test('exchangeToken posts authorization code from browser page context, parses tokens, and saves CPA JSON', async () => {
   const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
   const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-'));
   const calls = [];
@@ -1290,107 +1290,10 @@ test('exchangeToken posts authorization code, parses tokens, and saves CPA JSON'
     const result = await exchangeToken('code_123', 'verifier_123', 'jregkolpig+s2@gmail.com', '', {
       outputRootDir,
       now: new Date('2026-06-02T08:00:00.000Z'),
-      fetch: async (url, options) => {
-        calls.push(['fetch', url, JSON.parse(options.body), options.headers]);
-        return {
-          ok: true,
-          async json() {
-            return {
-              access_token: accessToken,
-              id_token: idToken,
-              refresh_token: 'refresh_456',
-              expires_in: 3600,
-            };
-          },
-        };
-      },
-    });
-
-    assert.equal(result.cpaFile, 'jregkolpig+s2@gmail.com.json');
-    assert.equal(JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(result.cpaPath, 'utf8'))).account_id, 'acct_456');
-    assert.deepEqual(calls, [[
-      'fetch',
-      'https://auth.openai.com/oauth/token',
-      {
-        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
-        grant_type: 'authorization_code',
-        code: 'code_123',
-        redirect_uri: 'http://localhost:1455/auth/callback',
-        code_verifier: 'verifier_123',
-      },
-      { 'Content-Type': 'application/json' },
-    ]]);
-  } finally {
-    await rm(outputRootDir, { recursive: true, force: true });
-  }
-});
-
-test('exchangeToken prefers Playwright request context over Node fetch for token exchange', async () => {
-  const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
-  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-request-'));
-  const calls = [];
-  const accessToken = unsignedJwt({
-    exp: 1780000000,
-    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_req' },
-  });
-
-  try {
-    await exchangeToken('code_req', 'verifier_req', 'jregkolpig+s2@gmail.com', '', {
-      outputRootDir,
-      request: {
-        async post(url, options) {
-          calls.push(['request.post', url, options.data, options.headers]);
-          return {
-            ok: () => true,
-            async json() {
-              return {
-                access_token: accessToken,
-                id_token: unsignedJwt({ sub: 'sub_req' }),
-                refresh_token: 'refresh_req',
-                expires_in: 3600,
-              };
-            },
-          };
-        },
-      },
-      fetch: async () => {
-        throw new Error('fetch should not be used');
-      },
-      logger: { log: () => {}, warn: () => {}, error: () => {} },
-    });
-
-    assert.deepEqual(calls, [[
-      'request.post',
-      'https://auth.openai.com/oauth/token',
-      {
-        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
-        grant_type: 'authorization_code',
-        code: 'code_req',
-        redirect_uri: 'http://localhost:1455/auth/callback',
-        code_verifier: 'verifier_req',
-      },
-      { 'Content-Type': 'application/json' },
-    ]]);
-  } finally {
-    await rm(outputRootDir, { recursive: true, force: true });
-  }
-});
-
-test('exchangeToken prefers browser page fetch over request context for token exchange', async () => {
-  const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
-  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-page-'));
-  const calls = [];
-  const accessToken = unsignedJwt({
-    exp: 1780000000,
-    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_page' },
-  });
-
-  try {
-    await exchangeToken('code_page', 'verifier_page', 'jregkolpig+s2@gmail.com', '', {
-      outputRootDir,
       tokenPageSettleMs: 1,
       tokenPageTimeoutMs: 100,
       page: {
+        url: () => 'https://auth.openai.com/log-in',
         async waitForTimeout(ms) {
           calls.push(['page.waitForTimeout', ms]);
         },
@@ -1400,8 +1303,8 @@ test('exchangeToken prefers browser page fetch over request context for token ex
             ok: true,
             data: {
               access_token: accessToken,
-              id_token: unsignedJwt({ sub: 'sub_page' }),
-              refresh_token: 'refresh_page',
+              id_token: idToken,
+              refresh_token: 'refresh_456',
               expires_in: 3600,
             },
           };
@@ -1409,58 +1312,83 @@ test('exchangeToken prefers browser page fetch over request context for token ex
       },
       request: {
         async post() {
-          throw new Error('request should not be used when page context exists');
+          throw new Error('request fallback should not be used');
         },
       },
-      logger: { log: () => {}, warn: () => {}, error: () => {} },
+      fetch: async () => {
+        throw new Error('fetch fallback should not be used');
+      },
     });
 
-    assert.deepEqual(calls.map((call) => call[0]), ['page.waitForTimeout', 'page.evaluate']);
-    assert.equal(calls[1][1], 'https://auth.openai.com/oauth/token');
-    assert.equal(calls[1][2].code, 'code_page');
+    assert.equal(result.cpaFile, 'jregkolpig+s2@gmail.com.json');
+    assert.equal(JSON.parse(await import('node:fs/promises').then((fs) => fs.readFile(result.cpaPath, 'utf8'))).account_id, 'acct_456');
+    assert.deepEqual(calls, [[
+      'page.waitForTimeout',
+      1,
+    ], [
+      'page.evaluate',
+      '/oauth/token',
+      {
+        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
+        grant_type: 'authorization_code',
+        code: 'code_123',
+        redirect_uri: 'http://localhost:1455/auth/callback',
+        code_verifier: 'verifier_123',
+      },
+    ]]);
   } finally {
     await rm(outputRootDir, { recursive: true, force: true });
   }
 });
 
-test('exchangeToken falls back when browser page evaluation context is destroyed', async () => {
+test('exchangeToken retries page context timeouts and succeeds on third attempt without request fallback', async () => {
   const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
-  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-fallback-'));
+  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-retry-'));
   const calls = [];
-  const messages = [];
   const warnings = [];
+  const messages = [];
   const accessToken = unsignedJwt({
     exp: 1780000000,
-    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_fallback' },
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_retry' },
   });
+  let evaluateAttempts = 0;
 
   try {
-    await exchangeToken('code_fallback', 'verifier_fallback', 'jregkolpig+s2@gmail.com', '', {
+    const result = await exchangeToken('code_retry', 'verifier_retry', 'jregkolpig+s2@gmail.com', '', {
       outputRootDir,
       tokenPageSettleMs: 1,
-      tokenPageTimeoutMs: 100,
+      tokenPageTimeoutMs: 5,
+      tokenPageMaxAttempts: 3,
       page: {
+        url: () => 'https://auth.openai.com/log-in',
         async waitForTimeout(ms) {
           calls.push(['page.waitForTimeout', ms]);
         },
-        async evaluate() {
-          calls.push(['page.evaluate']);
-          throw new Error('page.evaluate: Execution context was destroyed, most likely because of a navigation');
+        async evaluate(fn, arg) {
+          evaluateAttempts += 1;
+          calls.push(['page.evaluate', evaluateAttempts, arg.url, arg.payload.code]);
+          if (evaluateAttempts < 3) {
+            return new Promise(() => {});
+          }
+          return {
+            ok: true,
+            data: {
+              access_token: accessToken,
+              id_token: unsignedJwt({ sub: 'sub_retry' }),
+              refresh_token: 'refresh_retry',
+              expires_in: 3600,
+            },
+          };
         },
       },
-      fetch: async (url, options) => {
-        calls.push(['fetch', url, JSON.parse(options.body)]);
-        return {
-          ok: true,
-          async json() {
-            return {
-              access_token: accessToken,
-              id_token: unsignedJwt({ sub: 'sub_fallback' }),
-              refresh_token: 'refresh_fallback',
-              expires_in: 3600,
-            };
-          },
-        };
+      request: {
+        async post() {
+          calls.push(['request.post']);
+          throw new Error('request fallback should not be used');
+        },
+      },
+      fetch: async () => {
+        throw new Error('fetch should not be used');
       },
       logger: {
         log: (message) => messages.push(String(message)),
@@ -1469,10 +1397,194 @@ test('exchangeToken falls back when browser page evaluation context is destroyed
       },
     });
 
-    assert.deepEqual(calls.map((call) => call[0]), ['page.waitForTimeout', 'page.evaluate', 'fetch']);
-    assert.equal(calls[2][2].code, 'code_fallback');
-    assert.match(warnings.join('\n'), /页面上下文换 Token 失败，回退 fetch/);
-    assert.match(messages.join('\n'), /phase=token action=使用 Node fetch 换 Token/);
+    assert.equal(result.cpaFile, 'jregkolpig+s2@gmail.com.json');
+    assert.deepEqual(calls.map((call) => call[0]), [
+      'page.waitForTimeout',
+      'page.evaluate',
+      'page.evaluate',
+      'page.evaluate',
+    ]);
+    assert.equal(calls.some((call) => call[0] === 'request.post'), false);
+    assert.match(messages.join('\n'), /attempt=1 maxAttempts=3 timeoutMs=5/);
+    assert.match(messages.join('\n'), /attempt=2 maxAttempts=3 timeoutMs=5/);
+    assert.match(messages.join('\n'), /attempt=3 maxAttempts=3 timeoutMs=5/);
+    assert.match(warnings.join('\n'), /页面上下文换 Token 失败/);
+  } finally {
+    await rm(outputRootDir, { recursive: true, force: true });
+  }
+});
+
+test('exchangeToken fails clearly after three browser page context token exchange failures', async () => {
+  const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
+  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-fail-'));
+  const calls = [];
+  const warnings = [];
+
+  try {
+    await assert.rejects(
+      () => exchangeToken('code_fail', 'verifier_fail', 'jregkolpig+s2@gmail.com', '', {
+        outputRootDir,
+        tokenPageSettleMs: 1,
+        tokenPageTimeoutMs: 5,
+        tokenPageMaxAttempts: 3,
+        page: {
+          url: () => 'https://auth.openai.com/log-in',
+          async waitForTimeout(ms) {
+            calls.push(['page.waitForTimeout', ms]);
+          },
+          async evaluate() {
+            calls.push(['page.evaluate']);
+            throw new Error('page.evaluate failed');
+          },
+        },
+        request: {
+          async post() {
+            calls.push(['request.post']);
+            throw new Error('request fallback should not be used');
+          },
+        },
+        logger: {
+          log: () => {},
+          warn: (message) => warnings.push(String(message)),
+          error: () => {},
+        },
+      }),
+      (error) => {
+        assert.equal(error.code, 'OPENAI_TOKEN_PAGE_EXCHANGE_FAILED');
+        assert.match(error.message, /浏览器上下文换取 Token 多次失败/);
+        assert.equal(error.attempts, 3);
+        return true;
+      }
+    );
+
+    assert.deepEqual(calls.map((call) => call[0]), [
+      'page.waitForTimeout',
+      'page.evaluate',
+      'page.evaluate',
+      'page.evaluate',
+    ]);
+    assert.equal(calls.some((call) => call[0] === 'request.post'), false);
+    assert.match(warnings.join('\n'), /attempt=3 maxAttempts=3/);
+  } finally {
+    await rm(outputRootDir, { recursive: true, force: true });
+  }
+});
+
+test('exchangeToken aborts browser page fetch signal when token page timeout elapses', async () => {
+  const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
+  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-abort-'));
+  const originalFetch = globalThis.fetch;
+  let capturedSignal;
+  let abortObserved = false;
+
+  globalThis.fetch = async (url, options = {}) => {
+    capturedSignal = options.signal;
+    return new Promise((resolve, reject) => {
+      if (!capturedSignal) return;
+      if (capturedSignal.aborted) {
+        abortObserved = true;
+        reject(new Error('browser fetch aborted'));
+        return;
+      }
+      capturedSignal.addEventListener('abort', () => {
+        abortObserved = true;
+        reject(new Error('browser fetch aborted'));
+      }, { once: true });
+    });
+  };
+
+  try {
+    await assert.rejects(
+      () => exchangeToken('code_abort', 'verifier_abort', 'jregkolpig+s2@gmail.com', '', {
+        outputRootDir,
+        tokenPageSettleMs: 1,
+        tokenPageTimeoutMs: 5,
+        tokenPageMaxAttempts: 1,
+        page: {
+          url: () => 'https://auth.openai.com/log-in',
+          async waitForTimeout() {},
+          async evaluate(fn, arg) {
+            return fn(arg);
+          },
+        },
+        logger: { log: () => {}, warn: () => {}, error: () => {} },
+      }),
+      (error) => {
+        assert.equal(error.code, 'OPENAI_TOKEN_PAGE_EXCHANGE_FAILED');
+        assert.match(error.message, /浏览器上下文换取 Token 多次失败/);
+        return true;
+      }
+    );
+
+    assert.ok(capturedSignal);
+    assert.equal(capturedSignal.aborted, true);
+    assert.equal(abortObserved, true);
+  } finally {
+    globalThis.fetch = originalFetch;
+    await rm(outputRootDir, { recursive: true, force: true });
+  }
+});
+
+test('exchangeToken uses auth.openai.com page context when current page is chrome-error', async () => {
+  const { exchangeToken } = require('../src/auto/roxy_oauth_login.js');
+  const outputRootDir = await mkdtemp(join(tmpdir(), 'roxy-oauth-exchange-auth-page-'));
+  const calls = [];
+  const accessToken = unsignedJwt({
+    exp: 1780000000,
+    'https://api.openai.com/auth': { chatgpt_account_id: 'acct_auth_page' },
+  });
+  let authPage;
+  const errorPage = {
+    url: () => 'chrome-error://chromewebdata/',
+    context: () => ({
+      pages: () => [errorPage],
+      async newPage() {
+        calls.push(['context.newPage']);
+        authPage = {
+          url: () => 'https://auth.openai.com/',
+          async goto(url, options) {
+            calls.push(['authPage.goto', url, options.waitUntil]);
+          },
+          async evaluate(fn, arg) {
+            calls.push(['authPage.evaluate', arg.url, arg.payload.code]);
+            return {
+              ok: true,
+              data: {
+                access_token: accessToken,
+                id_token: unsignedJwt({ sub: 'sub_auth_page' }),
+                refresh_token: 'refresh_auth_page',
+                expires_in: 3600,
+              },
+            };
+          },
+        };
+        return authPage;
+      },
+    }),
+  };
+
+  try {
+    await exchangeToken('code_auth_page', 'verifier_auth_page', 'jregkolpig+s2@gmail.com', '', {
+      outputRootDir,
+      tokenPageSettleMs: 1,
+      tokenPageTimeoutMs: 100,
+      page: errorPage,
+      request: {
+        async post() {
+          throw new Error('request fallback should not be used');
+        },
+      },
+      fetch: async () => {
+        throw new Error('fetch fallback should not be used');
+      },
+      logger: { log: () => {}, warn: () => {}, error: () => {} },
+    });
+
+    assert.deepEqual(calls, [
+      ['context.newPage'],
+      ['authPage.goto', 'https://auth.openai.com/', 'domcontentloaded'],
+      ['authPage.evaluate', '/oauth/token', 'code_auth_page'],
+    ]);
   } finally {
     await rm(outputRootDir, { recursive: true, force: true });
   }

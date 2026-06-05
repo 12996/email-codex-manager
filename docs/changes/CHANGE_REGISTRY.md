@@ -42,3 +42,4 @@ PRD 合并提醒规则：未合并的 `implemented` change 达到 5 个时，AI 
 | CHG-032 | Roxy 添加手机号后跳转竞态守卫 | implemented | 2026-06-05 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/issues/`, `docs/work/` | `CHG-032-roxy-add-phone-transition-guard.md` |
 | CHG-033 | Roxy OAuth callback CDP fallback | implemented | 2026-06-05 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/issues/`, `docs/work/` | `CHG-033-roxy-callback-cdp-fallback.md` |
 | CHG-034 | Roxy 手机验证码后跳转竞态守卫 | implemented | 2026-06-05 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/issues/`, `docs/work/` | `CHG-034-roxy-phone-code-transition-guard.md` |
+| CHG-035 | Roxy token exchange 浏览器上下文重试 | implemented | 2026-06-05 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/issues/`, `docs/work/` | `CHG-035-roxy-token-page-context-retry.md` |

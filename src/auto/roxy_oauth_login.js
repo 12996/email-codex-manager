@@ -11,7 +11,8 @@ const DEFAULT_IDLE_TIMEOUT_MS = 10000;
 const DEFAULT_CODE_POLL_INTERVAL_MS = 5000;
 const DEFAULT_CODE_POLL_MAX_ATTEMPTS = 12;
 const DEFAULT_TOKEN_PAGE_SETTLE_MS = 6000;
-const DEFAULT_TOKEN_PAGE_TIMEOUT_MS = 6000;
+const DEFAULT_TOKEN_PAGE_TIMEOUT_MS = 10000;
+const DEFAULT_TOKEN_PAGE_MAX_ATTEMPTS = 3;
 const Default_EMAIL='jregkolpig+s4@gmail.com';
 const DEFAULT_VERIFICATION_API_URL = 'http://127.0.0.1:3000/api/verification-code/latest';
 const DEFAULT_PHONE_VERIFICATION_SMS_API_URL = 'https://cdc.smslease.link/adminapi/jsscript/smsInfo/ABC_sms?key=3b7c79633a6a3cd91862eb32e5f3f5cd';
@@ -1080,56 +1081,30 @@ async function exchangeToken(code, verifier, email, proxyValue = '', options = {
 
     try {
         if (proxyValue) {
-            logger.warn('[roxy-oauth-login] phase=token action=代理提示 诊断=当前 token 请求使用 fetch，不支持 Node 侧代理配置；浏览器阶段仍使用 Roxy 代理');
+            logger.warn('[roxy-oauth-login] phase=token action=代理提示 诊断=token exchange 默认使用 Roxy 浏览器页面上下文；不会默认使用 Node/request 代理');
         }
         let data;
         let ok = true;
-        if (options.page && typeof options.page.evaluate === 'function') {
+        if (options.page && (typeof options.page.evaluate === 'function' || typeof options.page.context === 'function' || typeof options.page.goto === 'function')) {
+            const tokenPage = await resolveTokenExchangePage(options.page, options);
             log(logger, 'token', '等待页面导航稳定后换 Token', `settleMs=${normalizePositiveInteger(options.tokenPageSettleMs, DEFAULT_TOKEN_PAGE_SETTLE_MS)}`);
-            await waitBeforeTokenPageExchange(options, options.page);
-            try {
-                log(logger, 'token', '使用页面上下文换 Token', `timeoutMs=${normalizePositiveInteger(options.tokenPageTimeoutMs, DEFAULT_TOKEN_PAGE_TIMEOUT_MS)}`);
-                const result = await withTimeout(
-                    options.page.evaluate(async ({ url: tokenUrl, payload: tokenPayload }) => {
-                        const response = await fetch(tokenUrl, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(tokenPayload)
-                        });
-                        return {
-                            ok: response.ok,
-                            data: await response.json()
-                        };
-                    }, { url, payload }),
-                    normalizePositiveInteger(options.tokenPageTimeoutMs, DEFAULT_TOKEN_PAGE_TIMEOUT_MS),
-                    () => createAutomationError('OPENAI_TOKEN_PAGE_EXCHANGE_TIMEOUT', '页面上下文换取 Token 超时', {
-                        timeoutMs: normalizePositiveInteger(options.tokenPageTimeoutMs, DEFAULT_TOKEN_PAGE_TIMEOUT_MS)
-                    })
-                );
-                ok = result.ok !== false;
-                data = result.data;
-            } catch (error) {
-                const message = String(error?.message || error);
-                if (options.request && typeof options.request.post === 'function') {
-                    logger.warn(`[roxy-oauth-login] phase=token action=页面上下文换 Token 失败，回退 request 诊断=${message}`);
-                    const requestResult = await exchangeTokenWithRequest(url, payload, options);
-                    ok = requestResult.ok;
-                    data = requestResult.data;
-                } else {
-                    logger.warn(`[roxy-oauth-login] phase=token action=页面上下文换 Token 失败，回退 fetch 诊断=${message}`);
-                    const fetchResult = await exchangeTokenWithFetch(url, payload, options);
-                    ok = fetchResult.ok;
-                    data = fetchResult.data;
-                }
+            await waitBeforeTokenPageExchange(options, tokenPage);
+            const result = await exchangeTokenWithBrowserPage(tokenPage, url, payload, options);
+            ok = result.ok;
+            data = result.data;
+        } else if (options.diagnosticNonBrowserTokenExchange === true) {
+            logger.warn('[roxy-oauth-login] phase=token action=非浏览器上下文诊断换 Token diagnosticOnly=true notBrowserProxy=true');
+            if (options.request && typeof options.request.post === 'function') {
+                const requestResult = await exchangeTokenWithRequest(url, payload, options);
+                ok = requestResult.ok;
+                data = requestResult.data;
+            } else {
+                const fetchResult = await exchangeTokenWithFetch(url, payload, options);
+                ok = fetchResult.ok;
+                data = fetchResult.data;
             }
-        } else if (options.request && typeof options.request.post === 'function') {
-            const requestResult = await exchangeTokenWithRequest(url, payload, options);
-            ok = requestResult.ok;
-            data = requestResult.data;
         } else {
-            const fetchResult = await exchangeTokenWithFetch(url, payload, options);
-            ok = fetchResult.ok;
-            data = fetchResult.data;
+            throw createAutomationError('OPENAI_TOKEN_BROWSER_CONTEXT_REQUIRED', '正式 token exchange 需要 Roxy 浏览器页面上下文，默认不使用 Playwright request 或 Node fetch');
         }
         if (!ok) {
             throw createAutomationError('OPENAI_TOKEN_EXCHANGE_FAILED', 'OpenAI token endpoint 返回失败', {
@@ -1189,6 +1164,137 @@ async function waitBeforeTokenPageExchange(options = {}, page = null) {
         return;
     }
     await sleepMs(settleMs);
+}
+
+function getPageUrl(page) {
+    return typeof page?.url === 'function' ? String(page.url() || '') : '';
+}
+
+function getUrlOrigin(candidateUrl) {
+    try {
+        return new URL(candidateUrl).origin;
+    } catch {
+        return '';
+    }
+}
+
+function isAuthOpenAiPage(page) {
+    return getUrlOrigin(getPageUrl(page)) === 'https://auth.openai.com';
+}
+
+function describeTokenPage(page) {
+    const currentUrl = getPageUrl(page);
+    return {
+        currentUrl,
+        origin: getUrlOrigin(currentUrl) || 'unknown'
+    };
+}
+
+async function resolveTokenExchangePage(page, options = {}) {
+    const logger = pickLogger(options.logger);
+    const currentUrl = getPageUrl(page);
+    if (isAuthOpenAiPage(page) && typeof page.evaluate === 'function') {
+        return page;
+    }
+
+    const context = typeof page.context === 'function' ? page.context() : null;
+    const pages = context && typeof context.pages === 'function'
+        ? context.pages()
+        : [];
+    const reusableAuthPage = Array.isArray(pages)
+        ? pages.find((candidate) => candidate && candidate !== page && isAuthOpenAiPage(candidate) && typeof candidate.evaluate === 'function')
+        : null;
+    if (reusableAuthPage) {
+        log(logger, 'token', '复用 auth.openai.com 页面上下文换 Token', `fromUrl=${currentUrl || 'empty'} authUrl=${getPageUrl(reusableAuthPage)}`);
+        return reusableAuthPage;
+    }
+
+    if (context && typeof context.newPage === 'function') {
+        log(logger, 'token', '新建 auth.openai.com 页面上下文换 Token', `fromUrl=${currentUrl || 'empty'}`);
+        const authPage = await context.newPage();
+        if (typeof authPage.goto === 'function') {
+            await authPage.goto('https://auth.openai.com/', {
+                waitUntil: 'domcontentloaded',
+                timeout: normalizePositiveInteger(options.tokenAuthPageTimeoutMs, DEFAULT_NAVIGATION_TIMEOUT_MS)
+            });
+        }
+        return authPage;
+    }
+
+    if (typeof page.goto === 'function') {
+        log(logger, 'token', '复用当前页导航到 auth.openai.com 后换 Token', `fromUrl=${currentUrl || 'empty'}`);
+        await page.goto('https://auth.openai.com/', {
+            waitUntil: 'domcontentloaded',
+            timeout: normalizePositiveInteger(options.tokenAuthPageTimeoutMs, DEFAULT_NAVIGATION_TIMEOUT_MS)
+        });
+        return page;
+    }
+
+    throw createAutomationError('OPENAI_TOKEN_AUTH_PAGE_REQUIRED', '当前页面不是 auth.openai.com，且无法在同一 Roxy context 创建 auth 页面换取 Token', {
+        currentUrl
+    });
+}
+
+async function exchangeTokenWithBrowserPage(page, url, payload, options = {}) {
+    const logger = pickLogger(options.logger);
+    const timeoutMs = normalizePositiveInteger(options.tokenPageTimeoutMs, DEFAULT_TOKEN_PAGE_TIMEOUT_MS);
+    const maxAttempts = normalizePositiveInteger(options.tokenPageMaxAttempts, DEFAULT_TOKEN_PAGE_MAX_ATTEMPTS);
+    const tokenUrl = isAuthOpenAiPage(page) ? '/oauth/token' : url;
+    let lastError;
+
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        const pageInfo = describeTokenPage(page);
+        log(logger, 'token', '使用页面上下文换 Token', `attempt=${attempt} maxAttempts=${maxAttempts} timeoutMs=${timeoutMs} currentUrl=${pageInfo.currentUrl || 'empty'} origin=${pageInfo.origin} tokenUrl=${tokenUrl}`);
+        try {
+            return await withTimeout(
+                page.evaluate(async ({ url: tokenEndpoint, payload: tokenPayload, timeoutMs: fetchTimeoutMs }) => {
+                    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                    const timer = controller && typeof setTimeout === 'function'
+                        ? setTimeout(() => controller.abort(), fetchTimeoutMs)
+                        : null;
+                    try {
+                        const response = await fetch(tokenEndpoint, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(tokenPayload),
+                            ...(controller ? { signal: controller.signal } : {})
+                        });
+                        return {
+                            ok: response.ok,
+                            data: await response.json()
+                        };
+                    } finally {
+                        if (timer && typeof clearTimeout === 'function') {
+                            clearTimeout(timer);
+                        }
+                    }
+                }, { url: tokenUrl, payload, timeoutMs }),
+                timeoutMs,
+                () => createAutomationError('OPENAI_TOKEN_PAGE_EXCHANGE_TIMEOUT', '页面上下文换取 Token 超时', {
+                    attempt,
+                    maxAttempts,
+                    timeoutMs,
+                    currentUrl: pageInfo.currentUrl,
+                    origin: pageInfo.origin,
+                    tokenUrl
+                })
+            );
+        } catch (error) {
+            lastError = error;
+            const message = String(error?.message || error);
+            const pageInfoAfterFailure = describeTokenPage(page);
+            logger.warn(`[roxy-oauth-login] phase=token action=页面上下文换 Token 失败 attempt=${attempt} maxAttempts=${maxAttempts} timeoutMs=${timeoutMs} currentUrl=${pageInfoAfterFailure.currentUrl || 'empty'} origin=${pageInfoAfterFailure.origin} tokenUrl=${tokenUrl} 诊断=${message}`);
+        }
+    }
+
+    throw createAutomationError('OPENAI_TOKEN_PAGE_EXCHANGE_FAILED', '浏览器上下文换取 Token 多次失败', {
+        attempts: maxAttempts,
+        timeoutMs,
+        currentUrl: getPageUrl(page),
+        origin: getUrlOrigin(getPageUrl(page)) || 'unknown',
+        tokenUrl,
+        lastError: lastError?.message || String(lastError || '')
+    });
 }
 
 async function exchangeTokenWithRequest(url, payload, options = {}) {

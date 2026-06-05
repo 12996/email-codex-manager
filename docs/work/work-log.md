@@ -41,3 +41,4 @@
 | 2026-06-05 | Roxy 添加手机号后跳转竞态修复 | done | `2026-06-05-roxy-add-phone-transition-race.md` |
 | 2026-06-05 | Roxy OAuth callback CDP fallback | done | `2026-06-05-roxy-callback-cdp-fallback.md` |
 | 2026-06-05 | Roxy 手机验证码后跳转竞态修复 | done | `2026-06-05-roxy-phone-code-transition-race.md` |
+| 2026-06-05 | Roxy token exchange 浏览器上下文重试 | done | `2026-06-05-roxy-token-page-context-retry.md` |
