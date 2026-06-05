@@ -64,9 +64,33 @@ test('createAccount trims email and defaults status to pending', () => {
   assert.equal(account.replacement_count, 0);
   assert.equal(account.public_code_enabled, 0);
   assert.match(account.public_code_key, /^vc_[A-Za-z0-9_-]{32}$/);
+  assert.ok(account.activated_at);
   assert.equal(account.deleted_at, null);
   assert.ok(account.created_at);
   assert.ok(account.updated_at);
+});
+
+test('createAccount defaults activated_at to current time when omitted', () => {
+  const repo = createTestRepository();
+  const before = Date.now();
+
+  const account = repo.createAccount({ email: 'time-default@example.com', activated_at: '' });
+
+  const activatedAt = Date.parse(account.activated_at);
+  assert.ok(Number.isFinite(activatedAt));
+  assert.ok(activatedAt >= before - 1000);
+  assert.ok(activatedAt <= Date.now() + 1000);
+});
+
+test('createAccount keeps explicit activated_at value', () => {
+  const repo = createTestRepository();
+
+  const account = repo.createAccount({
+    email: 'time-explicit@example.com',
+    activated_at: '2026-06-01T00:00:00.000Z',
+  });
+
+  assert.equal(account.activated_at, '2026-06-01T00:00:00.000Z');
 });
 
 test('createAccount and updateAccount store public verification code access fields', () => {

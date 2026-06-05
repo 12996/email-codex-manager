@@ -375,6 +375,17 @@ async function fillVerificationCodeInput(page, code, timeoutMs) {
     }
 }
 
+async function fillEmailVerificationCodeInput(page, code, timeoutMs, options = {}) {
+    try {
+        await fillVerificationCodeInput(page, code, timeoutMs);
+        return null;
+    } catch (error) {
+        const nextStage = await detectPostEmailCodeStage(page, options);
+        if (nextStage) return nextStage;
+        throw error;
+    }
+}
+
 async function fetchEmailVerificationCode(page, email, options) {
     const maxAttempts = normalizePositiveInteger(options.codePollMaxAttempts, DEFAULT_CODE_POLL_MAX_ATTEMPTS);
     let result;
@@ -497,9 +508,23 @@ async function openAi_email_code(page, email, options = {}) {
         if (nextStage) return nextStage;
 
         logConfigured(options, 'openai-email-code', '填写邮箱验证码', 'code=received');
-        await fillVerificationCodeInput(page, code, timeoutMs);
+        const fillNextStage = await fillEmailVerificationCodeInput(page, code, timeoutMs, options);
+        if (fillNextStage) return fillNextStage;
+
+        const afterFillStage = await detectPostEmailCodeStage(page, options);
+        if (afterFillStage) return afterFillStage;
+
         logConfigured(options, 'openai-email-code', '点击 Continue');
-        await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+        try {
+            await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+        } catch (error) {
+            const clickNextStage = await detectPostEmailCodeStage(page, options);
+            if (clickNextStage) return clickNextStage;
+            throw error;
+        }
+
+        const afterClickStage = await detectPostEmailCodeStage(page, options);
+        if (afterClickStage) return afterClickStage;
 
         logConfigured(options, 'openai-email-code', '邮箱验证码提交完成');
         return {
@@ -512,12 +537,15 @@ async function openAi_email_code(page, email, options = {}) {
 
 async function detectPostEmailCodeStage(page, options = {}) {
     const timeoutMs = Math.min(options.stageDetectTimeoutMs || 1000, options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS);
-    if (getCurrentOAuthCallback(page, options.state)) {
+    if (await getCurrentOAuthCallback(page, options.state, options)) {
         return { status: 'next-stage', next: 'callback' };
     }
     const detectOptions = { ...options, timeoutMs };
     if (await is_codex_login_page(page, detectOptions)) {
         return { status: 'next-stage', next: 'codex-login' };
+    }
+    if (await is_phone_add_page(page, detectOptions)) {
+        return { status: 'next-stage', next: 'phone-add' };
     }
     if (await is_phone_verify_page(page, detectOptions)) {
         return { status: 'next-stage', next: 'phone-verify' };
@@ -606,6 +634,54 @@ function resolvePhoneVerificationSmsApiUrl(options = {}) {
         || DEFAULT_PHONE_VERIFICATION_SMS_API_URL;
 }
 
+function resolveReplacementPhoneNumber(options = {}) {
+    return String(
+        options.phone
+        || options.phoneNumber
+        || options.env?.ROXY_OAUTH_PHONE
+        || process.env.ROXY_OAUTH_PHONE
+        || ''
+    ).trim();
+}
+
+async function is_phone_add_page(page, options = {}) {
+    const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+    const bodyText = await getBodyText(page, timeoutMs);
+    const phoneInput = page.getByRole('textbox', { name: 'Phone number' });
+    const continueButton = page.getByRole('button', { name: 'Continue', exact: true });
+    return bodyText.includes('Add your phone number')
+        && await isVisible(phoneInput, timeoutMs)
+        && await isVisible(continueButton, timeoutMs);
+}
+
+async function openAi_phone_add(page, options = {}) {
+    return withFailureScreenshot(page, options, 'openAi_phone_add', async () => {
+        const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+        const phone = resolveReplacementPhoneNumber(options);
+        if (!phone) {
+            throw createAutomationError('OPENAI_PHONE_NUMBER_REQUIRED', '补号账号手机号不能为空');
+        }
+        if (!await is_phone_add_page(page, options)) {
+            throw createAutomationError('OPENAI_PHONE_ADD_PAGE_NOT_FOUND', '当前页面不是添加手机号页', {
+                ...(await collectPageDebug(page))
+            });
+        }
+
+        const phoneInput = page.getByRole('textbox', { name: 'Phone number' });
+        logConfigured(options, 'openai-phone-add', '填写手机号');
+        await phoneInput.waitFor({ state: 'visible', timeout: timeoutMs });
+        await phoneInput.click();
+        if (typeof phoneInput.press === 'function') {
+            await phoneInput.press('ControlOrMeta+a');
+        }
+        await phoneInput.fill(phone);
+        logConfigured(options, 'openai-phone-add', '点击 Continue');
+        await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+        logConfigured(options, 'openai-phone-add', '手机号提交完成');
+        return { status: 'phone-add-submitted', phone };
+    });
+}
+
 async function fetchPhoneVerificationCodeOnce(options = {}, attempt = 1, maxAttempts = 1) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
     const smsApiUrl = resolvePhoneVerificationSmsApiUrl(options);
@@ -677,12 +753,45 @@ async function openAi_phone_code(page, options = {}) {
         if (nextStage) return nextStage;
 
         const codeInput = page.getByRole('textbox', { name: 'Code' });
-        await codeInput.waitFor({ state: 'visible', timeout: timeoutMs });
-        await codeInput.click();
+        try {
+            await codeInput.waitFor({ state: 'visible', timeout: timeoutMs });
+            await codeInput.click();
+        } catch (error) {
+            const inputNextStage = await detectPostPhoneCodeStage(page, options);
+            if (inputNextStage) {
+                logConfigured(options, 'openai-phone-code', '验证码输入框操作失败后捕获下一阶段', `next=${inputNextStage.next}`);
+                return inputNextStage;
+            }
+            throw error;
+        }
         logConfigured(options, 'openai-phone-code', '填写手机验证码', 'code=received');
-        await codeInput.fill(code);
+        try {
+            await codeInput.fill(code);
+        } catch (error) {
+            const fillNextStage = await detectPostPhoneCodeStage(page, options);
+            if (fillNextStage) {
+                logConfigured(options, 'openai-phone-code', '验证码填写失败后捕获下一阶段', `next=${fillNextStage.next}`);
+                return fillNextStage;
+            }
+            throw error;
+        }
         logConfigured(options, 'openai-phone-code', '点击 Continue');
-        await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+        try {
+            await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+        } catch (error) {
+            const clickNextStage = await detectPostPhoneCodeStage(page, options);
+            if (clickNextStage) {
+                logConfigured(options, 'openai-phone-code', 'Continue 点击失败后捕获下一阶段', `next=${clickNextStage.next}`);
+                return clickNextStage;
+            }
+            throw error;
+        }
+
+        const afterClickStage = await detectPostPhoneCodeStage(page, options);
+        if (afterClickStage) {
+            logConfigured(options, 'openai-phone-code', '手机验证码提交后捕获下一阶段', `next=${afterClickStage.next}`);
+            return afterClickStage;
+        }
 
         logConfigured(options, 'openai-phone-code', '手机验证码提交完成');
         return {
@@ -694,7 +803,7 @@ async function openAi_phone_code(page, options = {}) {
 
 async function detectPostPhoneCodeStage(page, options = {}) {
     const timeoutMs = Math.min(options.stageDetectTimeoutMs || 1000, options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS);
-    if (getCurrentOAuthCallback(page, options.state)) {
+    if (await getCurrentOAuthCallback(page, options.state, options)) {
         return { status: 'next-stage', next: 'callback' };
     }
     const detectOptions = { ...options, timeoutMs };
@@ -1188,12 +1297,109 @@ function getOAuthCallbackFromChangedUrl(page, expectedState, initialUrl, options
     };
 }
 
-function getCurrentOAuthCallback(page, expectedState) {
+function getCurrentOAuthCallbackFromPageUrl(page, expectedState) {
     const currentUrl = typeof page.url === 'function' ? page.url() : '';
     if (String(currentUrl).includes('localhost:1455/auth/callback')) {
         return parseOAuthCallbackUrl(currentUrl, expectedState);
     }
     return null;
+}
+
+function parseOAuthCallbackCandidate(candidateUrl, expectedState) {
+    if (!String(candidateUrl || '').includes('localhost:1455/auth/callback')) {
+        return null;
+    }
+    let parsed;
+    try {
+        parsed = parseOAuthCodeStateFromUrl(candidateUrl);
+    } catch {
+        return null;
+    }
+    if (!parsed.code || !parsed.state) {
+        return null;
+    }
+    if (expectedState && parsed.state !== expectedState) {
+        return null;
+    }
+    return {
+        code: parsed.code,
+        state: parsed.state,
+        callbackUrl: candidateUrl
+    };
+}
+
+async function getOAuthCallbackFromCdp(page, expectedState, options = {}) {
+    const currentUrl = typeof page.url === 'function' ? String(page.url() || '') : '';
+    if (!currentUrl.startsWith('chrome-error://')) {
+        return null;
+    }
+    if (!page || typeof page.context !== 'function') {
+        return null;
+    }
+    const context = page.context();
+    if (!context || typeof context.newCDPSession !== 'function') {
+        return null;
+    }
+
+    if (!options._cdpCallbackFallbackLogged) {
+        logConfigured(options, options.phase || 'oauth-flow', '检测到 Chrome error 页，尝试 CDP callback fallback');
+        options._cdpCallbackFallbackLogged = true;
+    }
+
+    let session;
+    try {
+        session = await context.newCDPSession(page);
+        if (typeof session.send !== 'function') {
+            return null;
+        }
+
+        const history = await session.send('Page.getNavigationHistory').catch(() => null);
+        const entries = Array.isArray(history?.entries) ? history.entries : [];
+        const orderedEntries = [
+            ...(Number.isInteger(history?.currentIndex) && entries[history.currentIndex] ? [entries[history.currentIndex]] : []),
+            ...entries.slice().reverse()
+        ];
+        for (const entry of orderedEntries) {
+            const callback = parseOAuthCallbackCandidate(entry?.url, expectedState);
+            if (callback) {
+                logConfigured(options, options.phase || 'oauth-flow', '通过 CDP navigation history 捕获 OAuth callback', 'source=cdp-navigation-history');
+                return {
+                    source: 'cdp-navigation-history',
+                    ...callback
+                };
+            }
+        }
+
+        const targets = await session.send('Target.getTargets').catch(() => null);
+        const targetInfos = Array.isArray(targets?.targetInfos) ? targets.targetInfos : [];
+        for (const target of targetInfos) {
+            if (target?.type && target.type !== 'page') continue;
+            const callback = parseOAuthCallbackCandidate(target?.url, expectedState);
+            if (callback) {
+                logConfigured(options, options.phase || 'oauth-flow', '通过 CDP target URL 捕获 OAuth callback', 'source=cdp-target-url');
+                return {
+                    source: 'cdp-target-url',
+                    ...callback
+                };
+            }
+        }
+    } catch (error) {
+        logConfigured(options, options.phase || 'oauth-flow', 'CDP callback fallback 失败', `诊断=${error?.message || error}`);
+    } finally {
+        if (session && typeof session.detach === 'function') {
+            await session.detach().catch(() => {});
+        }
+    }
+
+    return null;
+}
+
+async function getCurrentOAuthCallback(page, expectedState, options = {}) {
+    const callback = getCurrentOAuthCallbackFromPageUrl(page, expectedState);
+    if (callback) {
+        return callback;
+    }
+    return getOAuthCallbackFromCdp(page, expectedState, options);
 }
 
 async function waitForOAuthCallbackSignal(page, expectedState, options = {}) {
@@ -1222,10 +1428,13 @@ async function waitForOAuthCallbackSignal(page, expectedState, options = {}) {
     promises.push((async () => {
         const start = Date.now();
         while (Date.now() - start < timeoutMs) {
-            const callback = getCurrentOAuthCallback(page, expectedState);
+            const callback = await getCurrentOAuthCallback(page, expectedState, {
+                ...options,
+                phase
+            });
             if (callback) {
                 return {
-                    source: 'url',
+                    source: callback.source || 'url',
                     ...callback
                 };
             }
@@ -1281,7 +1490,11 @@ async function processOAuthLoginFlow(page, options = {}) {
     }
 
     for (let turn = 0; turn < maxStageTurns; turn += 1) {
-        const callback = capturedCallback || getCurrentOAuthCallback(page, options.state);
+        const callback = capturedCallback || await getCurrentOAuthCallback(page, options.state, {
+            ...options,
+            logger,
+            phase: 'oauth-flow'
+        });
         if (callback) {
             const exchange = options.exchangeToken || exchangeToken;
             const requestContext = options.request
@@ -1317,12 +1530,33 @@ async function processOAuthLoginFlow(page, options = {}) {
             log(logger, 'oauth-flow', '识别到邮箱验证码页');
             await openAi_email_code(page, email, actionOptions);
             await waitForStageTransition(page, actionOptions);
+        } else if (await is_phone_add_page(page, detectOptions)) {
+            log(logger, 'oauth-flow', '识别到添加手机号页');
+            await openAi_phone_add(page, actionOptions);
+            const transition = await waitForStageTransition(page, { ...actionOptions, ignoreStage: 'phone-add' });
+            if (transition === 'timeout') {
+                throw createAutomationError('OPENAI_PHONE_ADD_TRANSITION_TIMEOUT', '添加手机号提交后未离开添加手机号页', {
+                    ...(await collectPageDebug(page))
+                });
+            }
         } else if (await is_phone_verify_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到手机验证方式选择页');
             await openAi_phone_verify(page, actionOptions);
         } else if (await is_phone_code_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到手机验证码页');
-            await openAi_phone_code(page, actionOptions);
+            const phoneCodeResult = await openAi_phone_code(page, actionOptions);
+            if (phoneCodeResult?.status === 'next-stage') {
+                log(logger, 'oauth-flow', '手机验证码阶段已进入下一阶段', `next=${phoneCodeResult.next}`);
+            } else {
+                log(logger, 'oauth-flow', '等待手机验证码提交后页面跳转');
+                const transition = await waitForStageTransition(page, { ...actionOptions, ignoreStage: 'phone-code' });
+                log(logger, 'oauth-flow', '手机验证码提交后跳转检测完成', `next=${transition}`);
+                if (transition === 'timeout') {
+                    throw createAutomationError('OPENAI_PHONE_CODE_TRANSITION_TIMEOUT', '手机验证码提交后未离开手机验证码页', {
+                        ...(await collectPageDebug(page))
+                    });
+                }
+            }
         } else if (typeof page.waitForTimeout === 'function') {
             await page.waitForTimeout(500);
         } else {
@@ -1339,13 +1573,16 @@ async function waitForStageTransition(page, options = {}) {
     const timeoutMs = options.transitionTimeoutMs || 8000;
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-        if (getCurrentOAuthCallback(page, options.state)) {
+        if (await getCurrentOAuthCallback(page, options.state, options)) {
             return 'callback';
         }
         const detectOptions = { ...options, timeoutMs: Math.min(500, options.stageDetectTimeoutMs || 1500) };
-        if (await is_codex_login_page(page, detectOptions)) return 'codex';
-        if (await is_phone_verify_page(page, detectOptions)) return 'phone-verify';
-        if (await is_phone_code_page(page, detectOptions)) return 'phone-code';
+        let nextStage = null;
+        if (await is_codex_login_page(page, detectOptions)) nextStage = 'codex';
+        else if (await is_phone_add_page(page, detectOptions)) nextStage = 'phone-add';
+        else if (await is_phone_verify_page(page, detectOptions)) nextStage = 'phone-verify';
+        else if (await is_phone_code_page(page, detectOptions)) nextStage = 'phone-code';
+        if (nextStage && nextStage !== options.ignoreStage) return nextStage;
         if (typeof page.waitForTimeout === 'function') {
             await page.waitForTimeout(300);
         } else {
@@ -1477,11 +1714,13 @@ module.exports = {
     is_codex_login_page,
     is_email_code_page,
     is_openai_login_page,
+    is_phone_add_page,
     is_phone_code_page,
     is_phone_code_request_page,
     is_phone_verify_page,
     openAi_login,
     openAi_email_code,
+    openAi_phone_add,
     openAi_phone_code,
     openAi_phone_code_request,
     openAi_phone_verify,

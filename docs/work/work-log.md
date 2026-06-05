@@ -35,3 +35,9 @@
 | 2026-06-03 | Roxy token 交换页面上下文优先与短超时 | done | `2026-06-03-roxy-token-exchange-page-context-short-timeout.md` |
 | 2026-06-03 | 部署文档与数据库迁移说明 | done | `2026-06-03-deployment-database-migration.md` |
 | 2026-06-03 | PRD-002 change 基线合并 | done | `2026-06-03-prd-002-change-merge.md` |
+| 2026-06-04 | 补号账号默认开通时间 | done | `2026-06-04-default-replacement-activated-at.md` |
+| 2026-06-04 | PRD-002 注册与默认开通时间合并 | done | `2026-06-04-prd-002-register-and-time-merge.md` |
+| 2026-06-04 | Roxy OAuth 添加手机号页处理 | done | `2026-06-04-roxy-add-phone-page.md` |
+| 2026-06-05 | Roxy 添加手机号后跳转竞态修复 | done | `2026-06-05-roxy-add-phone-transition-race.md` |
+| 2026-06-05 | Roxy OAuth callback CDP fallback | done | `2026-06-05-roxy-callback-cdp-fallback.md` |
+| 2026-06-05 | Roxy 手机验证码后跳转竞态修复 | done | `2026-06-05-roxy-phone-code-transition-race.md` |

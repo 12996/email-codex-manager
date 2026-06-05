@@ -1,8 +1,12 @@
 # CHG-029 管理员手动触发 OpenAI 注册自动化
 
-状态：implemented
+状态：merged
 
 创建日期：2026-06-04
+
+合并日期：2026-06-04
+
+合并目标：`docs/prd/PRD-002-account-management-system.md`
 
 关联 PRD：PRD-002
 

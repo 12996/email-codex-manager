@@ -664,7 +664,7 @@ SQLite 表：`replacement_accounts`
 | `sms_api` | SMS 验证码接口地址 |
 | `sms_last_error` | 最近一次 SMS 获取失败原因 |
 | `activation_method` | 开通方式 |
-| `activated_at` | 开通时间 |
+| `activated_at` | 开通时间；创建补号账号时为空则由系统写入当前时间 |
 | `status` | 账号状态 |
 | `status_updated_at` | 最近状态更新时间 |
 | `status_note` | 状态备注 |

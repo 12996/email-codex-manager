@@ -36,4 +36,9 @@ PRD 合并提醒规则：未合并的 `implemented` change 达到 5 个时，AI 
 | CHG-026 | Roxy Codex 授权 callback 竞态守卫 | merged | 2026-06-03 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/work/` | `CHG-026-roxy-codex-callback-click-guard.md` |
 | CHG-027 | Roxy token 交换优先使用 request context | superseded | 2026-06-03 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/work/` | `CHG-027-roxy-token-exchange-request-context-first.md` |
 | CHG-028 | Roxy token 交换页面上下文优先与短超时 | merged | 2026-06-03 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/work/` | `CHG-028-roxy-token-exchange-page-context-short-timeout.md` |
-| CHG-029 | 管理员手动触发 OpenAI 注册自动化 | implemented | 2026-06-04 | PRD-002 | `src/replacementServices.js`, `src/server.js`, `src/auto/roxy_register_openai.js`, `web/app.js`, `test/`, `docs/project/api.md` | `CHG-029-manual-openai-registration.md` |
+| CHG-029 | 管理员手动触发 OpenAI 注册自动化 | merged | 2026-06-04 | PRD-002 | `src/replacementServices.js`, `src/server.js`, `src/auto/roxy_register_openai.js`, `web/app.js`, `test/`, `docs/project/api.md` | `CHG-029-manual-openai-registration.md` |
+| CHG-030 | 补号账号默认开通时间 | merged | 2026-06-04 | PRD-002 | `src/replacementAccounts.js`, `test/`, `docs/project/api.md` | `CHG-030-default-replacement-activated-at.md` |
+| CHG-031 | Roxy OAuth 添加手机号页处理 | implemented | 2026-06-04 | PRD-002 | `src/auto/roxy_oauth_login.js`, `src/replacementServices.js`, `test/` | `CHG-031-roxy-add-phone-page.md` |
+| CHG-032 | Roxy 添加手机号后跳转竞态守卫 | implemented | 2026-06-05 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/issues/`, `docs/work/` | `CHG-032-roxy-add-phone-transition-guard.md` |
+| CHG-033 | Roxy OAuth callback CDP fallback | implemented | 2026-06-05 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/issues/`, `docs/work/` | `CHG-033-roxy-callback-cdp-fallback.md` |
+| CHG-034 | Roxy 手机验证码后跳转竞态守卫 | implemented | 2026-06-05 | PRD-002 | `src/auto/roxy_oauth_login.js`, `test/roxyOauthLogin.test.js`, `docs/issues/`, `docs/work/` | `CHG-034-roxy-phone-code-transition-guard.md` |

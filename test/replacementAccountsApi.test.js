@@ -114,6 +114,7 @@ test('replacement account CRUD API creates, lists, reads, updates, and soft dele
     assert.equal(created.response.status, 201);
     assert.equal(created.body.ok, true);
     assert.equal(created.body.account.email, 'User@Example.COM');
+    assert.ok(created.body.account.activated_at);
 
     const duplicate = await jsonRequest(server, 'POST', '/replacement-accounts', {
       email: 'user@example.com',

@@ -100,6 +100,7 @@ test('replaceAccount runs roxy oauth script in a child process with account env'
     baseEnv: {
       EXISTING_ENV: '1',
       ROXY_OAUTH_EMAIL: 'old@example.com',
+      ROXY_OAUTH_PHONE: '+10000000000',
       PHONE_VERIFICATION_SMS_API_URL: 'https://old.example/sms',
     },
     spawnImpl(command, args, options) {
@@ -117,6 +118,7 @@ test('replaceAccount runs roxy oauth script in a child process with account env'
 
   const result = await services.replaceAccount({
     email: ' user@example.com ',
+    phone: ' +13523282595 ',
     sms_api: ' https://example.invalid/sms ',
   });
 
@@ -131,6 +133,7 @@ test('replaceAccount runs roxy oauth script in a child process with account env'
   assert.deepEqual(calls[0].args, ['src/auto/roxy_oauth_login.js']);
   assert.equal(calls[0].options.env.EXISTING_ENV, '1');
   assert.equal(calls[0].options.env.ROXY_OAUTH_EMAIL, 'user@example.com');
+  assert.equal(calls[0].options.env.ROXY_OAUTH_PHONE, '+13523282595');
   assert.equal(calls[0].options.env.PHONE_VERIFICATION_SMS_API_URL, 'https://example.invalid/sms');
 });
 

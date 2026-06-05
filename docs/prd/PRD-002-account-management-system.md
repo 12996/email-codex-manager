@@ -2,7 +2,7 @@
 
 状态：active
 创建日期：2026-06-01
-最近基线合并：2026-06-03
+最近基线合并：2026-06-04
 
 ## 1. 背景与目标
 
@@ -11,7 +11,7 @@
 系统核心目标：
 - 统一管理主 Gmail IMAP 邮箱配置，支持在线连通性测试和邮件内容按需获取。
 - 统一管理下游补号账号及其对应的开通方式、SMS API、JSON 元数据和补号状态。
-- 提供基于指纹浏览器（RoxyBrowser）、Playwright、OpenAI/Codex OAuth 的自动化补号链路。
+- 提供基于指纹浏览器（RoxyBrowser）、Playwright、OpenAI 注册和 Codex OAuth 的自动化补号链路。
 - 提供风格一致、高内聚且具备重用组件（如通用侧边栏、详情模态框）的响应式后台管理界面。
 
 ---
@@ -51,7 +51,7 @@
 - `phone`: 手机号 (前 3 后 4 脱敏显示)
 - `sms_api`: 短信验证码获取 API
 - `activation_method`: 开通方式/渠道 (如 manual, auto)
-- `activated_at`: 开通激活时间
+- `activated_at`: 开通激活时间；新增补号账号时为空则由系统自动写入当前时间
 - `status`: 状态 (`pending` 待补号, `active` 正常, `banned` 被封禁, `replacing` 补号中, `replaced` 补号成功, `failed` 补号失败)
 - `status_note`: 状态变更备注
 - `replacement_count`: 累计成功补号次数
@@ -66,7 +66,7 @@
 - `deleted_at`: 软删除时间
 
 #### 功能细则
-- **账号 CRUD**: 支持新增、编辑、软删除。
+- **账号 CRUD**: 支持新增、编辑、软删除；新增时如果管理员未填写开通时间，系统自动补当前时间，显式填写时保留管理员输入值。
 - **状态手动修改**: 支持管理员手动调整状态与状态备注，但不能手动调整为系统控制状态（如 `replacing`）。
 - **获取验证码**: 手动触发向 `sms_api` 请求提取 6 位短信验证码，成功后以 Toast 提示并生成操作记录，验证码不落库。
 - **公开验证码 key**:
@@ -81,6 +81,15 @@
   - 本机自动化脚本调用 `POST /api/verification-code/latest` 可免后台登录态。
   - 非本机请求仍需要后台 Cookie 登录态。
 - **获取 JSON**: 支持通过输入的 URL 抓取账号配置 JSON 信息并持久化于 `json_payload`，获取成功后清除最近错误。
+- **注册 OpenAI**:
+  - 支持管理员在补号管理页手动点击“注册”，调用 `POST /replacement-accounts/:id/register` 启动注册自动化。
+  - 这里的“手动”仅指后台按钮或 API 手动触发；网页注册流程仍由后端子进程自动执行。
+  - 注册脚本必须复用 RoxyBrowser 开窗和 Playwright CDP 接管流程，不允许主流程裸启动普通 Chromium。
+  - 注册脚本从 `https://chatgpt.com/` 进入注册流程。
+  - 注册阶段只使用邮箱验证码，通过 `POST /api/verification-code/latest` 和请求体 `{ "account": "<email>" }` 获取。
+  - 注册阶段不得使用 `replacement_accounts.sms_api`，也不得向子进程注入 `PHONE_VERIFICATION_SMS_API_URL`。
+  - 注册运行必须复用补号自动化运行记录和日志能力，日志以 `registration` 或 `[roxy-register-openai]` 区分。
+  - 注册日志不得输出验证码、Cookie、token、代理密码等敏感明文。
 - **一键补号 / 批量补号**: 
   - 支持单账号点击补号或多选批量补号。
   - 补号开始时状态流转为 `replacing`，执行 RoxyBrowser + Playwright + OpenAI/Codex OAuth 自动化流程。
@@ -169,6 +178,12 @@
   - `replacement_accounts.email` 覆盖子进程 `ROXY_OAUTH_EMAIL`。
   - `replacement_accounts.sms_api` 覆盖子进程 `PHONE_VERIFICATION_SMS_API_URL`。
   - 子进程退出码为 `0` 时视为补号成功；非 `0` 或启动失败时视为 `REPLACE_FAILED`。
+- `POST /replacement-accounts/:id/register` 默认通过子进程运行 `src/auto/roxy_register_openai.js`：
+  - 子进程继承 `.env` / `process.env` 中的 Roxy 配置。
+  - `replacement_accounts.email` 覆盖子进程 `ROXY_REGISTER_EMAIL` 和 `ROXY_OAUTH_EMAIL`。
+  - 子进程不得接收 `PHONE_VERIFICATION_SMS_API_URL`。
+  - 子进程使用内部 POST 邮箱验证码接口获取注册验证码。
+  - 子进程退出码为 `0` 时视为注册自动化成功；非 `0` 或启动失败时视为 `REGISTER_FAILED`。
 
 ---
 
@@ -190,6 +205,7 @@
 - [x] 邮箱账号连通性测试和邮件获取工作正常，操作具备 Loading 即时反馈。
 - [x] 获取邮件的详情以弹窗显示，能正确解析和滚动展示 HTML 格式邮件正文。
 - [x] 补号账号在数据库和业务层强制校验邮箱唯一性并做去空和转小写处理。
+- [x] 新增补号账号未填写开通时间时，系统自动写入当前时间；显式填写时不覆盖。
 - [x] 补号流程的状态流转与计数规则严谨无误（成功加 1，失败不加）。
 - [x] 公开验证码接口只通过启用的 `public_code_key` 定位补号邮箱，不暴露邮箱明文。
 - [x] 补号管理页支持展示、配置、复制、启用和停用公开验证码 key。
@@ -200,6 +216,7 @@
 - [x] Token 交换优先使用页面上下文并具备短等待、短超时和兜底回退。
 - [x] 自动化失败时可生成失败截图，且截图文件名不泄露敏感信息。
 - [x] 正式补号入口通过子进程执行自动化，成功/失败结果能驱动补号账号状态流转。
+- [x] 管理员可手动触发 OpenAI 注册自动化，注册流程只使用邮箱验证码且不使用 SMS API。
 - [x] 补号子进程运行记录、日志查看和停止操作可用。
 - [x] CPA 凭证健康检测、失效分类、自动补号、CPA 上传和上传后复查可用。
 - [x] 本地 `banned` 补号账号不会触发 CPA 自动补号。

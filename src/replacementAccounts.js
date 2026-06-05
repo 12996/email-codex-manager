@@ -11,6 +11,7 @@ export function createReplacementAccountRepository(db) {
       validateStatus(data.status, { allowReplacing: false });
       assertEmailAvailable(db, data.email);
       const now = new Date().toISOString();
+      data.activated_at ||= now;
       const result = db.prepare(`
         INSERT INTO replacement_accounts (
           email,

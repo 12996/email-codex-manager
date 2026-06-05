@@ -112,10 +112,12 @@ export function createRoxyChildProcessAutomation({
   return {
     replaceAccount(account) {
       const email = normalizeRequired(account?.email, 'REPLACE_FAILED', 'replacement account email is required');
+      const phone = normalizeOptional(account?.phone);
       const smsApi = normalizeOptional(account?.sms_api);
       const env = {
         ...baseEnv,
         ROXY_OAUTH_EMAIL: email,
+        ...(phone ? { ROXY_OAUTH_PHONE: phone } : {}),
         ...(smsApi ? { PHONE_VERIFICATION_SMS_API_URL: smsApi } : {}),
       };
 
@@ -129,7 +131,7 @@ export function createRoxyChildProcessAutomation({
         logDir,
         kind: 'replacement',
         failureCode: 'REPLACE_FAILED',
-        envSummaryKeys: ['ROXY_OAUTH_EMAIL', 'PHONE_VERIFICATION_SMS_API_URL'],
+        envSummaryKeys: ['ROXY_OAUTH_EMAIL', 'ROXY_OAUTH_PHONE', 'PHONE_VERIFICATION_SMS_API_URL'],
       });
     },
 

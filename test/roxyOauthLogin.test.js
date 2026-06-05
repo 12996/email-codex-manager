@@ -109,6 +109,49 @@ function createPhoneVerifyPageHarness(bodyText) {
   return { page, calls };
 }
 
+function createPhoneAddPageHarness(bodyText = 'Add your phone number to your account Phone number Continue') {
+  const calls = [];
+  const phoneInput = {
+    async waitFor(options) { calls.push(['phone.waitFor', options]); },
+    async click() { calls.push(['phone.click']); },
+    async press(key) { calls.push(['phone.press', key]); },
+    async fill(value) { calls.push(['phone.fill', value]); },
+    async isVisible() { calls.push(['phone.isVisible']); return bodyText.includes('Phone number'); },
+  };
+  const continueButton = {
+    async click(options) { calls.push(['continue.click', options]); },
+    async isVisible() { calls.push(['continue.isVisible']); return bodyText.includes('Continue'); },
+  };
+  const bodyLocator = {
+    async textContent() {
+      calls.push(['body.textContent']);
+      return bodyText;
+    },
+  };
+  const page = {
+    getByRole(role, options) {
+      calls.push(['getByRole', role, options]);
+      if (role === 'textbox' && options.name === 'Phone number') return phoneInput;
+      return continueButton;
+    },
+    locator(selector) {
+      calls.push(['locator', selector]);
+      return bodyLocator;
+    },
+    url() {
+      return 'https://auth.openai.com/add-phone';
+    },
+    async title() {
+      return 'Add phone - OpenAI';
+    },
+    async textContent(selector) {
+      calls.push(['textContent', selector]);
+      return bodyText;
+    },
+  };
+  return { page, calls };
+}
+
 function createOpenAiLoginPageHarness({ subtitleText = 'user@example.com', emailVisible = true } = {}) {
   const calls = [];
   let currentUrl = 'https://auth.openai.com/log-in';
@@ -365,6 +408,78 @@ test('openAi_email_code stops filling when email code polling lands on Codex con
   assert.equal(calls.some((call) => call[0] === 'continue.click'), false);
 });
 
+test('openAi_email_code returns phone-add when page changes during email code input fallback', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  let stage = 'email-code';
+  const roleCodeInput = {
+    async isVisible() { calls.push(['roleCode.isVisible', stage]); return stage === 'email-code'; },
+    async waitFor() { calls.push(['roleCode.waitFor', stage]); throw new Error('role code input detached'); },
+  };
+  const fallbackInput = {
+    async waitFor(options) {
+      calls.push(['fallback.waitFor', options, stage]);
+      stage = 'phone-add';
+    },
+    async click() {
+      calls.push(['fallback.click', stage]);
+      throw new Error('locator.click: Timeout 30000ms exceeded');
+    },
+    async fill(value) { calls.push(['fallback.fill', value, stage]); },
+  };
+  const phoneInput = {
+    async isVisible() { calls.push(['phone.isVisible', stage]); return stage === 'phone-add'; },
+  };
+  const continueButton = {
+    async isVisible() { calls.push(['continue.isVisible', stage]); return true; },
+    async click(options) { calls.push(['continue.click', options, stage]); },
+  };
+  const page = {
+    getByRole(role, options = {}) {
+      calls.push(['getByRole', role, options, stage]);
+      if (role === 'textbox' && options.name === 'Code') return roleCodeInput;
+      if (role === 'textbox' && options.name === 'Phone number') return phoneInput;
+      return continueButton;
+    },
+    locator(selector) {
+      calls.push(['locator', selector, stage]);
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return stage === 'phone-add'
+              ? 'Add your phone number to your account Phone number Continue'
+              : 'Enter the code sent to your email. Code Continue';
+          },
+        };
+      }
+      return { first: () => fallbackInput };
+    },
+    request: {
+      async post() {
+        calls.push(['request.post', stage]);
+        return { async json() { return { ok: true, code: '112233' }; } };
+      },
+    },
+    url() {
+      return stage === 'phone-add'
+        ? 'https://auth.openai.com/add-phone'
+        : 'https://auth.openai.com/email-verification';
+    },
+    title: async () => 'OAuth',
+    async textContent() {
+      return stage === 'phone-add'
+        ? 'Add your phone number to your account Phone number Continue'
+        : 'Enter the code sent to your email. Code Continue';
+    },
+  };
+
+  const result = await openAi_email_code(page, 'jregkolpig+s2@gmail.com', { timeoutMs: 100 });
+
+  assert.deepEqual(result, { status: 'next-stage', next: 'phone-add' });
+  assert.equal(calls.some((call) => call[0] === 'fallback.fill'), false);
+  assert.equal(calls.some((call) => call[0] === 'continue.click'), false);
+});
+
 test('openAi_email_code falls back to numeric input selector when role Code is unstable', async () => {
   const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
   const calls = [];
@@ -521,6 +636,237 @@ test('is_phone_verify_page detects the phone number verification screen', async 
   const { page } = createPhoneVerifyPageHarness('Verify your phone number Text Message Continue');
 
   assert.equal(await is_phone_verify_page(page, { timeoutMs: 100 }), true);
+});
+
+test('is_phone_add_page detects the add phone number screen', async () => {
+  const { is_phone_add_page } = require('../src/auto/roxy_oauth_login.js');
+  const { page } = createPhoneAddPageHarness();
+
+  assert.equal(await is_phone_add_page(page, { timeoutMs: 100 }), true);
+});
+
+test('openAi_phone_add fills phone from replacement account and clicks Continue', async () => {
+  const { openAi_phone_add } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createPhoneAddPageHarness();
+
+  const result = await openAi_phone_add(page, {
+    phone: ' +13523282595 ',
+    timeoutMs: 100,
+  });
+
+  assert.deepEqual(result, { status: 'phone-add-submitted', phone: '+13523282595' });
+  assert.deepEqual(calls.filter((call) => ['phone.fill', 'continue.click'].includes(call[0])), [
+    ['phone.fill', '+13523282595'],
+    ['continue.click', { timeout: 100 }],
+  ]);
+});
+
+test('processOAuthLoginFlow does not refill phone while phone-add is transitioning to phone-code', async () => {
+  const { processOAuthLoginFlow } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  let stage = 'phone-add';
+  let currentUrl = 'https://auth.openai.com/add-phone';
+  let phoneSubmitCount = 0;
+
+  const bodyText = () => {
+    if (stage === 'phone-add') return 'Add your phone number to your account Phone number Continue';
+    if (stage === 'phone-code') return 'Check your phone Enter the verification code Code Continue';
+    return '';
+  };
+
+  const page = {
+    getByRole(role, options = {}) {
+      calls.push(['getByRole', role, options, stage]);
+      if (role === 'textbox' && options.name === 'Phone number') {
+        return {
+          async isVisible() { return stage === 'phone-add'; },
+          async waitFor() {},
+          async click() { calls.push(['phone.click', stage]); },
+          async press(key) { calls.push(['phone.press', key, stage]); },
+          async fill(value) { calls.push(['phone.fill', value, stage]); },
+        };
+      }
+      if (role === 'textbox' && options.name === 'Code') {
+        return {
+          async isVisible() { return stage === 'phone-code'; },
+          async waitFor() {},
+          async click() { calls.push(['code.click', stage]); },
+          async fill(value) { calls.push(['code.fill', value, stage]); },
+        };
+      }
+      if (role === 'textbox') {
+        return {
+          async isVisible() { return false; },
+          async waitFor() { throw new Error(`${options.name || 'textbox'} is not visible`); },
+        };
+      }
+      return {
+        async isVisible() { return stage === 'phone-add' || stage === 'phone-code'; },
+        async click(clickOptions) {
+          calls.push(['continue.click', clickOptions, stage]);
+          if (stage === 'phone-add') {
+            phoneSubmitCount += 1;
+            if (phoneSubmitCount > 1) {
+              stage = 'phone-code';
+              currentUrl = 'https://auth.openai.com/phone-verification';
+            }
+          } else if (stage === 'phone-code') {
+            currentUrl = 'http://localhost:1455/auth/callback?code=code_phone&state=state_phone';
+            stage = 'callback';
+          }
+        },
+      };
+    },
+    locator(selector) {
+      calls.push(['locator', selector, stage]);
+      return {
+        async textContent() {
+          return bodyText();
+        },
+      };
+    },
+    url() {
+      return currentUrl;
+    },
+    async title() {
+      return 'OAuth';
+    },
+    async textContent() {
+      return bodyText();
+    },
+    async waitForTimeout(ms) {
+      calls.push(['waitForTimeout', ms, stage]);
+      if (stage === 'phone-add' && phoneSubmitCount === 1) {
+        stage = 'phone-code';
+        currentUrl = 'https://auth.openai.com/phone-verification';
+      }
+    },
+  };
+
+  const result = await processOAuthLoginFlow(page, {
+    email: 'jregkolpig+s2@gmail.com',
+    phone: '+13523282595',
+    code: '123456',
+    verifier: 'verifier_phone',
+    state: 'state_phone',
+    timeoutMs: 100,
+    stageDetectTimeoutMs: 10,
+    transitionTimeoutMs: 100,
+    maxStageTurns: 8,
+    exchangeToken: async (code, verifier, email) => {
+      calls.push(['exchangeToken', code, verifier, email]);
+      return { cpaPath: 'local-cpa.json' };
+    },
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  assert.equal(result.status, 'oauth-completed');
+  assert.deepEqual(calls.filter((call) => call[0] === 'phone.fill'), [
+    ['phone.fill', '+13523282595', 'phone-add'],
+  ]);
+  assert.deepEqual(calls.filter((call) => call[0] === 'code.fill'), [
+    ['code.fill', '123456', 'phone-code'],
+  ]);
+});
+
+test('processOAuthLoginFlow does not refill phone code while transitioning to Codex consent', async () => {
+  const { processOAuthLoginFlow } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  let stage = 'phone-code';
+  let currentUrl = 'https://auth.openai.com/phone-verification';
+
+  const bodyText = () => {
+    if (stage === 'codex') return 'Sign in to Codex with ChatGPT. Codex will not receive your chat history. Continue';
+    if (stage === 'callback') return '';
+    return 'Check your phone Enter the verification code Code Continue';
+  };
+
+  const page = {
+    getByRole(role, options = {}) {
+      calls.push(['getByRole', role, options, stage]);
+      if (role === 'textbox' && options.name === 'Code') {
+        return {
+          async isVisible() { return stage === 'phone-code' || stage === 'phone-code-stale'; },
+          async waitFor(waitOptions) { calls.push(['code.waitFor', waitOptions, stage]); },
+          async click() {
+            calls.push(['code.click', stage]);
+            if (stage === 'phone-code-stale') {
+              throw new Error('Code input should not be clicked again during phone-code transition');
+            }
+          },
+          async fill(value) { calls.push(['code.fill', value, stage]); },
+        };
+      }
+      if (role === 'textbox') {
+        return {
+          async isVisible() { return false; },
+          async waitFor() { throw new Error(`${options.name || 'textbox'} is not visible`); },
+        };
+      }
+      return {
+        async isVisible() {
+          return stage === 'phone-code' || stage === 'phone-code-stale' || stage === 'codex';
+        },
+        async click(clickOptions) {
+          calls.push(['continue.click', clickOptions, stage]);
+          if (stage === 'phone-code') {
+            stage = 'phone-code-stale';
+          } else if (stage === 'codex') {
+            currentUrl = 'http://localhost:1455/auth/callback?code=code_phone&state=state_phone';
+            stage = 'callback';
+          }
+        },
+      };
+    },
+    locator(selector) {
+      calls.push(['locator', selector, stage]);
+      return {
+        async textContent() {
+          return bodyText();
+        },
+      };
+    },
+    url() {
+      return currentUrl;
+    },
+    async title() {
+      return 'OAuth';
+    },
+    async textContent() {
+      return bodyText();
+    },
+    async waitForTimeout(ms) {
+      calls.push(['waitForTimeout', ms, stage]);
+      if (stage === 'phone-code-stale') {
+        stage = 'codex';
+        currentUrl = 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent';
+      }
+    },
+  };
+
+  const result = await processOAuthLoginFlow(page, {
+    email: 'jregkolpig+s2@gmail.com',
+    code: '123456',
+    verifier: 'verifier_phone',
+    state: 'state_phone',
+    timeoutMs: 100,
+    stageDetectTimeoutMs: 10,
+    transitionTimeoutMs: 100,
+    maxStageTurns: 8,
+    exchangeToken: async (code, verifier, email) => {
+      calls.push(['exchangeToken', code, verifier, email]);
+      return { cpaPath: 'local-cpa.json' };
+    },
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  assert.equal(result.status, 'oauth-completed');
+  assert.deepEqual(calls.filter((call) => call[0] === 'code.fill'), [
+    ['code.fill', '123456', 'phone-code'],
+  ]);
+  assert.deepEqual(calls.filter((call) => call[0] === 'code.click'), [
+    ['code.click', 'phone-code'],
+  ]);
 });
 
 test('openAi_phone_verify selects Text Message and clicks Continue', async () => {
@@ -1312,6 +1658,59 @@ test('processOAuthLoginFlow extracts callback code from request before localhost
   assert.equal(result.status, 'oauth-completed');
   assert.equal(result.code, 'code_req');
   assert.equal(result.exchangeResult.cpaPath, 'local-cpa.json');
+});
+
+test('processOAuthLoginFlow extracts callback code from CDP navigation history on chrome-error page', async () => {
+  const { processOAuthLoginFlow } = require('../src/auto/roxy_oauth_login.js');
+  const callbackUrl = 'http://localhost:1455/auth/callback?code=code_cdp&state=state_cdp';
+  const calls = [];
+  const page = {
+    getByRole() {
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return { async textContent() { return "This site can't be reached localhost refused to connect"; } };
+    },
+    context() {
+      return {
+        async newCDPSession() {
+          calls.push(['newCDPSession']);
+          return {
+            async send(method) {
+              calls.push(['cdp.send', method]);
+              if (method === 'Page.getNavigationHistory') {
+                return {
+                  currentIndex: 0,
+                  entries: [{ id: 1, url: callbackUrl, title: 'localhost' }],
+                };
+              }
+              return { targetInfos: [] };
+            },
+          };
+        },
+      };
+    },
+    url: () => 'chrome-error://chromewebdata/',
+    title: async () => 'localhost',
+    textContent: async () => "This site can't be reached localhost refused to connect",
+    waitForTimeout: async () => {},
+  };
+
+  const result = await processOAuthLoginFlow(page, {
+    email: 'jregkolpig+s4@gmail.com',
+    verifier: 'verifier_cdp',
+    state: 'state_cdp',
+    timeoutMs: 100,
+    stageDetectTimeoutMs: 10,
+    maxStageTurns: 2,
+    exchangeToken: async (code, verifier, email) => ({ code, verifier, email, cpaPath: 'local-cpa.json' }),
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  assert.equal(result.status, 'oauth-completed');
+  assert.equal(result.code, 'code_cdp');
+  assert.equal(result.exchangeResult.cpaPath, 'local-cpa.json');
+  assert.equal(calls.some((call) => call[0] === 'newCDPSession'), true);
 });
 
 test('roxy_oauth_login 默认导航 OAuth 授权页并保持 Roxy 窗口打开', async () => {
