@@ -124,7 +124,7 @@ function accountRow(account) {
       <td><div class="email-main field-raw">${escapeHtml(account.email)}</div><div class="muted">ID: ${account.id}</div></td>
       <td><span class="field-raw">${escapeHtml(account.phone || '-')}</span></td>
       <td><span class="field-raw">${escapeHtml(account.sms_api || '-')}</span></td>
-      <td><span class="field-raw">${escapeHtml(account.sms_last_error || '-')}</span></td>
+      <td><div class="remark-cell">${escapeHtml(account.remark || '-')}</div></td>
       <td>${escapeHtml(account.activation_method || '-')}</td>
       <td><span class="field-raw">${escapeHtml(account.activated_at || '-')}</span></td>
       <td><span class="status ${account.status}">${statusLabels[account.status] || account.status}</span></td>

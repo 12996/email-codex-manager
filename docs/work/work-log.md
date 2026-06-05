@@ -46,3 +46,4 @@
 | 2026-06-05 | 邮箱邮件详情弹窗修复 | done | `2026-06-05-email-mail-detail-dialog.md` |
 | 2026-06-05 | 账号列表服务端分页 | done | `2026-06-05-account-list-pagination.md` |
 | 2026-06-05 | PRD-002 change 基线合并 | done | `2026-06-05-prd-002-change-merge.md` |
+| 2026-06-05 | 前端列表取消局部竖向滚动并显示补号备注 | done | `2026-06-05-frontend-list-remark-no-inner-scroll.md` |

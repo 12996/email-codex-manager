@@ -2,6 +2,14 @@
 
 状态：active
 
+## 2026-06-05 前端列表取消局部竖向滚动并显示补号备注
+
+- 来源工作日志：`docs/work/2026-06-05-frontend-list-remark-no-inner-scroll.md`
+- 新增 change：`docs/changes/CHG-038-frontend-list-remark-no-inner-scroll.md`，状态 `implemented`，待后续合并 PRD。
+- 当前进展：补号管理主表已将 `SMS 错误` 列替换为 `备注` 列，直接展示 `replacement_accounts.remark`；`sms_last_error` 仍保留在详情 JSON 中。邮箱管理和补号管理表格容器已取消固定高度与内部纵向滚动，仅保留横向滚动；邮箱邮件结果列表也取消内部纵向滚动，内容自然撑开页面。
+- 验证：`node --test test\replacementAccountsWeb.test.js` 通过，7/7 pass；`node --test test\accountsWebApi.test.js` 通过，7/7 pass；全量 `npm test` 通过，194/194 pass；`node --check .\web\app.js`、`node --check .\web\accounts.js` 通过。
+- 待办：如需进一步优化宽表阅读体验，可继续压缩列宽或改成关键字段卡片式展示。
+
 ## 2026-06-05 PRD-002 change 基线合并
 
 - 来源工作日志：`docs/work/2026-06-05-prd-002-change-merge.md`

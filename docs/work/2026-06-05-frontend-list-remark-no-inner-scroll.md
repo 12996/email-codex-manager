@@ -1,0 +1,22 @@
+# 2026-06-05 前端列表取消局部竖向滚动并显示补号备注
+
+- 状态：done
+- 目标：补号管理和邮箱管理不再出现表格/邮件结果区域内部上下滚动条；补号管理主表直接展示备注，替代低频的 SMS 错误列。
+- 修改文件：
+  - `web/index.html`
+  - `web/app.js`
+  - `web/styles.css`
+  - `test/replacementAccountsWeb.test.js`
+  - `test/accountsWebApi.test.js`
+  - `docs/changes/CHANGE_REGISTRY.md`
+  - `docs/changes/CHG-038-frontend-list-remark-no-inner-scroll.md`
+- 验证结果：
+  - RED：`node --test test\replacementAccountsWeb.test.js` 失败于 `account.remark` 未展示。
+  - RED：`node --test test\accountsWebApi.test.js` 失败于 `.table-wrap` / `.mail-result-scroll` 仍存在内部竖向滚动限制。
+  - GREEN：`node --test test\replacementAccountsWeb.test.js` 通过，7/7 pass。
+  - GREEN：`node --test test\accountsWebApi.test.js` 通过，7/7 pass。
+  - 全量：`npm test` 通过，194/194 pass。
+  - 语法检查：`node --check .\web\app.js`、`node --check .\web\accounts.js` 通过。
+- 未完成 / 风险：未做浏览器截图验证；视觉上表格仍保留横向滚动以支持宽字段。
+- 下一步：如用户希望进一步减少横向滚动，可继续压缩列宽或改成关键字段卡片式展示。
+- 日终交接：完成后更新 `handoff.md`

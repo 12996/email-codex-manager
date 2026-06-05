@@ -145,7 +145,7 @@ test('replacement account table fully displays required runtime fields', () => {
     '邮箱',
     '手机号',
     'SMS API',
-    'SMS 错误',
+    '备注',
     '开通方式',
     '开通时间',
     '状态',
@@ -160,7 +160,7 @@ test('replacement account table fully displays required runtime fields', () => {
     'account.email',
     'account.phone',
     'account.sms_api',
-    'account.sms_last_error',
+    'account.remark',
     'account.activation_method',
     'account.activated_at',
     'account.status_updated_at',
@@ -171,7 +171,9 @@ test('replacement account table fully displays required runtime fields', () => {
   }
 
   assert.doesNotMatch(appJs, /maskPhone\(account\.phone\)/);
-  assert.match(css, /\.table-wrap\s*{[^}]*overflow:\s*auto/s);
+  assert.doesNotMatch(html, /SMS 错误/);
+  assert.doesNotMatch(css, /\.table-wrap\s*{[^}]*max-height/s);
+  assert.match(css, /\.table-wrap\s*{[^}]*overflow-x:\s*auto/s);
   assert.match(css, /table\s*{[^}]*min-width:\s*2[0-9]{3}px/s);
 });
 

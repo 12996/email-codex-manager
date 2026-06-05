@@ -122,6 +122,7 @@ test('accounts web frontend uses JSON account APIs and current visual labels', (
 test('accounts web frontend preserves mail fetch controls and immediate feedback', () => {
   const appJs = readFileSync(join(process.cwd(), 'web', 'accounts.js'), 'utf8');
   const html = readFileSync(join(process.cwd(), 'web', 'accounts.html'), 'utf8');
+  const css = readFileSync(join(process.cwd(), 'web', 'styles.css'), 'utf8');
   const sidebar = html.match(/<aside class="sidebar">[\s\S]*?<\/aside>/)?.[0] || '';
 
   assert.match(html, /Gmail 密码/);
@@ -147,6 +148,9 @@ test('accounts web frontend preserves mail fetch controls and immediate feedback
   assert.match(appJs, /mail-row-summary/);
   assert.match(appJs, /正在获取邮件/);
   assert.match(appJs, /正在测试连接/);
+  assert.doesNotMatch(css, /\.table-wrap\s*{[^}]*max-height/s);
+  assert.doesNotMatch(css, /\.mail-result-scroll\s*{[^}]*max-height/s);
+  assert.doesNotMatch(css, /\.mail-result-scroll\s*{[^}]*overflow-y:\s*auto/s);
 });
 
 test('accounts web frontend exposes real pagination controls and query params', () => {
