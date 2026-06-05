@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>邮箱账号</title>
+  <link rel="stylesheet" href="web/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-icon">✉</div>
+      <div>
+        <strong>账号管理系统</strong>
+        <span>Account Management System</span>
+      </div>
+    </div>
+    <nav>
+      <p>账号管理</p>
+      <a href="/accounts">仪表盘</a>
+      <a class="active" href="/accounts">邮箱账号</a>
+      <a href="/replacement-ui">补号管理</a>
+      <!-- <a class="sub" href="/replacement-ui">补号列表</a> -->
+    </nav>
+    <form class="logout-form" method="post" action="/logout">
+      <button class="collapse-btn" type="submit">退出登录</button>
+    </form>
+  </aside>
+
+  <main class="shell">
+    <header class="topbar">
+      <button class="menu-btn" type="button">☰</button>
+      <div class="admin">
+        <span class="bell">🔔<em>12</em></span>
+        <span class="avatar">👤</span>
+        <strong>管理员⌄</strong>
+      </div>
+    </header>
+
+    <section class="page-head">
+      <div>
+        <h1>邮箱账号</h1>
+        <p>管理 Gmail IMAP 邮箱账号，执行测试连接和邮件获取操作</p>
+      </div>
+      <button id="newAccountButton" class="primary" type="button">＋ 新增邮箱</button>
+    </section>
+
+    <section class="cards" aria-label="邮箱统计">
+      <article class="card blue"><i>✉</i><span>邮箱总数</span><strong id="statTotal">0</strong><small>所有邮箱账号</small></article>
+      <article class="card green"><i>✓</i><span>正常账号</span><strong id="statActive">0</strong><small>状态为 active</small></article>
+      <article class="card orange"><i>⟳</i><span>已获取</span><strong id="statFetched">0</strong><small>最近获取成功</small></article>
+      <article class="card red"><i>!</i><span>异常账号</span><strong id="statError">0</strong><small>认证或连接失败</small></article>
+      <article class="card purple"><i>⌁</i><span>空闲账号</span><strong id="statIdle">0</strong><small>尚未获取邮件</small></article>
+    </section>
+
+    <section class="panel">
+      <div class="toolbar">
+        <select id="statusFilter" aria-label="状态筛选">
+          <option value="">全部状态</option>
+          <option value="active">active</option>
+          <option value="auth_failed">auth_failed</option>
+          <option value="error">error</option>
+        </select>
+        <input id="searchInput" type="search" placeholder="搜索 Gmail / 备注 / 状态">
+        <button id="filterButton" class="ghost" type="button">筛选</button>
+        <span class="spacer"></span>
+        <button id="refreshButton" class="ghost strong" type="button">↻ 刷新</button>
+        <button id="newAccountToolbarButton" class="ghost strong" type="button">⚙ 新增邮箱</button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Gmail</th>
+              <th>备注</th>
+              <th>Gmail 密码</th>
+              <th>2FA</th>
+              <th>App Password</th>
+              <th>状态</th>
+              <th>上次获取</th>
+              <th>最近错误</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="accountsBody"></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span id="totalText">共 0 条</span>
+        <label>每页
+          <select id="pageSizeSelect" aria-label="每页条数">
+            <option value="10">10 条</option>
+            <option value="20">20 条</option>
+            <option value="50">50 条</option>
+          </select>
+        </label>
+        <button id="prevPageButton" class="ghost" type="button">上一页</button>
+        <strong id="pageText">第 1 / 1 页</strong>
+        <button id="nextPageButton" class="ghost" type="button">下一页</button>
+      </div>
+    </section>
+
+    <section id="mailResult" class="panel mail-panel" hidden>
+      <div class="mail-panel-head">
+        <h2 id="mailResultTitle">邮件结果</h2>
+        <button id="clearMailResult" class="ghost" type="button">清空</button>
+      </div>
+      <div id="mailResultList" class="gmail-mail-list"></div>
+    </section>
+
+    <section class="dashboard-grid">
+      <article class="panel compact">
+        <h2>快捷操作</h2>
+        <div class="quick-actions">
+          <button data-quick="fetch" type="button">📥<span>获取邮件</span><small>读取最新邮件</small></button>
+          <button data-quick="test" type="button">🔌<span>测试连接</span><small>验证 IMAP 配置</small></button>
+          <button data-quick="new" type="button">➕<span>新增邮箱</span><small>添加 Gmail 账号</small></button>
+          <button data-quick="activity" type="button">📊<span>操作记录</span><small>查看最近操作</small></button>
+        </div>
+      </article>
+      <article class="panel compact">
+        <h2>状态分布</h2>
+        <div class="donut"><div id="donutChart"></div><ul id="statusLegend"></ul></div>
+      </article>
+      <article id="activity" class="panel compact">
+        <h2>最近操作记录 <button id="clearActivity" type="button">清空</button></h2>
+        <ul id="activityList" class="activity"></ul>
+      </article>
+    </section>
+  </main>
+
+  <dialog id="accountDialog">
+    <form id="accountForm" method="dialog">
+      <h2 id="dialogTitle">新增邮箱</h2>
+      <input type="hidden" name="id">
+      <label>备注 <input name="display_name" placeholder="main"></label>
+      <label>Gmail 邮箱号 * <input name="gmail_email" type="email" required placeholder="user@gmail.com"></label>
+      <label>Gmail 登录密码 * <input name="gmail_password" required></label>
+      <label>2FA * <input name="gmail_2fa" required></label>
+      <label>App Password * <input name="gmail_app_password" required></label>
+      <menu>
+        <button value="cancel" type="button" data-close>取消</button>
+        <button class="primary" type="submit">保存</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="detailDialog">
+    <div class="detail-box">
+      <h2>账号详情</h2>
+      <pre id="detailContent"></pre>
+      <menu><button class="primary" type="button" data-close>关闭</button></menu>
+    </div>
+  </dialog>
+
+  <dialog id="mailDetailDialog">
+    <div class="detail-box">
+      <h2 id="mailDetailSubject">邮件详情</h2>
+      <div class="gmail-detail-meta">
+        <strong id="mailDetailSenderName"></strong>
+        <span id="mailDetailSenderEmail"></span>
+      </div>
+      <div class="gmail-detail-submeta">
+        <span id="mailDetailDate"></span>
+        <span id="mailDetailSource"></span>
+      </div>
+      <div id="mailDetailBody" class="gmail-body"></div>
+      <menu><button class="primary" type="button" data-close>关闭</button></menu>
+    </div>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="web/accounts.js"></script>
+</body>
+</html>

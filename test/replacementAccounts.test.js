@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -51,6 +51,47 @@ test('replacement automation run repository creates and finishes runs', () => {
   assert.equal(finished.status, 'succeeded');
   assert.equal(finished.exit_code, 0);
   assert.ok(finished.finished_at);
+});
+
+test('replacement automation run repository prunes old finished runs and log files', () => {
+  const db = createTestDb();
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-logs-'));
+  const repo = createReplacementAutomationRunRepository(db, { maxRuns: 2, logDir: dir });
+  const firstLog = join(dir, 'first.log');
+  const secondLog = join(dir, 'second.log');
+  const thirdLog = join(dir, 'third.log');
+  writeFileSync(firstLog, 'first\n', 'utf8');
+  writeFileSync(secondLog, 'second\n', 'utf8');
+  writeFileSync(thirdLog, 'third\n', 'utf8');
+
+  const first = repo.createRun({ account_id: 1, email: 'first@example.com', log_path: firstLog });
+  repo.markSucceeded(first.id);
+  const second = repo.createRun({ account_id: 2, email: 'second@example.com', log_path: secondLog });
+  repo.markSucceeded(second.id);
+  const third = repo.createRun({ account_id: 3, email: 'third@example.com', log_path: thirdLog });
+
+  assert.deepEqual(repo.listRuns().map((run) => run.id), [third.id, second.id]);
+  assert.equal(repo.getRun(first.id), undefined);
+  assert.equal(existsSync(firstLog), false);
+  assert.equal(existsSync(secondLog), true);
+  assert.equal(existsSync(thirdLog), true);
+});
+
+test('replacement automation run pruning keeps running runs even beyond max', () => {
+  const db = createTestDb();
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-logs-'));
+  const repo = createReplacementAutomationRunRepository(db, { maxRuns: 1, logDir: dir });
+  const runningLog = join(dir, 'running.log');
+  const finishedLog = join(dir, 'finished.log');
+  writeFileSync(runningLog, 'running\n', 'utf8');
+  writeFileSync(finishedLog, 'finished\n', 'utf8');
+
+  const running = repo.createRun({ account_id: 1, email: 'running@example.com', log_path: runningLog });
+  const finished = repo.createRun({ account_id: 2, email: 'finished@example.com', log_path: finishedLog });
+
+  assert.deepEqual(repo.listRuns().map((run) => run.id), [finished.id, running.id]);
+  assert.equal(existsSync(runningLog), true);
+  assert.equal(existsSync(finishedLog), true);
 });
 
 test('createAccount trims email and defaults status to pending', () => {
@@ -213,6 +254,48 @@ test('listAccounts and getAccount exclude soft-deleted accounts', () => {
 
   assert.deepEqual(repo.listAccounts().map((account) => account.id), [active.id]);
   assert.equal(repo.getAccount(deleted.id), undefined);
+});
+
+test('listAccountsPage returns one replacement account page with pagination metadata', () => {
+  const repo = createTestRepository();
+  const first = repo.createAccount({ email: 'first@example.com' });
+  const second = repo.createAccount({ email: 'second@example.com' });
+  const third = repo.createAccount({ email: 'third@example.com' });
+
+  const page = repo.listAccountsPage({ page: 2, pageSize: 1 });
+
+  assert.deepEqual(page.accounts.map((account) => account.id), [second.id]);
+  assert.deepEqual(page.pagination, {
+    page: 2,
+    pageSize: 1,
+    total: 3,
+    totalPages: 3,
+  });
+  assert.deepEqual(repo.listAccounts().map((account) => account.id), [third.id, second.id, first.id]);
+});
+
+test('listAccountsPage filters replacement accounts by status and keyword before pagination', () => {
+  const repo = createTestRepository();
+  const active = repo.createAccount({
+    email: 'alpha@example.com',
+    phone: '111',
+    remark: 'main alpha',
+    status: 'active',
+  });
+  const banned = repo.createAccount({
+    email: 'beta@example.com',
+    phone: '222',
+    remark: 'needs replacement',
+    status: 'banned',
+  });
+
+  const statusPage = repo.listAccountsPage({ status: 'banned' });
+  const keywordPage = repo.listAccountsPage({ keyword: 'alpha' });
+
+  assert.deepEqual(statusPage.accounts.map((account) => account.id), [banned.id]);
+  assert.equal(statusPage.pagination.total, 1);
+  assert.deepEqual(keywordPage.accounts.map((account) => account.id), [active.id]);
+  assert.equal(keywordPage.pagination.total, 1);
 });
 
 test('updateAccount enforces unique email excluding current row', () => {

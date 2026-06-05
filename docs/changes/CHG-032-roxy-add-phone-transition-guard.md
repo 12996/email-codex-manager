@@ -1,6 +1,6 @@
 # CHG-032 Roxy 添加手机号后跳转竞态守卫
 
-状态：implemented
+状态：merged
 创建日期：2026-06-05
 关联 PRD：PRD-002
 关联 Issue：`docs/issues/issue-002-roxy-add-phone-transition-race.md`
@@ -33,3 +33,9 @@
 ## 未完成 / 风险
 
 - 尚未重新执行完整 `/replace` 实机链路；`issue-002` 保持 `active`，待实机验证后关闭。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-05
+- 备注：已合并到添加手机号提交后的阶段跳转守卫和明确超时失败要求。

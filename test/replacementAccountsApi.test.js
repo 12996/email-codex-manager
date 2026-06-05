@@ -151,6 +151,44 @@ test('replacement account CRUD API creates, lists, reads, updates, and soft dele
   }
 });
 
+test('replacement account API returns paginated accounts with filters', async () => {
+  const { app, replacementAccounts } = createTestContext();
+  const first = replacementAccounts.createAccount({
+    email: 'first@example.com',
+    remark: 'first slot',
+    status: 'active',
+  });
+  const second = replacementAccounts.createAccount({
+    email: 'second@example.com',
+    remark: 'second slot',
+    status: 'banned',
+  });
+  replacementAccounts.createAccount({
+    email: 'third@example.com',
+    remark: 'third slot',
+    status: 'pending',
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const page = await jsonRequest(server, 'GET', '/replacement-accounts?page=2&pageSize=1&keyword=example.com');
+    assert.equal(page.response.status, 200);
+    assert.deepEqual(page.body.accounts.map((account) => account.id), [second.id]);
+    assert.deepEqual(page.body.pagination, {
+      page: 2,
+      pageSize: 1,
+      total: 3,
+      totalPages: 3,
+    });
+
+    const filtered = await jsonRequest(server, 'GET', '/replacement-accounts?status=active&keyword=first');
+    assert.deepEqual(filtered.body.accounts.map((account) => account.id), [first.id]);
+    assert.equal(filtered.body.pagination.total, 1);
+  } finally {
+    await server.close();
+  }
+});
+
 test('replacement account action APIs update status and call injected services', async () => {
   const { app, replacementAccounts } = createTestContext();
   const created = replacementAccounts.createAccount({

@@ -1,6 +1,6 @@
 # CHG-034 Roxy 手机验证码后跳转竞态守卫
 
-状态：implemented
+状态：merged
 创建日期：2026-06-05
 关联 PRD：PRD-002
 关联 Issue：`docs/issues/issue-004-roxy-phone-code-transition-race.md`
@@ -34,3 +34,9 @@
 ## 未完成 / 风险
 
 - 尚未重新执行完整 `/replace` 实机链路；`issue-004` 保持 `active`，待实机验证后关闭。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-05
+- 备注：已合并到手机验证码提交期间的页面状态守卫和避免重复操作旧组件要求。

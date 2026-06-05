@@ -149,6 +149,67 @@ test('accounts web frontend preserves mail fetch controls and immediate feedback
   assert.match(appJs, /正在测试连接/);
 });
 
+test('accounts web frontend exposes real pagination controls and query params', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'accounts.js'), 'utf8');
+  const html = readFileSync(join(process.cwd(), 'web', 'accounts.html'), 'utf8');
+
+  for (const id of ['pageSizeSelect', 'prevPageButton', 'nextPageButton', 'pageText']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+    assert.match(appJs, new RegExp(`#${id}`));
+  }
+
+  assert.match(appJs, /URLSearchParams/);
+  assert.match(appJs, /page/);
+  assert.match(appJs, /pageSize/);
+  assert.match(appJs, /keyword/);
+  assert.match(appJs, /status/);
+});
+
+test('accounts web frontend includes mail detail dialog used by fetched mail rows', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'accounts.js'), 'utf8');
+  const html = readFileSync(join(process.cwd(), 'web', 'accounts.html'), 'utf8');
+
+  for (const id of [
+    'mailDetailDialog',
+    'mailDetailSubject',
+    'mailDetailSenderName',
+    'mailDetailSenderEmail',
+    'mailDetailDate',
+    'mailDetailSource',
+    'mailDetailBody',
+  ]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+    assert.match(appJs, new RegExp(`#${id}`));
+  }
+});
+
+test('accounts JSON API returns paginated accounts with filters', async () => {
+  const { app, accounts } = createTestContext();
+  const first = accounts.createAccount(accountInput({ gmail_email: 'first@gmail.com', display_name: 'First' }));
+  const second = accounts.createAccount(accountInput({ gmail_email: 'second@gmail.com', display_name: 'Second' }));
+  accounts.createAccount(accountInput({ gmail_email: 'third@gmail.com', display_name: 'Third' }));
+  accounts.markFetchFailure(first.id, 'auth_failed', 'Invalid first credentials');
+  const server = await startTestServer(app);
+
+  try {
+    const page = await jsonRequest(server, 'GET', '/api/accounts?page=2&pageSize=1&keyword=gmail.com');
+    assert.equal(page.response.status, 200);
+    assert.deepEqual(page.body.accounts.map((account) => account.id), [second.id]);
+    assert.deepEqual(page.body.pagination, {
+      page: 2,
+      pageSize: 1,
+      total: 3,
+      totalPages: 3,
+    });
+
+    const filtered = await jsonRequest(server, 'GET', '/api/accounts?status=auth_failed&keyword=first');
+    assert.deepEqual(filtered.body.accounts.map((account) => account.id), [first.id]);
+    assert.equal(filtered.body.pagination.total, 1);
+  } finally {
+    await server.close();
+  }
+});
+
 test('accounts JSON API creates, lists, updates, tests, fetches, and deletes accounts', async () => {
   const calls = [];
   const { app } = createTestContext({

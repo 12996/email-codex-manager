@@ -11,3 +11,4 @@
 | issue-003 | Roxy OAuth callback 在 Chrome error 页下未被识别 | active | `issue-003-roxy-callback-chrome-error-url.md` |
 | issue-004 | Roxy OAuth 手机验证码后跳转竞态 | active | `issue-004-roxy-phone-code-transition-race.md` |
 | issue-005 | Roxy token exchange fallback 出口 IP 不一致 | active | `issue-005-roxy-token-fallback-exit-ip.md` |
+| issue-006 | 邮箱邮件详情弹窗 DOM 缺失 | resolved | `issue-006-email-mail-detail-dialog-missing.md` |

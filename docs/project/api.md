@@ -118,6 +118,7 @@ Set-Cookie: admin_auth=...
 
 - 新增邮箱弹窗
 - 邮箱账号列表
+- 邮箱账号分页控件，支持每页 10/20/50 条、上一页和下一页
 - 获取邮件结果区域，只有执行获取操作后显示
 - 统计卡片、快捷操作、状态分布和最近操作记录
 
@@ -149,14 +150,29 @@ web/accounts.js
 
 ### GET `/api/accounts`
 
-获取邮箱账号列表。
+获取邮箱账号列表。支持服务端分页、状态筛选和关键词搜索。
+
+查询参数：
+
+```text
+page      可选，页码，默认 1
+pageSize  可选，每页条数，默认 10，最大 100
+status    可选，按账号状态精确筛选
+keyword   可选，按 Gmail、备注、状态或最近错误模糊搜索
+```
 
 成功：
 
 ```json
 {
   "ok": true,
-  "accounts": []
+  "accounts": [],
+  "pagination": {
+    "page": 1,
+    "pageSize": 10,
+    "total": 0,
+    "totalPages": 1
+  }
 }
 ```
 
@@ -641,6 +657,8 @@ web/automation-logs.js
 页面入口需要后台登录态，前端通过 `/replacement-accounts*` JSON API 读取和操作数据。
 日志页面同样需要后台登录态，前端通过 `/replacement-automation-runs*` JSON API 读取运行记录、查看日志和停止运行中的子进程。
 
+补号管理页账号列表支持服务端分页、状态筛选和关键词搜索；前端分页控件支持每页 10/20/50 条、上一页和下一页。
+
 补号管理页支持直接配置公开验证码接口：
 
 - 新增或编辑补号账号时，可勾选“允许公开验证码接口”，对应 `public_code_enabled = 1`。
@@ -721,14 +739,29 @@ SQLite 表：`replacement_accounts`
 
 ### GET `/replacement-accounts`
 
-获取未软删除的补号账号列表。
+获取未软删除的补号账号列表。支持服务端分页、状态筛选和关键词搜索。
+
+查询参数：
+
+```text
+page      可选，页码，默认 1
+pageSize  可选，每页条数，默认 10，最大 100
+status    可选，按补号账号状态精确筛选
+keyword   可选，按邮箱、手机号、备注或状态模糊搜索
+```
 
 成功：
 
 ```json
 {
   "ok": true,
-  "accounts": []
+  "accounts": [],
+  "pagination": {
+    "page": 1,
+    "pageSize": 10,
+    "total": 0,
+    "totalPages": 1
+  }
 }
 ```
 
@@ -1145,6 +1178,14 @@ CPA_HEALTH_MONITOR_INTERVAL_MS=600000
 ```text
 data/automation-logs/
 ```
+
+日志保留数量可通过 `.env` 配置，默认保留最近 30 条运行记录：
+
+```env
+REPLACEMENT_AUTOMATION_LOG_MAX_RUNS=30
+```
+
+后端每次创建新的补号或注册自动化运行记录后，会按开始时间倒序保留最近配置数量内的记录；超过范围的非 `running` 旧记录会从 `replacement_automation_runs` 删除，并同步删除其 `log_path` 指向的本地日志文件。`running` 记录不会被自动清理，避免影响仍在执行的子进程排查。
 
 日志内容包含两类信息：
 

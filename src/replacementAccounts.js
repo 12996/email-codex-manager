@@ -56,6 +56,24 @@ export function createReplacementAccountRepository(db) {
       `).all();
     },
 
+    listAccountsPage(options = {}) {
+      const query = normalizeListQuery(options);
+      const { whereSql, params } = buildReplacementAccountListWhere(query);
+      const total = db.prepare(`
+        SELECT COUNT(*) AS total FROM replacement_accounts
+        ${whereSql}
+      `).get(...params).total;
+      const pagination = buildPagination(total, query);
+      const accounts = db.prepare(`
+        SELECT * FROM replacement_accounts
+        ${whereSql}
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+      `).all(...params, pagination.pageSize, (pagination.page - 1) * pagination.pageSize);
+
+      return { accounts, pagination };
+    },
+
     getAccount(id) {
       return db.prepare(`
         SELECT * FROM replacement_accounts
@@ -348,4 +366,53 @@ function generatePublicCodeKey() {
 
 function normalizeErrorMessage(value) {
   return String(value || 'Unknown error');
+}
+
+function normalizeListQuery(options) {
+  return {
+    page: normalizePositiveInteger(options?.page, 1, Number.MAX_SAFE_INTEGER),
+    pageSize: normalizePositiveInteger(options?.pageSize, 10, 100),
+    status: normalizeOptional(options?.status),
+    keyword: normalizeOptional(options?.keyword)?.toLowerCase() || null,
+  };
+}
+
+function normalizePositiveInteger(value, defaultValue, maxValue) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) return defaultValue;
+  return Math.min(number, maxValue);
+}
+
+function buildReplacementAccountListWhere(query) {
+  const filters = ['deleted_at IS NULL'];
+  const params = [];
+  if (query.status) {
+    filters.push('status = ?');
+    params.push(query.status);
+  }
+  if (query.keyword) {
+    filters.push(`(
+      lower(coalesce(email, '')) LIKE ?
+      OR lower(coalesce(phone, '')) LIKE ?
+      OR lower(coalesce(remark, '')) LIKE ?
+      OR lower(coalesce(status, '')) LIKE ?
+    )`);
+    const keyword = `%${query.keyword}%`;
+    params.push(keyword, keyword, keyword, keyword);
+  }
+
+  return {
+    whereSql: `WHERE ${filters.join(' AND ')}`,
+    params,
+  };
+}
+
+function buildPagination(total, query) {
+  const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
+  return {
+    page: Math.min(query.page, totalPages),
+    pageSize: query.pageSize,
+    total,
+    totalPages,
+  };
 }

@@ -1,6 +1,6 @@
 # CHG-033 Roxy OAuth callback CDP fallback
 
-状态：implemented
+状态：merged
 创建日期：2026-06-05
 关联 PRD：PRD-002
 关联 Issue：`docs/issues/issue-003-roxy-callback-chrome-error-url.md`
@@ -39,3 +39,9 @@ Roxy OAuth 在 Codex 授权后会跳转到 `localhost:1455/auth/callback`。由�
 ## 未完成 / 风险
 
 - 尚未重新执行完整 `/replace` 实机链路；`issue-003` 保持 `active`，待实机验证后关闭。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-05
+- 备注：已合并到 Chrome error 页下通过 CDP navigation history 或 target URL 捕获 OAuth callback 的要求。

@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>补号管理</title>
+  <link rel="stylesheet" href="web/styles.css">
+</head>
+<body>
+  <aside class="sidebar">
+    <!-- SIDEBAR_PLACEHOLDER -->
+  </aside>
+
+  <main class="shell">
+    <header class="topbar">
+      <button class="menu-btn" type="button">☰</button>
+      <div class="admin">
+        <span class="bell">🔔<em>12</em></span>
+        <span class="avatar">👤</span>
+        <strong>管理员⌄</strong>
+      </div>
+    </header>
+
+    <section class="page-head">
+      <div>
+        <h1>补号列表</h1>
+        <p>管理补号邮箱账号，执行获取验证码、获取JSON和补号操作</p>
+      </div>
+      <button id="newAccountTopButton" class="primary" type="button">＋ 新建补号</button>
+    </section>
+
+    <section class="cards" aria-label="统计卡片">
+      <article class="card blue"><i>👥</i><span>总补号数</span><strong id="statTotal">0</strong><small>所有补号账号</small></article>
+      <article class="card green"><i>🛡</i><span>正常账号</span><strong id="statActive">0</strong><small>状态为 active</small></article>
+      <article class="card orange"><i>✚</i><span>已封禁</span><strong id="statBanned">0</strong><small>需要进行补号</small></article>
+      <article class="card purple"><i>↻</i><span>今日补号成功</span><strong id="statReplaced">0</strong><small>累计成功次数</small></article>
+      <article class="card red"><i>✖</i><span>今日补号失败</span><strong id="statFailed">0</strong><small>状态为 failed</small></article>
+    </section>
+
+    <section class="panel">
+      <div class="toolbar">
+        <select id="statusFilter" aria-label="状态筛选">
+          <option value="">全部状态</option>
+          <option value="pending">pending</option>
+          <option value="active">active</option>
+          <option value="banned">banned</option>
+          <option value="replacing">replacing</option>
+          <option value="replaced">replaced</option>
+          <option value="failed">failed</option>
+        </select>
+        <input id="searchInput" type="search" placeholder="搜索邮箱/手机号/备注">
+        <button id="filterButton" class="ghost" type="button">筛选</button>
+        <span class="spacer"></span>
+        <button id="batchReplaceButton" class="ghost strong" type="button">↻ 一键补号</button>
+        <button id="newAccountButton" class="ghost strong" type="button">⚙ 新增账号</button>
+      </div>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th><input id="selectAll" type="checkbox"></th>
+              <th>邮箱</th>
+              <th>手机号</th>
+              <th>SMS API</th>
+              <th>SMS 错误</th>
+              <th>开通方式</th>
+              <th>开通时间</th>
+              <th>状态</th>
+              <th>状态更新时间</th>
+              <th>公开验证码 Key</th>
+              <th>补号次数</th>
+              <th>最后操作</th>
+              <th>更新时间</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody id="accountsBody"></tbody>
+        </table>
+      </div>
+      <div class="pager">
+        <span id="totalText">共 0 条</span>
+        <label>每页
+          <select id="pageSizeSelect" aria-label="每页条数">
+            <option value="10">10 条</option>
+            <option value="20">20 条</option>
+            <option value="50">50 条</option>
+          </select>
+        </label>
+        <button id="prevPageButton" class="ghost" type="button">上一页</button>
+        <strong id="pageText">第 1 / 1 页</strong>
+        <button id="nextPageButton" class="ghost" type="button">下一页</button>
+      </div>
+    </section>
+
+    <section class="dashboard-grid">
+      <article class="panel compact">
+        <h2>快捷操作</h2>
+        <div class="quick-actions">
+          <button data-quick="sms" type="button">💬<span>获取验证码</span><small>从 SMS API 获取</small></button>
+          <button data-quick="json" type="button">📄<span>获取 JSON</span><small>获取账号信息 JSON</small></button>
+          <button data-quick="replace" type="button">🔁<span>执行补号</span><small>调用接口执行补号</small></button>
+          <button data-quick="activity" type="button">📊<span>操作记录</span><small>查看操作历史</small></button>
+        </div>
+      </article>
+      <article class="panel compact">
+        <h2>状态分布</h2>
+        <div class="donut"><div id="donutChart"></div><ul id="statusLegend"></ul></div>
+      </article>
+      <article id="activity" class="panel compact">
+        <h2>最近操作记录 <button id="clearActivity" type="button">清空</button></h2>
+        <ul id="activityList" class="activity"></ul>
+      </article>
+    </section>
+  </main>
+
+  <dialog id="accountDialog">
+    <form id="accountForm" method="dialog">
+      <h2 id="dialogTitle">新增账号</h2>
+      <input type="hidden" name="id">
+      <label>邮箱 <input name="email" required placeholder="user@example.com"></label>
+      <label>手机号 <input name="phone" placeholder="13800000000"></label>
+      <label>SMS API <input name="sms_api" placeholder="https://example.invalid/sms"></label>
+      <label>开通方式 <input name="activation_method" placeholder="manual / auto"></label>
+      <label>开通时间 <input name="activated_at" placeholder="2026-06-01T00:00:00.000Z"></label>
+      <label><input name="public_code_enabled" type="checkbox" value="1"> 允许公开验证码接口</label>
+      <label>公开验证码 Key <input name="public_code_key" placeholder="留空自动生成"></label>
+      <label>状态
+        <select name="status">
+          <option value="pending">pending</option>
+          <option value="active">active</option>
+          <option value="banned">banned</option>
+          <option value="replaced">replaced</option>
+          <option value="failed">failed</option>
+        </select>
+      </label>
+      <label>备注 <textarea name="remark" rows="3"></textarea></label>
+      <menu>
+        <button value="cancel" type="button" data-close>取消</button>
+        <button class="primary" type="submit">保存</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="statusDialog">
+    <form id="statusForm" method="dialog">
+      <h2>状态设置</h2>
+      <input type="hidden" name="id">
+      <label>状态
+        <select name="status">
+          <option value="pending">pending</option>
+          <option value="active">active</option>
+          <option value="banned">banned</option>
+          <option value="replaced">replaced</option>
+          <option value="failed">failed</option>
+        </select>
+      </label>
+      <label>状态备注 <textarea name="status_note" rows="3"></textarea></label>
+      <menu>
+        <button value="cancel" type="button" data-close>取消</button>
+        <button class="primary" type="submit">保存状态</button>
+      </menu>
+    </form>
+  </dialog>
+
+  <dialog id="detailDialog">
+    <div class="detail-box">
+      <h2>账号详情</h2>
+      <pre id="detailContent"></pre>
+      <menu><button class="primary" type="button" data-close>关闭</button></menu>
+    </div>
+  </dialog>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+  <script src="web/app.js"></script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # CHG-035 Roxy token exchange 浏览器上下文重试
 
-状态：implemented
+状态：merged
 创建日期：2026-06-05
 关联 PRD：PRD-002
 关联 Issue：`docs/issues/issue-005-roxy-token-fallback-exit-ip.md`
@@ -37,3 +37,9 @@
 ## 未完成 / 风险
 
 - 尚未重新执行完整 `/replace` 实机链路；`issue-005` 保持 `active`，待实机验证后关闭。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-05
+- 备注：已合并到正式 Token 交换默认仅使用 Roxy 浏览器页面上下文、重试、单次超时 abort 和诊断 fallback 非默认路径要求。

@@ -1,8 +1,14 @@
+import { unlinkSync } from 'node:fs';
+import { dirname, join, resolve, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
 import { codedError } from './replacementAccounts.js';
 
 const STATUSES = new Set(['running', 'succeeded', 'failed', 'stopped']);
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const DEFAULT_LOG_DIR = join(__dirname, '..', 'data', 'automation-logs');
 
-export function createReplacementAutomationRunRepository(db) {
+export function createReplacementAutomationRunRepository(db, { maxRuns = 30, logDir = DEFAULT_LOG_DIR } = {}) {
   return {
     createRun(input) {
       const accountId = Number(input?.account_id);
@@ -30,7 +36,9 @@ export function createReplacementAutomationRunRepository(db) {
         now,
       );
 
-      return this.getRun(result.lastInsertRowid);
+      const run = this.getRun(result.lastInsertRowid);
+      pruneRuns(db, { maxRuns, logDir });
+      return run;
     },
 
     listRuns({ limit = 100 } = {}) {
@@ -72,6 +80,28 @@ export function createReplacementAutomationRunRepository(db) {
       });
     },
   };
+}
+
+function pruneRuns(db, { maxRuns, logDir }) {
+  const normalizedMaxRuns = normalizeMaxRuns(maxRuns);
+  const runs = db.prepare(`
+    SELECT * FROM replacement_automation_runs
+    ORDER BY datetime(started_at) DESC, id DESC
+  `).all();
+  const deleteCandidates = runs
+    .slice(normalizedMaxRuns)
+    .filter((run) => run.status !== 'running');
+  if (!deleteCandidates.length) return;
+
+  const deleteRun = db.prepare(`
+    DELETE FROM replacement_automation_runs
+    WHERE id = ?
+  `);
+  const transaction = db.transaction((candidates) => {
+    candidates.forEach((run) => deleteRun.run(run.id));
+  });
+  transaction(deleteCandidates);
+  deleteCandidates.forEach((run) => deleteLogFile(run.log_path, logDir));
 }
 
 function finishRun(db, id, { status, exitCode, errorMessage }) {
@@ -126,7 +156,29 @@ function normalizeLimit(value) {
   return Math.min(limit, 500);
 }
 
+function normalizeMaxRuns(value) {
+  const maxRuns = Number(value);
+  return Number.isInteger(maxRuns) && maxRuns > 0 ? maxRuns : 30;
+}
+
 function normalizeErrorMessage(value) {
   const normalized = String(value || '').trim();
   return normalized || 'Unknown error';
+}
+
+function deleteLogFile(logPath, logDir) {
+  const normalizedLogPath = String(logPath || '').trim();
+  if (!normalizedLogPath) return;
+  if (logDir && !isPathInside(normalizedLogPath, logDir)) return;
+  try {
+    unlinkSync(normalizedLogPath);
+  } catch {
+    // Missing or locked log files should not block database cleanup.
+  }
+}
+
+function isPathInside(filePath, rootDir) {
+  const root = resolve(rootDir);
+  const target = resolve(filePath);
+  return target === root || target.startsWith(`${root}${sep}`);
 }

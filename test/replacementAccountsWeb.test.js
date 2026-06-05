@@ -175,6 +175,22 @@ test('replacement account table fully displays required runtime fields', () => {
   assert.match(css, /table\s*{[^}]*min-width:\s*2[0-9]{3}px/s);
 });
 
+test('replacement account frontend exposes real pagination controls and query params', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+  const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');
+
+  for (const id of ['pageSizeSelect', 'prevPageButton', 'nextPageButton', 'pageText']) {
+    assert.match(html, new RegExp(`id="${id}"`));
+    assert.match(appJs, new RegExp(`#${id}`));
+  }
+
+  assert.match(appJs, /URLSearchParams/);
+  assert.match(appJs, /page/);
+  assert.match(appJs, /pageSize/);
+  assert.match(appJs, /keyword/);
+  assert.match(appJs, /status/);
+});
+
 test('automation log frontend calls run APIs and exposes stop action', () => {
   const appJs = readFileSync(join(process.cwd(), 'web', 'automation-logs.js'), 'utf8');
   const html = readFileSync(join(process.cwd(), 'web', 'automation-logs.html'), 'utf8');

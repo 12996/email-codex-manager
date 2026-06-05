@@ -1,6 +1,6 @@
 # CHG-031 Roxy OAuth 添加手机号页处理
 
-状态：implemented
+状态：merged
 创建日期：2026-06-04
 关联 PRD：PRD-002
 关联 Issue：
@@ -34,3 +34,9 @@
 - `npm test -- test/replacementServices.test.js`
 - `node --test src\auto\roxy_oauth_steps_manual_test.js`
 - 实机：`phone-add-page` 返回 `true`，`phone-add-submit` 返回 `phone-add-submitted`，提交后 `phone-code-page` 返回 `true`。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-05
+- 备注：已合并到 OpenAI/Codex OAuth 自动化添加手机号页、补号子进程手机号注入和邮箱验证码阶段状态守卫要求。

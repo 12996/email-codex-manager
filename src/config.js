@@ -15,6 +15,11 @@ export function normalizeCpaConfig(env = process.env) {
   };
 }
 
+export function normalizeAutomationLogMaxRuns(env = process.env) {
+  const value = Number(env.REPLACEMENT_AUTOMATION_LOG_MAX_RUNS || 30);
+  return Number.isInteger(value) && value > 0 ? value : 30;
+}
+
 export const config = {
   adminPassword: process.env.ADMIN_PASSWORD || 'change-me',
   sessionSecret: process.env.SESSION_SECRET || 'change-me-session-secret',
@@ -26,5 +31,6 @@ export const config = {
   },
   mailFetchLimit: Number(process.env.MAIL_FETCH_LIMIT || 5),
   defaultReadLocation: process.env.DEFAULT_READ_LOCATION || 'inbox',
+  replacementAutomationLogMaxRuns: normalizeAutomationLogMaxRuns(),
   cpa: normalizeCpaConfig(),
 };

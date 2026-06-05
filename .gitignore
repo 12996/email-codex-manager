@@ -36,6 +36,8 @@ Thumbs.db
 
 # Generated/exported HTML files
 *.html
+!web/accounts.html
+!web/index.html
 !web/automation-logs.html
 
 # Generated/exported image files

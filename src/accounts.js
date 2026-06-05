@@ -43,6 +43,24 @@ export function createAccountRepository(db) {
       `).all();
     },
 
+    listAccountsPage(options = {}) {
+      const query = normalizeListQuery(options);
+      const { whereSql, params } = buildAccountListWhere(query);
+      const total = db.prepare(`
+        SELECT COUNT(*) AS total FROM email_accounts
+        ${whereSql}
+      `).get(...params).total;
+      const pagination = buildPagination(total, query);
+      const accounts = db.prepare(`
+        SELECT * FROM email_accounts
+        ${whereSql}
+        ORDER BY id DESC
+        LIMIT ? OFFSET ?
+      `).all(...params, pagination.pageSize, (pagination.page - 1) * pagination.pageSize);
+
+      return { accounts, pagination };
+    },
+
     getAccount(id) {
       return db.prepare(`
         SELECT * FROM email_accounts
@@ -129,4 +147,53 @@ function validateRequiredFields(input) {
 function normalizeOptional(value) {
   const normalized = String(value || '').trim();
   return normalized || null;
+}
+
+function normalizeListQuery(options) {
+  return {
+    page: normalizePositiveInteger(options?.page, 1, Number.MAX_SAFE_INTEGER),
+    pageSize: normalizePositiveInteger(options?.pageSize, 10, 100),
+    status: normalizeOptional(options?.status),
+    keyword: normalizeOptional(options?.keyword)?.toLowerCase() || null,
+  };
+}
+
+function normalizePositiveInteger(value, defaultValue, maxValue) {
+  const number = Number(value);
+  if (!Number.isInteger(number) || number <= 0) return defaultValue;
+  return Math.min(number, maxValue);
+}
+
+function buildAccountListWhere(query) {
+  const filters = [];
+  const params = [];
+  if (query.status) {
+    filters.push('status = ?');
+    params.push(query.status);
+  }
+  if (query.keyword) {
+    filters.push(`(
+      lower(coalesce(gmail_email, '')) LIKE ?
+      OR lower(coalesce(display_name, '')) LIKE ?
+      OR lower(coalesce(status, '')) LIKE ?
+      OR lower(coalesce(last_error, '')) LIKE ?
+    )`);
+    const keyword = `%${query.keyword}%`;
+    params.push(keyword, keyword, keyword, keyword);
+  }
+
+  return {
+    whereSql: filters.length ? `WHERE ${filters.join(' AND ')}` : '',
+    params,
+  };
+}
+
+function buildPagination(total, query) {
+  const totalPages = Math.max(1, Math.ceil(total / query.pageSize));
+  return {
+    page: Math.min(query.page, totalPages),
+    pageSize: query.pageSize,
+    total,
+    totalPages,
+  };
 }

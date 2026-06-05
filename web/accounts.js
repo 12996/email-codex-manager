@@ -4,6 +4,12 @@ const state = {
   selectedId: null,
   activity: [],
   fetchedMessages: [],
+  pagination: {
+    page: 1,
+    pageSize: 10,
+    total: 0,
+    totalPages: 1,
+  },
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -14,10 +20,25 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function bindEvents() {
-  $('#statusFilter').addEventListener('change', renderAccounts);
-  $('#searchInput').addEventListener('input', renderAccounts);
-  $('#filterButton').addEventListener('click', renderAccounts);
+  $('#statusFilter').addEventListener('change', resetAndLoadAccounts);
+  $('#searchInput').addEventListener('input', resetAndLoadAccounts);
+  $('#filterButton').addEventListener('click', resetAndLoadAccounts);
   $('#refreshButton').addEventListener('click', loadAccounts);
+  $('#pageSizeSelect').addEventListener('change', () => {
+    state.pagination.page = 1;
+    state.pagination.pageSize = Number($('#pageSizeSelect').value || 10);
+    loadAccounts();
+  });
+  $('#prevPageButton').addEventListener('click', () => {
+    if (state.pagination.page <= 1) return;
+    state.pagination.page -= 1;
+    loadAccounts();
+  });
+  $('#nextPageButton').addEventListener('click', () => {
+    if (state.pagination.page >= state.pagination.totalPages) return;
+    state.pagination.page += 1;
+    loadAccounts();
+  });
   $('#newAccountButton').addEventListener('click', () => openAccountDialog());
   $('#newAccountToolbarButton').addEventListener('click', () => openAccountDialog());
   $('#accountForm').addEventListener('submit', saveAccount);
@@ -36,31 +57,51 @@ function bindEvents() {
 
 async function loadAccounts() {
   try {
-    const body = await api('/api/accounts');
+    const body = await api(`/api/accounts?${accountListQuery()}`);
     state.accounts = body.accounts || [];
+    state.pagination = {
+      ...state.pagination,
+      ...(body.pagination || {}),
+    };
     renderAccounts();
   } catch (error) {
     toast(error.message);
   }
 }
 
-function renderAccounts() {
-  const status = $('#statusFilter').value;
-  const keyword = $('#searchInput').value.trim().toLowerCase();
-  state.filtered = state.accounts.filter((account) => {
-    const matchesStatus = !status || account.status === status;
-    const haystack = [account.gmail_email, account.display_name, account.status, account.last_error]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    return matchesStatus && (!keyword || haystack.includes(keyword));
+function resetAndLoadAccounts() {
+  state.pagination.page = 1;
+  loadAccounts();
+}
+
+function accountListQuery() {
+  const params = new URLSearchParams({
+    page: String(state.pagination.page),
+    pageSize: String(state.pagination.pageSize),
   });
+  const status = $('#statusFilter').value;
+  const keyword = $('#searchInput').value.trim();
+  if (status) params.set('status', status);
+  if (keyword) params.set('keyword', keyword);
+  return params.toString();
+}
+
+function renderAccounts() {
+  state.filtered = state.accounts;
 
   $('#accountsBody').innerHTML = state.filtered.map(accountRow).join('');
-  $('#totalText').textContent = `共 ${state.filtered.length} 条`;
+  $('#totalText').textContent = `共 ${state.pagination.total} 条`;
+  renderPager();
   bindRowEvents();
   renderStats();
   renderActivity();
+}
+
+function renderPager() {
+  $('#pageSizeSelect').value = String(state.pagination.pageSize);
+  $('#pageText').textContent = `第 ${state.pagination.page} / ${state.pagination.totalPages} 页`;
+  $('#prevPageButton').disabled = state.pagination.page <= 1;
+  $('#nextPageButton').disabled = state.pagination.page >= state.pagination.totalPages;
 }
 
 function accountRow(account) {
@@ -275,7 +316,7 @@ function runQuickAction(action) {
 }
 
 function renderStats() {
-  const total = state.accounts.length;
+  const total = state.pagination.total;
   const active = state.accounts.filter((account) => account.status === 'active').length;
   const fetched = state.accounts.filter((account) => account.last_fetch_status === 'success').length;
   const errors = state.accounts.filter((account) => ['auth_failed', 'error'].includes(account.status)).length;

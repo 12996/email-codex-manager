@@ -31,7 +31,9 @@ export function createApp({
   db = createDatabase(config.databasePath),
   accounts = createAccountRepository(db),
   replacementAccounts = createReplacementAccountRepository(db),
-  replacementAutomationRuns = createReplacementAutomationRunRepository(db),
+  replacementAutomationRuns = createReplacementAutomationRunRepository(db, {
+    maxRuns: config.replacementAutomationLogMaxRuns,
+  }),
   replacementServices = createReplacementServices({ automationRuns: replacementAutomationRuns }),
   mailService = { fetchMessages, testConnection },
   cpaCredentialMonitor = null,
@@ -126,7 +128,13 @@ export function createApp({
   });
 
   app.get('/api/accounts', requireAuth, (req, res) => {
-    res.json({ ok: true, accounts: accounts.listAccounts() });
+    const page = accounts.listAccountsPage({
+      page: req.query?.page,
+      pageSize: req.query?.pageSize,
+      status: req.query?.status,
+      keyword: req.query?.keyword,
+    });
+    res.json({ ok: true, ...page });
   });
 
   app.get('/api/accounts/:id', requireAuth, (req, res) => {
@@ -208,7 +216,13 @@ export function createApp({
   });
 
   app.get('/replacement-accounts', requireAuth, (req, res) => {
-    res.json({ ok: true, accounts: replacementAccounts.listAccounts() });
+    const page = replacementAccounts.listAccountsPage({
+      page: req.query?.page,
+      pageSize: req.query?.pageSize,
+      status: req.query?.status,
+      keyword: req.query?.keyword,
+    });
+    res.json({ ok: true, ...page });
   });
 
   app.get('/replacement-accounts/:id', requireAuth, (req, res) => {
@@ -621,7 +635,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3000);
   const db = createDatabase(config.databasePath);
   const replacementAccounts = createReplacementAccountRepository(db);
-  const replacementAutomationRuns = createReplacementAutomationRunRepository(db);
+  const replacementAutomationRuns = createReplacementAutomationRunRepository(db, {
+    maxRuns: config.replacementAutomationLogMaxRuns,
+  });
   const replacementServices = createReplacementServices({ automationRuns: replacementAutomationRuns });
   const cpaClient = createCpaClient(config.cpa);
   const cpaRepairWorker = createCpaRepairWorker({

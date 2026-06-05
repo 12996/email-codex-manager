@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeCpaConfig } from '../src/config.js';
+import { normalizeAutomationLogMaxRuns, normalizeCpaConfig } from '../src/config.js';
 
 test('normalizeCpaConfig builds auth-files URL and interval defaults', () => {
   const result = normalizeCpaConfig({
@@ -27,4 +27,11 @@ test('normalizeCpaConfig accepts CPA_URL that already points at management base'
   assert.equal(result.authFilesUrl, 'http://localhost:8317/v0/management/auth-files');
   assert.equal(result.monitorEnabled, true);
   assert.equal(result.monitorIntervalMs, 60000);
+});
+
+test('normalizeAutomationLogMaxRuns defaults to 30 and accepts positive integers', () => {
+  assert.equal(normalizeAutomationLogMaxRuns({}), 30);
+  assert.equal(normalizeAutomationLogMaxRuns({ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS: '10' }), 10);
+  assert.equal(normalizeAutomationLogMaxRuns({ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS: '0' }), 30);
+  assert.equal(normalizeAutomationLogMaxRuns({ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS: 'abc' }), 30);
 });

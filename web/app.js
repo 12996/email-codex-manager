@@ -3,6 +3,12 @@ const state = {
   filtered: [],
   selectedIds: new Set(),
   activity: [],
+  pagination: {
+    page: 1,
+    pageSize: 10,
+    total: 0,
+    totalPages: 1,
+  },
 };
 
 const statusLabels = {
@@ -22,10 +28,25 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function bindEvents() {
-  $('#statusFilter').addEventListener('change', renderAccounts);
-  $('#searchInput').addEventListener('input', renderAccounts);
-  $('#filterButton').addEventListener('click', renderAccounts);
+  $('#statusFilter').addEventListener('change', resetAndLoadAccounts);
+  $('#searchInput').addEventListener('input', resetAndLoadAccounts);
+  $('#filterButton').addEventListener('click', resetAndLoadAccounts);
   $('#selectAll').addEventListener('change', toggleAll);
+  $('#pageSizeSelect').addEventListener('change', () => {
+    state.pagination.page = 1;
+    state.pagination.pageSize = Number($('#pageSizeSelect').value || 10);
+    loadAccounts();
+  });
+  $('#prevPageButton').addEventListener('click', () => {
+    if (state.pagination.page <= 1) return;
+    state.pagination.page -= 1;
+    loadAccounts();
+  });
+  $('#nextPageButton').addEventListener('click', () => {
+    if (state.pagination.page >= state.pagination.totalPages) return;
+    state.pagination.page += 1;
+    loadAccounts();
+  });
   $('#batchReplaceButton').addEventListener('click', batchReplace);
   $('#newAccountButton').addEventListener('click', () => openAccountDialog());
   $('#newAccountTopButton').addEventListener('click', () => openAccountDialog());
@@ -46,8 +67,12 @@ function bindEvents() {
 
 async function loadAccounts() {
   try {
-    const body = await api('/replacement-accounts');
+    const body = await api(`/replacement-accounts?${accountListQuery()}`);
     state.accounts = body.accounts || [];
+    state.pagination = {
+      ...state.pagination,
+      ...(body.pagination || {}),
+    };
     renderAccounts();
     toast('列表已刷新');
   } catch (error) {
@@ -55,23 +80,39 @@ async function loadAccounts() {
   }
 }
 
-function renderAccounts() {
-  const status = $('#statusFilter').value;
-  const keyword = $('#searchInput').value.trim().toLowerCase();
-  state.filtered = state.accounts.filter((account) => {
-    const matchesStatus = !status || account.status === status;
-    const haystack = [account.email, account.phone, account.remark, account.status]
-      .filter(Boolean)
-      .join(' ')
-      .toLowerCase();
-    return matchesStatus && (!keyword || haystack.includes(keyword));
+function resetAndLoadAccounts() {
+  state.pagination.page = 1;
+  loadAccounts();
+}
+
+function accountListQuery() {
+  const params = new URLSearchParams({
+    page: String(state.pagination.page),
+    pageSize: String(state.pagination.pageSize),
   });
+  const status = $('#statusFilter').value;
+  const keyword = $('#searchInput').value.trim();
+  if (status) params.set('status', status);
+  if (keyword) params.set('keyword', keyword);
+  return params.toString();
+}
+
+function renderAccounts() {
+  state.filtered = state.accounts;
 
   $('#accountsBody').innerHTML = state.filtered.map(accountRow).join('');
-  $('#totalText').textContent = `共 ${state.filtered.length} 条`;
+  $('#totalText').textContent = `共 ${state.pagination.total} 条`;
+  renderPager();
   bindRowEvents();
   renderStats();
   renderActivity();
+}
+
+function renderPager() {
+  $('#pageSizeSelect').value = String(state.pagination.pageSize);
+  $('#pageText').textContent = `第 ${state.pagination.page} / ${state.pagination.totalPages} 页`;
+  $('#prevPageButton').disabled = state.pagination.page <= 1;
+  $('#nextPageButton').disabled = state.pagination.page >= state.pagination.totalPages;
 }
 
 function accountRow(account) {
@@ -359,7 +400,7 @@ function toggleAll(event) {
 
 function renderStats() {
   const counts = countByStatus(state.accounts);
-  $('#statTotal').textContent = state.accounts.length;
+  $('#statTotal').textContent = state.pagination.total;
   $('#statActive').textContent = counts.active || 0;
   $('#statBanned').textContent = counts.banned || 0;
   $('#statReplaced').textContent = state.accounts.reduce((sum, account) => sum + Number(account.replacement_count || 0), 0);

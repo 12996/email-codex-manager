@@ -42,3 +42,7 @@
 | 2026-06-05 | Roxy OAuth callback CDP fallback | done | `2026-06-05-roxy-callback-cdp-fallback.md` |
 | 2026-06-05 | Roxy 手机验证码后跳转竞态修复 | done | `2026-06-05-roxy-phone-code-transition-race.md` |
 | 2026-06-05 | Roxy token exchange 浏览器上下文重试 | done | `2026-06-05-roxy-token-page-context-retry.md` |
+| 2026-06-05 | 自动化运行日志最大保留数量 | done | `2026-06-05-automation-log-retention-limit.md` |
+| 2026-06-05 | 邮箱邮件详情弹窗修复 | done | `2026-06-05-email-mail-detail-dialog.md` |
+| 2026-06-05 | 账号列表服务端分页 | done | `2026-06-05-account-list-pagination.md` |
+| 2026-06-05 | PRD-002 change 基线合并 | done | `2026-06-05-prd-002-change-merge.md` |
