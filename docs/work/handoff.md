@@ -2,6 +2,27 @@
 
 状态：active
 
+## 2026-06-06 Roxy OAuth 密码页 one-time code 与邮箱后异常重试
+
+- 来源工作日志：`docs/work/2026-06-06-roxy-openai-password-one-time-code.md`
+- 新增 issue：`docs/issues/issue-008-roxy-openai-password-email-code-misclassification.md`，状态 `resolved`。
+- 新增 change：`docs/changes/CHG-040-roxy-openai-password-one-time-code.md`，状态 `implemented`，待后续合并 PRD。
+- 当前进展：已用当前 Roxy CDP 启动 Playwright recorder，录制确认 OpenAI 密码页需要点击 `Log in with a one-time code`。`roxy_oauth_login.js` 已新增密码页判断和 one-time code 操作；邮箱提交后会识别 `openai-password`、`email-code`、`codex-login`、`callback` 或 `unknown`。进入密码页时点击 one-time code 并继续状态机；进入未知页时会回到本次 OAuth target URL 重试，默认最多 3 次，耗尽后抛出 `OPENAI_POST_EMAIL_STAGE_RETRY_EXHAUSTED`。
+- 二次修复：密码页 readonly `Email address` 输入框不再被误判为邮箱登录页；one-time code 后等待阶段会忽略当前 password 页，避免页面短暂停留时记录 `next=openai-password` 并回到邮箱登录分支。
+- 复盘：`issue-002` / `issue-004` 已经记录过“提交后不能把当前阶段当下一阶段”的问题；本次新增 password 阶段时没有沿用该通用规则，导致同类问题复发。后续新增 Roxy OAuth 阶段必须同步补“忽略当前阶段”和“相邻页误判负例”测试。
+- 新增日志：邮箱提交后 next stage、密码页识别、one-time code 后 next stage、异常页面重试次数和重试耗尽。
+- 验证：`node --check .\src\auto\roxy_oauth_login.js` 通过；`node --test .\test\roxyOauthLogin.test.js` 通过，68/68 pass。当前 Roxy 页 `https://auth.openai.com/email-verification` 下，手动验证 `openai-page=false`、`email-code-page=true`。
+- 当前提醒：`CHANGE_REGISTRY.md` 中未合并的 `implemented` change 为 `CHG-038`、`CHG-039`、`CHG-040`，未达到 5 个 PRD 基线合并提醒阈值。
+
+## 2026-06-06 Windows 3000 端口 EACCES 修复
+
+- 来源工作日志：`docs/work/2026-06-06-port-3100-eacces.md`
+- 新增 issue：`docs/issues/issue-007-windows-port-3000-eacces.md`，状态 `resolved`。
+- 新增 change：`docs/changes/CHG-039-avoid-windows-port-3000-eacces.md`，状态 `implemented`，待后续合并 PRD。
+- 当前进展：已确认 `3000` 未被占用，而是 Windows TCP 排除端口范围包含 `2987-3086` 导致监听 `0.0.0.0:3000` 报 `EACCES`。本机 `.env` 已改为 `PORT=3100`，`VERIFICATION_CODE_API_URL` 留空时自动化会按 `PORT` 推导验证码 API URL；示例配置、自动化默认值、测试和文档已同步。
+- 验证：`npm start` 启动后 `GET http://127.0.0.1:3100/login` 返回 200；`node --test test\roxyOauthLogin.test.js test\roxyRegisterOpenai.test.js` 通过，60/60 pass。
+- 当前提醒：`CHANGE_REGISTRY.md` 中未合并的 `implemented` change 为 `CHG-038`、`CHG-039`，未达到 5 个 PRD 基线合并提醒阈值。
+
 ## 2026-06-05 前端列表取消局部竖向滚动并显示补号备注
 
 - 来源工作日志：`docs/work/2026-06-05-frontend-list-remark-no-inner-scroll.md`

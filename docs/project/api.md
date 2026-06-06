@@ -7,7 +7,7 @@
 默认地址：
 
 ```text
-http://localhost:3000
+http://localhost:3100
 ```
 
 认证方式：
@@ -70,7 +70,7 @@ password  必填，后台密码，对应 .env 里的 ADMIN_PASSWORD
 
 ```powershell
 Invoke-WebRequest `
-  -Uri "http://localhost:3000/login" `
+  -Uri "http://localhost:3100/login" `
   -Method Post `
   -Body @{ password = "admin" } `
   -SessionVariable session
@@ -285,7 +285,7 @@ gmail_email + gmail_app_password
 
 ```powershell
 Invoke-WebRequest `
-  -Uri "http://localhost:3000/accounts" `
+  -Uri "http://localhost:3100/accounts" `
   -Method Post `
   -WebSession $session `
   -Body @{
@@ -453,7 +453,7 @@ trash   垃圾箱，合并 [Gmail]/Spam 和 [Gmail]/Trash
 
 ```powershell
 Invoke-WebRequest `
-  -Uri "http://localhost:3000/accounts/1/fetch" `
+  -Uri "http://localhost:3100/accounts/1/fetch" `
   -Method Post `
   -WebSession $session `
   -Body @{
@@ -1015,7 +1015,7 @@ src/auto/roxy_oauth_login.js
 | Roxy 工作区 | `.env` / 运行配置 | `ROXY_WORKSPACE_ID`，不来自补号表。 |
 | Roxy 窗口定位 | `.env` / 运行配置 | `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者至少配置一种；不来自补号表。 |
 | 复用 CDP | `.env` / 运行配置 | `ROXY_CDP_ENDPOINT`；配置后脚本跳过 Roxy 准备流程并直接连接现有浏览器。 |
-| 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`，默认 `http://127.0.0.1:3000/api/verification-code/latest`。 |
+| 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`；留空时自动使用 `http://127.0.0.1:${PORT}/api/verification-code/latest`。 |
 | 后台 Cookie | `.env` / 运行配置 | `ADMIN_AUTH_COOKIE`；非本机调用邮箱验证码接口时使用。 |
 | 浏览器关闭/有头无头策略 | `.env` / 运行配置 | `ROXY_KEEP_OPEN`、`ROXY_HEADLESS`、`ROXY_ENSURE_CLOSED`。`ROXY_HEADLESS=auto` 时，`ROXY_KEEP_OPEN=1` 默认有头并保留窗口，`ROXY_KEEP_OPEN=0` 默认无头并关闭窗口。 |
 | 代理提示 | `.env` / 运行配置 | `ROXY_PROXY`；当前 token 请求阶段仅记录提示，浏览器代理由 Roxy 窗口自身配置决定。 |

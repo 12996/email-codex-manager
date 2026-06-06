@@ -58,14 +58,14 @@ test('registration email verification uses POST latest API and does not log code
   };
 
   const result = await fetchRegistrationEmailVerificationCodeOnce(page, 'user@example.com', {
-    verificationApiUrl: 'http://127.0.0.1:3000/api/verification-code/latest',
+    verificationApiUrl: 'http://127.0.0.1:3100/api/verification-code/latest',
     logger: { log: (message) => logs.push(message), warn: (message) => logs.push(message), error: (message) => logs.push(message) },
   }, 2, 12);
 
   assert.equal(result.code, '654321');
   assert.deepEqual(calls, [[
     'post',
-    'http://127.0.0.1:3000/api/verification-code/latest',
+    'http://127.0.0.1:3100/api/verification-code/latest',
     { data: { account: 'user@example.com' }, timeout: 30000 },
   ]]);
   assert.equal(logs.some((line) => String(line).includes('654321')), false);

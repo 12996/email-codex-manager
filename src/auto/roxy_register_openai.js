@@ -47,7 +47,23 @@ if (typeof chromium.use === 'function') {
     chromium.use(stealth);
 }
 
-const DEFAULT_VERIFICATION_API_URL = 'http://127.0.0.1:3000/api/verification-code/latest';
+function normalizeServicePort(env = process.env) {
+    const value = String(env.PORT || 3000).trim();
+    return /^\d+$/.test(value) ? value : '3000';
+}
+
+function buildDefaultVerificationApiUrl(env = process.env) {
+    return `http://127.0.0.1:${normalizeServicePort(env)}/api/verification-code/latest`;
+}
+
+const DEFAULT_VERIFICATION_API_URL = buildDefaultVerificationApiUrl();
+
+function resolveVerificationApiUrl(options = {}, env = process.env) {
+    return options.verificationApiUrl
+        || env.VERIFICATION_CODE_API_URL
+        || buildDefaultVerificationApiUrl(env);
+}
+
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 30000;
 const OPENAI_REGISTRATION_ENTRY_URL = process.env.OPENAI_REGISTRATION_ENTRY_URL || 'https://chatgpt.com/';
 
@@ -503,9 +519,7 @@ const OTP_RETRY_EXCEEDED_ERROR = `验证码重试超过 ${MAX_OTP_RETRIES} 次�
 const OTP_REFETCH_AFTER_RECOVERY = 'OTP_REFETCH_AFTER_RECOVERY';
 
 async function fetchRegistrationEmailVerificationCodeOnce(page, email, options = {}, attempt = 1, maxAttempts = 1) {
-    const verificationApiUrl = options.verificationApiUrl
-        || process.env.VERIFICATION_CODE_API_URL
-        || DEFAULT_VERIFICATION_API_URL;
+    const verificationApiUrl = resolveVerificationApiUrl(options);
     const timeout = Number(options.timeoutMs || DEFAULT_VERIFICATION_TIMEOUT_MS);
     const request = options.request || page?.request || (typeof page?.context === 'function' ? page.context().request : null);
 
@@ -1105,7 +1119,7 @@ async function submitOtpWithRetry(page, email, maxAttempts = MAX_OTP_RETRIES, op
                 maxRetries: pollOpts.maxRetries,
                 codePollMaxAttempts: pollOpts.maxRetries,
                 codePollIntervalMs: Number(process.env.VERIFICATION_CODE_POLL_INTERVAL_MS || 5000),
-                verificationApiUrl: process.env.VERIFICATION_CODE_API_URL || DEFAULT_VERIFICATION_API_URL,
+                verificationApiUrl: resolveVerificationApiUrl(),
                 timeoutMs: Number(process.env.REGISTRATION_CODE_REQUEST_TIMEOUT_MS || DEFAULT_VERIFICATION_TIMEOUT_MS),
                 logger: console
             }, lastCode);
@@ -1640,7 +1654,7 @@ async function runRegistrationFlow() {
             maxRetries: pollOpts.maxRetries,
             codePollMaxAttempts: pollOpts.maxRetries,
             codePollIntervalMs: Number(process.env.VERIFICATION_CODE_POLL_INTERVAL_MS || 5000),
-            verificationApiUrl: process.env.VERIFICATION_CODE_API_URL || DEFAULT_VERIFICATION_API_URL,
+            verificationApiUrl: resolveVerificationApiUrl(),
             timeoutMs: Number(process.env.REGISTRATION_CODE_REQUEST_TIMEOUT_MS || DEFAULT_VERIFICATION_TIMEOUT_MS),
             logger: console
         }, excludeCode);
@@ -1910,6 +1924,7 @@ if (require.main === module) {
 
 module.exports = {
     DEFAULT_VERIFICATION_API_URL,
+    buildDefaultVerificationApiUrl,
     fetchRegistrationEmailVerificationCodeOnce,
     fetchRegistrationEmailVerificationCode,
     runRegistrationFlow

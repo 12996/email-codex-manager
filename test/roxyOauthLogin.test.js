@@ -203,11 +203,84 @@ function createOpenAiLoginPageHarness({ subtitleText = 'user@example.com', email
   return { page, calls };
 }
 
+function createOpenAiPasswordPageHarness(bodyText = 'Enter your password Password Continue Log in with a one-time code') {
+  const calls = [];
+  let currentUrl = 'https://auth.openai.com/log-in/password';
+  const passwordInput = {
+    async isVisible() { calls.push(['password.isVisible']); return bodyText.includes('Password'); },
+  };
+  const oneTimeCodeButton = {
+    async isVisible() { calls.push(['oneTimeCode.isVisible']); return bodyText.includes('Log in with a one-time code'); },
+    async click(options) {
+      calls.push(['oneTimeCode.click', options]);
+      currentUrl = 'https://auth.openai.com/email-verification';
+    },
+  };
+  const bodyLocator = {
+    async textContent() {
+      calls.push(['body.textContent']);
+      return bodyText;
+    },
+  };
+  const page = {
+    getByRole(role, options = {}) {
+      calls.push(['getByRole', role, options]);
+      if (role === 'textbox' && options.name === 'Password') return passwordInput;
+      if (role === 'button' && options.name === 'Log in with a one-time code') return oneTimeCodeButton;
+      return { async isVisible() { return false; } };
+    },
+    locator(selector) {
+      calls.push(['locator', selector]);
+      return bodyLocator;
+    },
+    url() {
+      return currentUrl;
+    },
+    async title() {
+      return 'Enter your password - OpenAI';
+    },
+    async textContent(selector) {
+      calls.push(['textContent', selector]);
+      return bodyText;
+    },
+    async waitForTimeout(ms) {
+      calls.push(['waitForTimeout', ms]);
+    },
+  };
+  return { page, calls };
+}
+
 test('is_openai_login_page detects the OpenAI email input screen', async () => {
   const { is_openai_login_page } = require('../src/auto/roxy_oauth_login.js');
   const { page } = createOpenAiLoginPageHarness({ emailVisible: true });
 
   assert.equal(await is_openai_login_page(page, { timeoutMs: 100 }), true);
+});
+
+test('is_openai_login_page ignores readonly email field on the password screen', async () => {
+  const { is_openai_login_page } = require('../src/auto/roxy_oauth_login.js');
+  const page = {
+    getByRole(role, options = {}) {
+      if (role === 'textbox' && options.name === 'Email address') {
+        return {
+          async isVisible() { return true; },
+        };
+      }
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return {
+        async textContent() {
+          return 'Enter your password Email address Password Continue Log in with a one-time code';
+        },
+      };
+    },
+    url: () => 'https://auth.openai.com/log-in/password',
+    title: async () => 'Enter your password - OpenAI',
+    textContent: async () => 'Enter your password Email address Password Continue Log in with a one-time code',
+  };
+
+  assert.equal(await is_openai_login_page(page, { timeoutMs: 100 }), false);
 });
 
 test('openAi_login fills email, clicks Continue, then waits for email verification page', async () => {
@@ -222,10 +295,7 @@ test('openAi_login fills email, clicks Continue, then waits for email verificati
   assert.equal(result.email, 'smiro4099+s1@gmail.com');
   assert.equal(result.nextStatus, 'email-verification-page');
   assert.equal(result.url, 'https://auth.openai.com/email-verification');
-  assert.deepEqual(calls.slice(0, 6), [
-    ['getByRole', 'textbox', { name: 'Email address' }],
-    ['email.isVisible'],
-    ['getByRole', 'textbox', { name: 'Email address' }],
+  assert.deepEqual(calls.filter((call) => ['email.waitFor', 'email.click', 'email.fill'].includes(call[0])), [
     ['email.waitFor', { state: 'visible', timeout: 100 }],
     ['email.click'],
     ['email.fill', 'smiro4099+s1@gmail.com'],
@@ -233,6 +303,194 @@ test('openAi_login fills email, clicks Continue, then waits for email verificati
   assert.deepEqual(calls.filter((call) => call[0] === 'continue.click'), [
     ['continue.click', { timeout: 100 }],
   ]);
+});
+
+test('is_openai_password_page detects the OpenAI password screen', async () => {
+  const { is_openai_password_page } = require('../src/auto/roxy_oauth_login.js');
+  const { page } = createOpenAiPasswordPageHarness();
+
+  assert.equal(await is_openai_password_page(page, { timeoutMs: 100 }), true);
+});
+
+test('openAi_password_one_time_code clicks one-time code and waits for email verification page', async () => {
+  const { openAi_password_one_time_code } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPasswordPageHarness();
+
+  const result = await openAi_password_one_time_code(page, { timeoutMs: 100 });
+
+  assert.deepEqual(result, {
+    status: 'one-time-code-requested',
+    nextStage: 'email-code',
+    nextStatus: 'email-verification-page',
+    url: 'https://auth.openai.com/email-verification',
+  });
+  assert.deepEqual(calls.filter((call) => call[0] === 'oneTimeCode.click'), [
+    ['oneTimeCode.click', { timeout: 100 }],
+  ]);
+});
+
+test('openAi_password_one_time_code ignores the current password page while waiting for the next stage', async () => {
+  const { openAi_password_one_time_code } = require('../src/auto/roxy_oauth_login.js');
+  let stage = 'password';
+  let currentUrl = 'https://auth.openai.com/log-in/password';
+  let waitCount = 0;
+
+  const bodyText = () => stage === 'email-code'
+    ? 'Check your inbox Enter the verification code we just sent. Code Continue'
+    : 'Enter your password Password Continue Log in with a one-time code';
+  const page = {
+    getByRole(role, options = {}) {
+      if (role === 'textbox' && options.name === 'Password') {
+        return { async isVisible() { return stage === 'password'; } };
+      }
+      if (role === 'textbox' && options.name === 'Code') {
+        return { async isVisible() { return stage === 'email-code'; } };
+      }
+      if (role === 'button' && options.name === 'Log in with a one-time code') {
+        return {
+          async isVisible() { return stage === 'password'; },
+          async click() {},
+        };
+      }
+      return { async isVisible() { return stage === 'email-code'; } };
+    },
+    locator() {
+      return { async textContent() { return bodyText(); } };
+    },
+    url: () => currentUrl,
+    title: async () => 'OAuth',
+    textContent: async () => bodyText(),
+    async waitForTimeout() {
+      waitCount += 1;
+      if (waitCount === 1) {
+        stage = 'email-code';
+        currentUrl = 'https://auth.openai.com/email-verification';
+      }
+    },
+  };
+
+  const result = await openAi_password_one_time_code(page, {
+    timeoutMs: 100,
+    postEmailStageTimeoutMs: 100,
+  });
+
+  assert.equal(result.nextStage, 'email-code');
+  assert.equal(result.url, 'https://auth.openai.com/email-verification');
+});
+
+test('openAi_password_one_time_code returns codex-login when one-time code lands on Codex consent', async () => {
+  const { openAi_password_one_time_code } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  const messages = [];
+  let stage = 'password';
+  let currentUrl = 'https://auth.openai.com/log-in/password';
+
+  const bodyText = () => stage === 'codex'
+    ? 'Sign in to Codex with ChatGPT. Codex will not receive your chat history. Continue'
+    : 'Enter your password Password Continue Log in with a one-time code';
+
+  const page = {
+    getByRole(role, options = {}) {
+      calls.push(['getByRole', role, options, stage]);
+      if (role === 'textbox' && options.name === 'Password') {
+        return { async isVisible() { return stage === 'password'; } };
+      }
+      return {
+        async isVisible() { return stage === 'password' || stage === 'codex'; },
+        async click(clickOptions) {
+          calls.push(['button.click', options.name, clickOptions, stage]);
+          if (stage === 'password' && options.name === 'Log in with a one-time code') {
+            stage = 'codex';
+            currentUrl = 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent';
+          }
+        },
+      };
+    },
+    locator() {
+      return { async textContent() { return bodyText(); } };
+    },
+    url: () => currentUrl,
+    title: async () => 'OAuth',
+    textContent: async () => bodyText(),
+    waitForTimeout: async () => {},
+  };
+
+  const result = await openAi_password_one_time_code(page, {
+    timeoutMs: 100,
+    logger: {
+      log: (message) => messages.push(String(message)),
+      warn: (message) => messages.push(String(message)),
+      error: (message) => messages.push(String(message)),
+    },
+  });
+
+  assert.deepEqual(result, {
+    status: 'one-time-code-requested',
+    nextStage: 'codex-login',
+    nextStatus: 'codex-login',
+    url: 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent',
+  });
+  assert.deepEqual(calls.filter((call) => call[0] === 'button.click'), [
+    ['button.click', 'Log in with a one-time code', { timeout: 100 }, 'password'],
+  ]);
+  assert.match(messages.join('\n'), /phase=openai-password action=one-time code 登录入口提交完成 next=codex-login/);
+});
+
+test('openAi_login returns openai-password when email submit lands on password page', async () => {
+  const { openAi_login } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  let stage = 'email-login';
+  let currentUrl = 'https://auth.openai.com/log-in';
+
+  const page = {
+    getByRole(role, options = {}) {
+      calls.push(['getByRole', role, options, stage]);
+      if (role === 'textbox' && options.name === 'Email address') {
+        return {
+          async isVisible() { return stage === 'email-login'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['email.fill', value]); },
+        };
+      }
+      if (role === 'textbox' && options.name === 'Password') {
+        return { async isVisible() { return stage === 'password'; } };
+      }
+      return {
+        async isVisible() {
+          return stage === 'email-login' || stage === 'password';
+        },
+        async click() {
+          calls.push(['button.click', options.name, stage]);
+          if (stage === 'email-login') {
+            stage = 'password';
+            currentUrl = 'https://auth.openai.com/log-in/password';
+          }
+        },
+      };
+    },
+    locator() {
+      return {
+        async textContent() {
+          return stage === 'password'
+            ? 'Enter your password Password Continue Log in with a one-time code'
+            : 'Welcome back';
+        },
+      };
+    },
+    url: () => currentUrl,
+    title: async () => 'OpenAI',
+    textContent: async () => stage === 'password'
+      ? 'Enter your password Password Continue Log in with a one-time code'
+      : 'Welcome back',
+    waitForTimeout: async () => {},
+  };
+
+  const result = await openAi_login(page, 'jregkolpig+s2@gmail.com', { timeoutMs: 100 });
+
+  assert.equal(result.status, 'email-submitted');
+  assert.equal(result.nextStage, 'openai-password');
+  assert.equal(result.url, 'https://auth.openai.com/log-in/password');
 });
 
 test('session_check rejects when displayed email differs', async () => {
@@ -271,7 +529,7 @@ test('openAi_email_code fetches latest code by API, fills Code, and clicks Conti
   const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
 
   const result = await openAi_email_code(page, 'smiro4099+s1@gmail.com', {
-    verificationApiUrl: 'http://127.0.0.1:3000/api/verification-code/latest',
+    verificationApiUrl: 'http://127.0.0.1:3100/api/verification-code/latest',
     timeoutMs: 100,
   });
 
@@ -281,7 +539,7 @@ test('openAi_email_code fetches latest code by API, fills Code, and clicks Conti
     code: '687664',
   });
   assert.deepEqual(calls.filter((call) => ['request.post', 'code.fill', 'continue.click'].includes(call[0])), [
-    ['request.post', 'http://127.0.0.1:3000/api/verification-code/latest', {
+    ['request.post', 'http://127.0.0.1:3100/api/verification-code/latest', {
       data: { account: 'smiro4099+s1@gmail.com' },
       headers: { Cookie: 'admin_auth=s%3A1.VU9C5Zr7JzIEl761twodGqwXJydas1N5tQ%2Fa1LdNwG8' },
       timeout: 100,
@@ -291,12 +549,38 @@ test('openAi_email_code fetches latest code by API, fills Code, and clicks Conti
   ]);
 });
 
+test('openAi_email_code derives verification API URL from PORT when URL is not configured', async () => {
+  const { openAi_email_code, buildDefaultVerificationApiUrl } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
+  const previousPort = process.env.PORT;
+  const previousUrl = process.env.VERIFICATION_CODE_API_URL;
+
+  try {
+    process.env.PORT = '4567';
+    delete process.env.VERIFICATION_CODE_API_URL;
+
+    assert.equal(buildDefaultVerificationApiUrl(), 'http://127.0.0.1:4567/api/verification-code/latest');
+
+    await openAi_email_code(page, 'smiro4099+s1@gmail.com', {
+      timeoutMs: 100,
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.PORT;
+    else process.env.PORT = previousPort;
+    if (previousUrl === undefined) delete process.env.VERIFICATION_CODE_API_URL;
+    else process.env.VERIFICATION_CODE_API_URL = previousUrl;
+  }
+
+  const postCall = calls.find((call) => call[0] === 'request.post');
+  assert.equal(postCall[1], 'http://127.0.0.1:4567/api/verification-code/latest');
+});
+
 test('openAi_email_code sends configured admin_auth cookie when fetching email code', async () => {
   const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
   const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
 
   await openAi_email_code(page, 'jregkolpig+s2@gmail.com', {
-    verificationApiUrl: 'http://127.0.0.1:3000/api/verification-code/latest',
+    verificationApiUrl: 'http://127.0.0.1:3100/api/verification-code/latest',
     adminAuthCookie: 's%3Atest-cookie',
     timeoutMs: 100,
   });
@@ -590,7 +874,7 @@ test('openAi_email_code captures failure screenshot and preserves the original e
   try {
     await assert.rejects(
       () => openAi_email_code(page, 'smiro4099+s1@gmail.com', {
-        verificationApiUrl: 'http://127.0.0.1:3000/api/verification-code/latest',
+        verificationApiUrl: 'http://127.0.0.1:3100/api/verification-code/latest',
         timeoutMs: 100,
         codePollMaxAttempts: 1,
         debugImageDir,
@@ -1676,6 +1960,196 @@ test('processOAuthLoginFlow skips missing phone verification, reaches callback, 
     ['exchangeToken', 'code_789', 'verifier_123', 'jregkolpig+s2@gmail.com'],
   ]);
   assert.equal(calls.some((call) => call[0] === 'textMessage.check'), false);
+});
+
+test('processOAuthLoginFlow routes OpenAI password page through one-time code before email code', async () => {
+  const { processOAuthLoginFlow } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  const messages = [];
+  let stage = 'email-login';
+  let currentUrl = 'https://auth.openai.com/oauth/authorize?state=state_password';
+
+  const bodyText = () => {
+    if (stage === 'password') return 'Enter your password Password Continue Log in with a one-time code';
+    if (stage === 'email-code') return 'Enter the code sent to your email. Code Continue';
+    if (stage === 'codex') return 'Sign in to Codex with ChatGPT. Continue';
+    return 'Welcome back';
+  };
+
+  const page = {
+    getByRole(role, options = {}) {
+      calls.push(['getByRole', role, options, stage]);
+      if (role === 'textbox' && options.name === 'Email address') {
+        return {
+          async isVisible() { return stage === 'email-login'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['email.fill', value]); },
+        };
+      }
+      if (role === 'textbox' && options.name === 'Password') {
+        return { async isVisible() { return stage === 'password'; } };
+      }
+      if (role === 'textbox' && options.name === 'Code') {
+        return {
+          async isVisible() { return stage === 'email-code'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['code.fill', value]); },
+        };
+      }
+      return {
+        async isVisible() {
+          return ['email-login', 'password', 'email-code', 'codex'].includes(stage);
+        },
+        async click() {
+          calls.push(['button.click', options.name, stage]);
+          if (stage === 'email-login') {
+            stage = 'password';
+            currentUrl = 'https://auth.openai.com/log-in/password';
+          } else if (stage === 'password' && options.name === 'Log in with a one-time code') {
+            stage = 'email-code';
+            currentUrl = 'https://auth.openai.com/email-verification';
+          } else if (stage === 'email-code') {
+            stage = 'codex';
+            currentUrl = 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent';
+          } else if (stage === 'codex') {
+            currentUrl = 'http://localhost:1455/auth/callback?code=code_password&state=state_password';
+            stage = 'callback';
+          }
+        },
+      };
+    },
+    locator() {
+      return { async textContent() { return bodyText(); } };
+    },
+    request: {
+      async post() {
+        calls.push(['request.post']);
+        return { async json() { return { ok: true, code: '456789' }; } };
+      },
+    },
+    url: () => currentUrl,
+    title: async () => 'OAuth',
+    textContent: async () => bodyText(),
+    waitForTimeout: async () => {},
+  };
+
+  const result = await processOAuthLoginFlow(page, {
+    email: 'jregkolpig+s2@gmail.com',
+    verifier: 'verifier_password',
+    state: 'state_password',
+    timeoutMs: 100,
+    stageDetectTimeoutMs: 10,
+    transitionTimeoutMs: 100,
+    maxStageTurns: 8,
+    exchangeToken: async (code, verifier, email) => {
+      calls.push(['exchangeToken', code, verifier, email]);
+      return { cpaPath: 'local-cpa.json' };
+    },
+    logger: {
+      log: (message) => messages.push(String(message)),
+      warn: (message) => messages.push(String(message)),
+      error: (message) => messages.push(String(message)),
+    },
+  });
+
+  assert.equal(result.status, 'oauth-completed');
+  assert.deepEqual(calls.filter((call) => ['email.fill', 'code.fill', 'exchangeToken'].includes(call[0])), [
+    ['email.fill', 'jregkolpig+s2@gmail.com'],
+    ['code.fill', '456789'],
+    ['exchangeToken', 'code_password', 'verifier_password', 'jregkolpig+s2@gmail.com'],
+  ]);
+  assert.deepEqual(calls.filter((call) => call[0] === 'button.click' && call[1] === 'Log in with a one-time code'), [
+    ['button.click', 'Log in with a one-time code', 'password'],
+  ]);
+  assert.match(messages.join('\n'), /phase=oauth-flow action=识别到 OpenAI 密码登录页/);
+  assert.match(messages.join('\n'), /phase=openai-email action=邮箱提交完成 next=openai-password/);
+});
+
+test('processOAuthLoginFlow retries OAuth target after unknown post-email stage and fails clearly when exhausted', async () => {
+  const { processOAuthLoginFlow } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  const messages = [];
+  let stage = 'email-login';
+  let currentUrl = 'https://auth.openai.com/oauth/authorize?state=state_retry';
+
+  const page = {
+    async goto(url, options) {
+      calls.push(['goto', url, options]);
+      currentUrl = url;
+      stage = 'email-login';
+    },
+    getByRole(role, options = {}) {
+      calls.push(['getByRole', role, options, stage]);
+      if (role === 'textbox' && options.name === 'Email address') {
+        return {
+          async isVisible() { return stage === 'email-login'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['email.fill', value, stage]); },
+        };
+      }
+      if (role === 'textbox') {
+        return { async isVisible() { return false; } };
+      }
+      return {
+        async isVisible() { return stage === 'email-login'; },
+        async click() {
+          calls.push(['continue.click', stage]);
+          if (stage === 'email-login') {
+            stage = 'unknown';
+            currentUrl = 'https://auth.openai.com/unsupported-after-email';
+          }
+        },
+      };
+    },
+    locator() {
+      return {
+        async textContent() {
+          return stage === 'unknown' ? 'Unexpected OpenAI page' : 'Welcome back';
+        },
+      };
+    },
+    url: () => currentUrl,
+    title: async () => 'OAuth',
+    textContent: async () => stage === 'unknown' ? 'Unexpected OpenAI page' : 'Welcome back',
+    waitForTimeout: async () => {},
+  };
+
+  await assert.rejects(
+    () => processOAuthLoginFlow(page, {
+      email: 'jregkolpig+s2@gmail.com',
+      verifier: 'verifier_retry',
+      state: 'state_retry',
+      targetUrl: 'https://auth.openai.com/oauth/authorize?state=state_retry',
+      timeoutMs: 50,
+      stageDetectTimeoutMs: 5,
+      postEmailStageTimeoutMs: 5,
+      maxPostEmailStageRetries: 3,
+      maxStageTurns: 12,
+      exchangeToken: async () => ({ cpaPath: 'should-not-run.json' }),
+      logger: {
+        log: (message) => messages.push(String(message)),
+        warn: (message) => messages.push(String(message)),
+        error: (message) => messages.push(String(message)),
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, 'OPENAI_POST_EMAIL_STAGE_RETRY_EXHAUSTED');
+      return true;
+    }
+  );
+
+  assert.equal(calls.filter((call) => call[0] === 'email.fill').length, 4);
+  assert.deepEqual(calls.filter((call) => call[0] === 'goto').map((call) => call[1]), [
+    'https://auth.openai.com/oauth/authorize?state=state_retry',
+    'https://auth.openai.com/oauth/authorize?state=state_retry',
+    'https://auth.openai.com/oauth/authorize?state=state_retry',
+  ]);
+  assert.match(messages.join('\n'), /phase=openai-email action=邮箱提交完成 next=unknown/);
+  assert.match(messages.join('\n'), /phase=oauth-flow action=邮箱提交后进入异常页面，重新导航 OAuth target attempt=3\/3/);
+  assert.match(messages.join('\n'), /phase=oauth-flow action=邮箱提交后异常页面重试耗尽/);
 });
 
 test('processOAuthLoginFlow prioritizes Codex consent over stale email-code signals', async () => {

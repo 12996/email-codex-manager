@@ -13,11 +13,29 @@ const DEFAULT_CODE_POLL_MAX_ATTEMPTS = 12;
 const DEFAULT_TOKEN_PAGE_SETTLE_MS = 6000;
 const DEFAULT_TOKEN_PAGE_TIMEOUT_MS = 10000;
 const DEFAULT_TOKEN_PAGE_MAX_ATTEMPTS = 3;
+const DEFAULT_POST_EMAIL_STAGE_TIMEOUT_MS = 8000;
+const DEFAULT_POST_EMAIL_STAGE_MAX_RETRIES = 3;
 const Default_EMAIL='jregkolpig+s4@gmail.com';
-const DEFAULT_VERIFICATION_API_URL = 'http://127.0.0.1:3000/api/verification-code/latest';
 const DEFAULT_PHONE_VERIFICATION_SMS_API_URL = 'https://cdc.smslease.link/adminapi/jsscript/smsInfo/ABC_sms?key=3b7c79633a6a3cd91862eb32e5f3f5cd';
 const EMAIL_SUBTITLE_SELECTOR = 'body > div > div > div._titleBlock_l85du_108 > div > span > div > div._subtitle_7asl0_13';
 const admin_auth='s%3A1.VU9C5Zr7JzIEl761twodGqwXJydas1N5tQ%2Fa1LdNwG8'
+
+function normalizeServicePort(env = process.env) {
+    const value = String(env.PORT || 3000).trim();
+    return /^\d+$/.test(value) ? value : '3000';
+}
+
+function buildDefaultVerificationApiUrl(env = process.env) {
+    return `http://127.0.0.1:${normalizeServicePort(env)}/api/verification-code/latest`;
+}
+
+const DEFAULT_VERIFICATION_API_URL = buildDefaultVerificationApiUrl();
+
+function resolveVerificationApiUrl(options = {}, env = process.env) {
+    return options.verificationApiUrl
+        || env.VERIFICATION_CODE_API_URL
+        || buildDefaultVerificationApiUrl(env);
+}
 
 
 
@@ -236,21 +254,52 @@ async function isVisible(locator, timeoutMs) {
 
 async function is_openai_login_page(page, options = {}) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+    const url = typeof page.url === 'function' ? String(page.url() || '') : '';
+    const bodyText = (await getBodyText(page, timeoutMs)).toLowerCase();
+    if (url.includes('/log-in/password')
+        || url.includes('/email-verification')
+        || bodyText.includes('enter your password')
+        || bodyText.includes('check your inbox')
+        || bodyText.includes('verification code')) {
+        return false;
+    }
     const emailInput = page.getByRole('textbox', { name: 'Email address' });
     return isVisible(emailInput, timeoutMs);
 }
 
-// 邮箱提交后通常会进入 /email-verification；同时兼容页面只渲染 Code 输入框但 URL 未及时变化的情况。
-async function waitForOpenAiEmailVerification(page, options = {}) {
+async function is_openai_password_page(page, options = {}) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+    const bodyText = (await getBodyText(page, timeoutMs)).toLowerCase();
+    const url = typeof page.url === 'function' ? String(page.url() || '') : '';
+    const passwordInput = page.getByRole('textbox', { name: 'Password' });
+    const oneTimeCodeButton = page.getByRole('button', { name: 'Log in with a one-time code' });
+    return (url.includes('/log-in/password') || bodyText.includes('enter your password'))
+        && await isVisible(passwordInput, timeoutMs)
+        && await isVisible(oneTimeCodeButton, timeoutMs);
+}
+
+async function waitForOpenAiPostEmailStage(page, options = {}) {
+    const timeoutMs = options.postEmailStageTimeoutMs
+        || options.timeoutMs
+        || DEFAULT_POST_EMAIL_STAGE_TIMEOUT_MS;
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
         const url = typeof page.url === 'function' ? page.url() : '';
-        if (url.includes('/email-verification')) {
-            return { status: 'email-verification-page', url };
+        const detectOptions = { ...options, timeoutMs: Math.min(1000, timeoutMs) };
+        if (await getCurrentOAuthCallback(page, options.state, options)) {
+            return { stage: 'callback', url };
         }
-        if (await is_email_code_page(page, { ...options, timeoutMs: Math.min(1000, timeoutMs) })) {
-            return { status: 'email-verification-page', url };
+        if (await is_codex_login_page(page, detectOptions)) {
+            return { stage: 'codex-login', url };
+        }
+        if (url.includes('/email-verification')) {
+            return { stage: 'email-code', status: 'email-verification-page', url };
+        }
+        if (options.ignoreStage !== 'openai-password' && await is_openai_password_page(page, detectOptions)) {
+            return { stage: 'openai-password', url };
+        }
+        if (await is_email_code_page(page, detectOptions)) {
+            return { stage: 'email-code', status: 'email-verification-page', url };
         }
         if (typeof page.waitForTimeout === 'function') {
             await page.waitForTimeout(500);
@@ -258,8 +307,25 @@ async function waitForOpenAiEmailVerification(page, options = {}) {
             await new Promise((resolve) => setTimeout(resolve, 500));
         }
     }
-    throw createAutomationError('OPENAI_EMAIL_VERIFICATION_TIMEOUT', `OpenAI 登录页 ${timeoutMs}ms 内未进入邮箱验证码页`, {
+    return {
+        stage: 'unknown',
+        url: typeof page.url === 'function' ? page.url() : '',
         ...(await collectPageDebug(page))
+    };
+}
+
+// 邮箱提交后通常会进入 /email-verification；同时兼容页面只渲染 Code 输入框但 URL 未及时变化的情况。
+async function waitForOpenAiEmailVerification(page, options = {}) {
+    const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+    const stage = await waitForOpenAiPostEmailStage(page, {
+        ...options,
+        postEmailStageTimeoutMs: timeoutMs
+    });
+    if (stage.stage === 'email-code') {
+        return { status: 'email-verification-page', url: stage.url };
+    }
+    throw createAutomationError('OPENAI_EMAIL_VERIFICATION_TIMEOUT', `OpenAI 登录页 ${timeoutMs}ms 内未进入邮箱验证码页`, {
+        ...stage
     });
 }
 
@@ -326,14 +392,47 @@ async function openAi_login(page, email, options = {}) {
         logConfigured(options, 'openai-email', '点击 Continue');
         await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
 
-        logConfigured(options, 'openai-email', '等待邮箱验证码页');
-        const verification = await waitForOpenAiEmailVerification(page, options);
-        logConfigured(options, 'openai-email', '邮箱提交完成', `next=${verification.status}`);
+        logConfigured(options, 'openai-email', '等待邮箱提交后页面');
+        const nextStage = await waitForOpenAiPostEmailStage(page, options);
+        logConfigured(options, 'openai-email', '邮箱提交完成', `next=${nextStage.stage}`);
         return {
             status: 'email-submitted',
             email: normalizedEmail,
-            nextStatus: verification.status,
-            url: verification.url
+            nextStage: nextStage.stage,
+            nextStatus: nextStage.status || nextStage.stage,
+            url: nextStage.url
+        };
+    });
+}
+
+async function openAi_password_one_time_code(page, options = {}) {
+    return withFailureScreenshot(page, options, 'openAi_password_one_time_code', async () => {
+        const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+        if (!await is_openai_password_page(page, options)) {
+            throw createAutomationError('OPENAI_PASSWORD_PAGE_NOT_FOUND', '当前页面不是 OpenAI 密码登录页', {
+                ...(await collectPageDebug(page))
+            });
+        }
+
+        logConfigured(options, 'openai-password', '点击 one-time code 登录');
+        await page.getByRole('button', { name: 'Log in with a one-time code' }).click({ timeout: timeoutMs });
+
+        logConfigured(options, 'openai-password', '等待 one-time code 后页面');
+        const nextStage = await waitForOpenAiPostEmailStage(page, {
+            ...options,
+            ignoreStage: 'openai-password'
+        });
+        logConfigured(options, 'openai-password', 'one-time code 登录入口提交完成', `next=${nextStage.stage}`);
+        if (nextStage.stage === 'unknown') {
+            throw createAutomationError('OPENAI_PASSWORD_ONE_TIME_CODE_STAGE_UNKNOWN', 'OpenAI password one-time-code 后未进入合法后续页面', {
+                ...nextStage
+            });
+        }
+        return {
+            status: 'one-time-code-requested',
+            nextStage: nextStage.stage,
+            nextStatus: nextStage.status || nextStage.stage,
+            url: nextStage.url
         };
     });
 }
@@ -411,9 +510,7 @@ async function fetchEmailVerificationCode(page, email, options) {
 
 async function fetchEmailVerificationCodeOnce(page, email, options, attempt = 1, maxAttempts = 1) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
-    const verificationApiUrl = options.verificationApiUrl
-        || process.env.VERIFICATION_CODE_API_URL
-        || DEFAULT_VERIFICATION_API_URL;
+    const verificationApiUrl = resolveVerificationApiUrl(options);
 
     const apiRequest = options.request || page.request || (typeof page.context === 'function' ? page.context().request : null);
     const configuredAdminAuth = options.adminAuthCookie || options.adminAuth || admin_auth;
@@ -1573,6 +1670,11 @@ async function processOAuthLoginFlow(page, options = {}) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
     const stageDetectTimeoutMs = options.stageDetectTimeoutMs || 1500;
     const maxStageTurns = options.maxStageTurns || 20;
+    const maxPostEmailStageRetries = normalizePositiveInteger(
+        options.maxPostEmailStageRetries,
+        DEFAULT_POST_EMAIL_STAGE_MAX_RETRIES
+    );
+    const retryTargetUrl = options.targetUrl || options.authUrl || options.originalUrl || '';
     const email = String(options.email || Default_EMAIL || '').trim();
     if (!email) {
         throw createAutomationError('OPENAI_LOGIN_EMAIL_REQUIRED', 'OpenAI 登录邮箱不能为空');
@@ -1595,6 +1697,7 @@ async function processOAuthLoginFlow(page, options = {}) {
         }).catch(() => {});
     }
 
+    let postEmailStageRetryCount = 0;
     for (let turn = 0; turn < maxStageTurns; turn += 1) {
         const callback = capturedCallback || await getCurrentOAuthCallback(page, options.state, {
             ...options,
@@ -1624,7 +1727,31 @@ async function processOAuthLoginFlow(page, options = {}) {
         const actionOptions = { ...options, timeoutMs, logger };
         if (await is_openai_login_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到 OpenAI 邮箱登录页');
-            await openAi_login(page, email, actionOptions);
+            const emailResult = await openAi_login(page, email, actionOptions);
+            log(logger, 'oauth-flow', '邮箱登录提交后阶段识别完成', `next=${emailResult?.nextStage || 'unknown'}`);
+            if (emailResult?.nextStage === 'openai-password') {
+                log(logger, 'oauth-flow', '识别到 OpenAI 密码登录页');
+                await openAi_password_one_time_code(page, actionOptions);
+                postEmailStageRetryCount = 0;
+            } else if (emailResult?.nextStage === 'unknown') {
+                if (postEmailStageRetryCount >= maxPostEmailStageRetries) {
+                    log(logger, 'oauth-flow', '邮箱提交后异常页面重试耗尽', `attempts=${postEmailStageRetryCount}/${maxPostEmailStageRetries}`);
+                    throw createAutomationError('OPENAI_POST_EMAIL_STAGE_RETRY_EXHAUSTED', 'OpenAI 邮箱提交后未进入合法后续页面，OAuth target 重试已耗尽', {
+                        attempts: postEmailStageRetryCount,
+                        maxAttempts: maxPostEmailStageRetries,
+                        targetUrl: retryTargetUrl,
+                        ...(await collectPageDebug(page))
+                    });
+                }
+                postEmailStageRetryCount += 1;
+                await navigateToOAuthTargetIfRetry(page, retryTargetUrl, {
+                    ...actionOptions,
+                    attempt: postEmailStageRetryCount,
+                    maxAttempts: maxPostEmailStageRetries
+                });
+            } else {
+                postEmailStageRetryCount = 0;
+            }
         } else if (await is_codex_login_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到 Codex 授权确认页');
             const codexResult = await codex_login(page, actionOptions);
@@ -1632,6 +1759,9 @@ async function processOAuthLoginFlow(page, options = {}) {
                 log(logger, 'oauth-flow', '等待 Codex 授权后页面跳转');
                 await waitForStageTransition(page, actionOptions);
             }
+        } else if (await is_openai_password_page(page, detectOptions)) {
+            log(logger, 'oauth-flow', '识别到 OpenAI 密码登录页');
+            await openAi_password_one_time_code(page, actionOptions);
         } else if (await is_email_code_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到邮箱验证码页');
             await openAi_email_code(page, email, actionOptions);
@@ -1673,6 +1803,15 @@ async function processOAuthLoginFlow(page, options = {}) {
     throw createAutomationError('OAUTH_FLOW_TIMEOUT', 'OAuth 登录状态机未在限定轮次内完成', {
         ...(await collectPageDebug(page))
     });
+}
+
+async function navigateToOAuthTargetIfRetry(page, targetUrl, options = {}) {
+    const logger = pickLogger(options.logger);
+    if (!targetUrl) {
+        throw createAutomationError('OPENAI_POST_EMAIL_STAGE_RETRY_TARGET_MISSING', 'OpenAI 邮箱提交后异常页面重试缺少 OAuth target URL');
+    }
+    log(logger, 'oauth-flow', '邮箱提交后进入异常页面，重新导航 OAuth target', `attempt=${options.attempt}/${options.maxAttempts}`);
+    await navigateOAuthTarget(page, targetUrl, logger);
 }
 
 async function waitForStageTransition(page, options = {}) {
@@ -1755,8 +1894,9 @@ async function run(argv = process.argv.slice(2), deps = {}) {
         email,
         verifier,
         state,
+        targetUrl,
         adminAuthCookie: deps.adminAuthCookie || env.ADMIN_AUTH_COOKIE || admin_auth,
-        verificationApiUrl: deps.verificationApiUrl || env.VERIFICATION_CODE_API_URL || DEFAULT_VERIFICATION_API_URL,
+        verificationApiUrl: resolveVerificationApiUrl(deps, env),
         proxyValue: deps.proxyValue || env.ROXY_PROXY || '',
         logger
     });
@@ -1809,6 +1949,7 @@ module.exports = {
     DEFAULT_PHONE_VERIFICATION_SMS_API_URL,
     DEFAULT_VERIFICATION_API_URL,
     EMAIL_SUBTITLE_SELECTOR,
+    buildDefaultVerificationApiUrl,
     buildCpaAuthFile,
     captureFailureScreenshot,
     codex_login,
@@ -1820,11 +1961,13 @@ module.exports = {
     is_codex_login_page,
     is_email_code_page,
     is_openai_login_page,
+    is_openai_password_page,
     is_phone_add_page,
     is_phone_code_page,
     is_phone_code_request_page,
     is_phone_verify_page,
     openAi_login,
+    openAi_password_one_time_code,
     openAi_email_code,
     openAi_phone_add,
     openAi_phone_code,

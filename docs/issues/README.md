@@ -12,3 +12,5 @@
 | issue-004 | Roxy OAuth 手机验证码后跳转竞态 | active | `issue-004-roxy-phone-code-transition-race.md` |
 | issue-005 | Roxy token exchange fallback 出口 IP 不一致 | active | `issue-005-roxy-token-fallback-exit-ip.md` |
 | issue-006 | 邮箱邮件详情弹窗 DOM 缺失 | resolved | `issue-006-email-mail-detail-dialog-missing.md` |
+| issue-007 | Windows 保留 3000 端口导致服务启动失败 | resolved | `issue-007-windows-port-3000-eacces.md` |
+| issue-008 | Roxy OAuth 密码页 / 邮箱验证码页误判 | resolved | `issue-008-roxy-openai-password-email-code-misclassification.md` |

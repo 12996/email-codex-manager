@@ -1,4 +1,4 @@
-const baseUrl = 'http://localhost:3000';
+const baseUrl = 'http://localhost:3100';
 
 const adminPassword = 'admin'; // 如果 .env 里改了 ADMIN_PASSWORD，这里同步改
 const targetAccount = 'huynhyeu94+s1@gmail.com';

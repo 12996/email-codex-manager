@@ -49,7 +49,7 @@ Options:
                    codex-page | codex-login | all
                    Default: all
   --api <url>       Verification code API URL.
-                   Default: http://127.0.0.1:3000/api/verification-code/latest
+                   Default: VERIFICATION_CODE_API_URL or http://127.0.0.1:${PORT}/api/verification-code/latest
   --sms-api <url>   Phone SMS API URL.
                    Default: PHONE_VERIFICATION_SMS_API_URL or built-in SMSLease URL
   --phone <number>  Phone number for the add phone page.

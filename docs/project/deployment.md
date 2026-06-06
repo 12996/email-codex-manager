@@ -9,6 +9,7 @@
 | `ADMIN_PASSWORD` | 后台管理密码 | 是 | `change-me` |
 | `SESSION_SECRET` | 后台登录 Cookie 签名密钥，生产环境必须改成随机长字符串 | 是 | `change-me-session-secret` |
 | `DATABASE_PATH` | SQLite 数据库文件路径 | 否 | `./data/app.db` |
+| `PORT` | Web 服务监听端口；Windows 可能将 `3000` 放入排除端口范围，`.env.example` 使用 `3100` 避免 `EACCES` | 否 | `3000` |
 | `IMAP_HOST` | Gmail IMAP 主机 | 否 | `imap.gmail.com` |
 | `IMAP_PORT` | Gmail IMAP 端口 | 否 | `993` |
 | `IMAP_SECURE` | IMAP 是否使用 TLS | 否 | `true` |
