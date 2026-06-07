@@ -2,31 +2,47 @@
 
 状态：active
 
+## 2026-06-07 CPA 自动补号连续失败熔断与站内通知
+
+- 来源工作日志：`docs/work/2026-06-07-cpa-repair-circuit-breaker-notifications.md`
+- change：`docs/changes/CHG-041-cpa-repair-circuit-breaker-notifications.md`，状态 `merged`，已合并 PRD。
+- 当前进展：补号账号新增连续失败计数与熔断字段；补号失败会递增 `consecutive_replace_failures`，连续失败达到 5 次会自动标记为 `banned` 并写入 `circuit_breaker_at` / `circuit_breaker_reason`；补号成功会清零失败计数和熔断字段。新增 `admin_notifications` 表与通知 API，CPA repair worker 触发熔断时会创建未读通知。顶部铃铛 UI 已改为真实通知入口，显示未读数量并支持查看最近通知、标记已读。补号管理页已新增“解除熔断”独立操作，解除后账号回到 `pending` 并清空连续失败和熔断字段。
+- 验证：`npm test -- test/replacementAccounts.test.js test/adminNotifications.test.js test/adminNotificationsApi.test.js test/cpaRepairWorker.test.js` 通过，32/32 pass；`npm test -- test/replacementAccountsApi.test.js` 通过，13/13 pass；全量 `npm test` 通过，211/211 pass；关键 JS 文件 `node --check` 均通过。
+- 待办：尚未执行真实 CPA 守护进程实机熔断链路；邮件通知未实现。当前未合并的 `implemented` change 数量为 0。
+
+## 2026-06-07 PRD-002 change 基线合并
+
+- 来源工作日志：`docs/work/2026-06-07-prd-002-change-merge.md`
+- 合并范围：`CHG-038`、`CHG-039`、`CHG-040`。
+- 当前进展：`docs/prd/PRD-002-account-management-system.md` 最近基线合并日期已更新为 `2026-06-07`，并吸收列表无内部纵向滚动、补号主表显示备注、默认端口 3100、验证码 API 随 `PORT` 推导、Roxy OAuth 密码页 one-time code 和邮箱后未知页重试等要求。
+- 状态更新：`docs/changes/CHANGE_REGISTRY.md` 及对应 change 文件中 `CHG-038`、`CHG-039`、`CHG-040` 已更新为 `merged`，并补充合并目标 PRD 和合并日期。
+- 当前提醒：`CHANGE_REGISTRY.md` 中当前未发现未合并的 `implemented` change。
+
 ## 2026-06-06 Roxy OAuth 密码页 one-time code 与邮箱后异常重试
 
 - 来源工作日志：`docs/work/2026-06-06-roxy-openai-password-one-time-code.md`
 - 新增 issue：`docs/issues/issue-008-roxy-openai-password-email-code-misclassification.md`，状态 `resolved`。
-- 新增 change：`docs/changes/CHG-040-roxy-openai-password-one-time-code.md`，状态 `implemented`，待后续合并 PRD。
+- change：`docs/changes/CHG-040-roxy-openai-password-one-time-code.md`，状态 `merged`，已合并 PRD。
 - 当前进展：已用当前 Roxy CDP 启动 Playwright recorder，录制确认 OpenAI 密码页需要点击 `Log in with a one-time code`。`roxy_oauth_login.js` 已新增密码页判断和 one-time code 操作；邮箱提交后会识别 `openai-password`、`email-code`、`codex-login`、`callback` 或 `unknown`。进入密码页时点击 one-time code 并继续状态机；进入未知页时会回到本次 OAuth target URL 重试，默认最多 3 次，耗尽后抛出 `OPENAI_POST_EMAIL_STAGE_RETRY_EXHAUSTED`。
 - 二次修复：密码页 readonly `Email address` 输入框不再被误判为邮箱登录页；one-time code 后等待阶段会忽略当前 password 页，避免页面短暂停留时记录 `next=openai-password` 并回到邮箱登录分支。
 - 复盘：`issue-002` / `issue-004` 已经记录过“提交后不能把当前阶段当下一阶段”的问题；本次新增 password 阶段时没有沿用该通用规则，导致同类问题复发。后续新增 Roxy OAuth 阶段必须同步补“忽略当前阶段”和“相邻页误判负例”测试。
 - 新增日志：邮箱提交后 next stage、密码页识别、one-time code 后 next stage、异常页面重试次数和重试耗尽。
 - 验证：`node --check .\src\auto\roxy_oauth_login.js` 通过；`node --test .\test\roxyOauthLogin.test.js` 通过，68/68 pass。当前 Roxy 页 `https://auth.openai.com/email-verification` 下，手动验证 `openai-page=false`、`email-code-page=true`。
-- 当前提醒：`CHANGE_REGISTRY.md` 中未合并的 `implemented` change 为 `CHG-038`、`CHG-039`、`CHG-040`，未达到 5 个 PRD 基线合并提醒阈值。
+- 当前提醒：`CHG-040` 已在 2026-06-07 PRD 基线合并中更新为 `merged`。
 
 ## 2026-06-06 Windows 3000 端口 EACCES 修复
 
 - 来源工作日志：`docs/work/2026-06-06-port-3100-eacces.md`
 - 新增 issue：`docs/issues/issue-007-windows-port-3000-eacces.md`，状态 `resolved`。
-- 新增 change：`docs/changes/CHG-039-avoid-windows-port-3000-eacces.md`，状态 `implemented`，待后续合并 PRD。
+- change：`docs/changes/CHG-039-avoid-windows-port-3000-eacces.md`，状态 `merged`，已合并 PRD。
 - 当前进展：已确认 `3000` 未被占用，而是 Windows TCP 排除端口范围包含 `2987-3086` 导致监听 `0.0.0.0:3000` 报 `EACCES`。本机 `.env` 已改为 `PORT=3100`，`VERIFICATION_CODE_API_URL` 留空时自动化会按 `PORT` 推导验证码 API URL；示例配置、自动化默认值、测试和文档已同步。
 - 验证：`npm start` 启动后 `GET http://127.0.0.1:3100/login` 返回 200；`node --test test\roxyOauthLogin.test.js test\roxyRegisterOpenai.test.js` 通过，60/60 pass。
-- 当前提醒：`CHANGE_REGISTRY.md` 中未合并的 `implemented` change 为 `CHG-038`、`CHG-039`，未达到 5 个 PRD 基线合并提醒阈值。
+- 当前提醒：`CHG-039` 已在 2026-06-07 PRD 基线合并中更新为 `merged`。
 
 ## 2026-06-05 前端列表取消局部竖向滚动并显示补号备注
 
 - 来源工作日志：`docs/work/2026-06-05-frontend-list-remark-no-inner-scroll.md`
-- 新增 change：`docs/changes/CHG-038-frontend-list-remark-no-inner-scroll.md`，状态 `implemented`，待后续合并 PRD。
+- change：`docs/changes/CHG-038-frontend-list-remark-no-inner-scroll.md`，状态 `merged`，已合并 PRD。
 - 当前进展：补号管理主表已将 `SMS 错误` 列替换为 `备注` 列，直接展示 `replacement_accounts.remark`；`sms_last_error` 仍保留在详情 JSON 中。邮箱管理和补号管理表格容器已取消固定高度与内部纵向滚动，仅保留横向滚动；邮箱邮件结果列表也取消内部纵向滚动，内容自然撑开页面。
 - 验证：`node --test test\replacementAccountsWeb.test.js` 通过，7/7 pass；`node --test test\accountsWebApi.test.js` 通过，7/7 pass；全量 `npm test` 通过，194/194 pass；`node --check .\web\app.js`、`node --check .\web\accounts.js` 通过。
 - 待办：如需进一步优化宽表阅读体验，可继续压缩列宽或改成关键字段卡片式展示。

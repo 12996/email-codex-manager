@@ -687,6 +687,9 @@ SQLite 表：`replacement_accounts`
 | `status_updated_at` | 最近状态更新时间 |
 | `status_note` | 状态备注 |
 | `replacement_count` | 成功补号次数 |
+| `consecutive_replace_failures` | 连续补号失败次数 |
+| `circuit_breaker_at` | 连续失败触发熔断时间 |
+| `circuit_breaker_reason` | 连续失败触发熔断原因 |
 | `json_payload` | 最近一次获取的 JSON 原文 |
 | `json_fetched_at` | 最近一次 JSON 获取时间 |
 | `last_replace_at` | 最近一次成功补号时间 |
@@ -698,7 +701,9 @@ SQLite 表：`replacement_accounts`
 | `created_at` | 创建时间 |
 | `updated_at` | 更新时间 |
 
-验证码不入库；SMS 原始响应不入库；补号失败不增加 `replacement_count`。`remark` 仅用于人工标注来源或用途，不参与公开验证码接口的权限判断。
+验证码不入库；SMS 原始响应不入库；补号失败不增加 `replacement_count`，但会递增 `consecutive_replace_failures`。连续补号失败达到 5 次时，账号会自动改为 `banned` 并写入熔断字段；补号成功会清零连续失败计数和熔断字段。`remark` 仅用于人工标注来源或用途，不参与公开验证码接口的权限判断。
+
+管理员不能在普通编辑表单中直接修改连续失败和熔断字段；解除熔断必须使用专用接口，避免误清系统字段。
 
 ### 状态枚举
 
@@ -736,6 +741,7 @@ SQLite 表：`replacement_accounts`
 | `REPLACE_FAILED` | 502 | 自动补号失败 |
 | `REPLACE_NOT_CONFIGURED` | 502 | 自动补号适配器尚未配置 |
 | `REGISTER_FAILED` | 502 | OpenAI 注册自动化失败 |
+| `NOTIFICATION_NOT_FOUND` | 404 | 通知不存在 |
 
 ### GET `/replacement-accounts`
 
@@ -838,6 +844,32 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 ### PATCH `/replacement-accounts/:id/public-code`
 
 启用或停用补号账号的公开验证码接口，不需要提交完整账号资料。
+
+### PATCH `/replacement-accounts/:id/circuit-breaker/reset`
+
+管理员手动解除补号熔断。该接口会执行以下状态修复：
+
+- `status = pending`
+- `status_note = 管理员手动解除熔断`
+- `consecutive_replace_failures = 0`
+- `circuit_breaker_at = NULL`
+- `circuit_breaker_reason = NULL`
+
+成功：
+
+```json
+{
+  "ok": true,
+  "account": {
+    "id": 7,
+    "status": "pending",
+    "status_note": "管理员手动解除熔断",
+    "consecutive_replace_failures": 0,
+    "circuit_breaker_at": null,
+    "circuit_breaker_reason": null
+  }
+}
+```
 
 请求体：
 
@@ -1110,6 +1142,7 @@ CPA_HEALTH_MONITOR_INTERVAL_MS=600000
 4. 只有 `auth_expired` 会按邮箱匹配 `replacement_accounts.email`。
 5. 匹配到且账号未处于 `replacing`/`banned` 时，加入单并发补号队列并触发队列执行；`banned` 账号跳过原因为 `account_banned`。
 6. 补号子进程成功后，上传本地 `src/auto/product_files/cpa/<email>.json` 到 CPA，并再次检查该邮箱凭证是否恢复健康。
+7. 同一账号连续补号失败达到 5 次时，账号自动熔断为 `banned`，后续 CPA 监控按 `account_banned` 跳过，并创建站内通知提醒管理员。
 
 成功响应示例：
 
@@ -1153,6 +1186,70 @@ CPA_HEALTH_MONITOR_INTERVAL_MS=600000
 ```
 
 敏感信息约束：响应和日志不得输出 `CPA_MANAGEMENT_KEY`。
+
+## 管理员站内通知 API
+
+通知接口复用后台登录态，调用前需要先登录后台并携带 `admin_auth` cookie。当前主要用于 CPA 自动补号连续失败熔断告警。
+
+### SQLite 表：`admin_notifications`
+
+| 字段 | 说明 |
+|---|---|
+| `id` | 通知 ID |
+| `type` | 通知类型，如 `cpa_repair_circuit_breaker` |
+| `severity` | 严重级别，如 `warning`、`critical` |
+| `title` | 通知标题 |
+| `message` | 通知正文 |
+| `account_id` | 关联补号账号 ID |
+| `email` | 关联补号邮箱 |
+| `read_at` | 已读时间，未读为 `NULL` |
+| `created_at` | 创建时间 |
+
+### GET `/admin-notifications`
+
+获取最近通知和未读数量。
+
+查询参数：
+
+```text
+limit  可选，默认 10，最大 50
+```
+
+成功：
+
+```json
+{
+  "ok": true,
+  "unreadCount": 1,
+  "notifications": [
+    {
+      "id": 1,
+      "type": "cpa_repair_circuit_breaker",
+      "severity": "critical",
+      "title": "账号已触发补号熔断",
+      "message": "user@example.com 连续自动补号失败 5 次，已自动标记为 banned，不再进入 CPA 自动补号队列。",
+      "account_id": 7,
+      "email": "user@example.com",
+      "read_at": null,
+      "created_at": "2026-06-07T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+### PATCH `/admin-notifications/:id/read`
+
+将单条通知标记为已读。
+
+成功：
+
+```json
+{
+  "ok": true,
+  "notification": {},
+  "unreadCount": 0
+}
+```
 
 ## 补号子进程运行日志 API
 

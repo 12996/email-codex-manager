@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 
 const SYSTEM_STATUSES = new Set(['pending', 'active', 'banned', 'replacing', 'replaced', 'failed']);
 const MANUAL_STATUSES = new Set(['pending', 'active', 'banned', 'replaced', 'failed']);
+const REPLACEMENT_FAILURE_BREAKER_THRESHOLD = 5;
 
 export function createReplacementAccountRepository(db) {
   return {
@@ -264,6 +265,9 @@ export function createReplacementAccountRepository(db) {
           status = 'replaced',
           status_updated_at = ?,
           replacement_count = replacement_count + 1,
+          consecutive_replace_failures = 0,
+          circuit_breaker_at = NULL,
+          circuit_breaker_reason = NULL,
           last_replace_at = ?,
           last_error = NULL,
           updated_at = ?
@@ -275,15 +279,53 @@ export function createReplacementAccountRepository(db) {
     markReplacementFailure(id, errorMessage) {
       const existing = assertAccountExists(this.getAccount(id));
       const now = new Date().toISOString();
+      const nextFailures = Number(existing.consecutive_replace_failures || 0) + 1;
+      const shouldBan = nextFailures >= REPLACEMENT_FAILURE_BREAKER_THRESHOLD;
+      const breakerReason = shouldBan
+        ? `连续补号失败 ${REPLACEMENT_FAILURE_BREAKER_THRESHOLD} 次，自动熔断`
+        : null;
       db.prepare(`
         UPDATE replacement_accounts
         SET
-          status = 'failed',
+          status = ?,
           status_updated_at = ?,
+          status_note = CASE WHEN ? IS NULL THEN status_note ELSE ? END,
+          consecutive_replace_failures = ?,
+          circuit_breaker_at = ?,
+          circuit_breaker_reason = ?,
           last_error = ?,
           updated_at = ?
         WHERE id = ?
-      `).run(now, normalizeErrorMessage(errorMessage), now, existing.id);
+      `).run(
+        shouldBan ? 'banned' : 'failed',
+        now,
+        breakerReason,
+        breakerReason,
+        nextFailures,
+        shouldBan ? now : null,
+        breakerReason,
+        normalizeErrorMessage(errorMessage),
+        now,
+        existing.id,
+      );
+      return this.getAccount(existing.id);
+    },
+
+    resetCircuitBreaker(id) {
+      const existing = assertAccountExists(this.getAccount(id));
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE replacement_accounts
+        SET
+          status = 'pending',
+          status_note = ?,
+          status_updated_at = ?,
+          consecutive_replace_failures = 0,
+          circuit_breaker_at = NULL,
+          circuit_breaker_reason = NULL,
+          updated_at = ?
+        WHERE id = ?
+      `).run('管理员手动解除熔断', now, now, existing.id);
       return this.getAccount(existing.id);
     },
   };

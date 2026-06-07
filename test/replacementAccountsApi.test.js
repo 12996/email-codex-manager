@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import signature from 'cookie-signature';
 
+import { createAdminNotificationRepository } from '../src/adminNotifications.js';
 import { config } from '../src/config.js';
 import { createDatabase } from '../src/db.js';
 import { createReplacementAutomationRunRepository } from '../src/replacementAutomationRuns.js';
@@ -32,10 +33,12 @@ function authCookie() {
 function createTestContext(replacementServices = successfulServices(), overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-service-'));
   const db = createDatabase(join(dir, 'test.db'));
+  const adminNotifications = createAdminNotificationRepository(db);
   const replacementAccounts = createReplacementAccountRepository(db);
   const replacementAutomationRuns = createReplacementAutomationRunRepository(db);
   const app = createApp({
     db,
+    adminNotifications,
     replacementAccounts,
     replacementAutomationRuns,
     replacementServices,
@@ -50,7 +53,7 @@ function createTestContext(replacementServices = successfulServices(), overrides
     ...overrides,
   });
 
-  return { app, replacementAccounts, replacementAutomationRuns, dir };
+  return { app, adminNotifications, replacementAccounts, replacementAutomationRuns, dir };
 }
 
 function successfulServices() {
@@ -428,6 +431,60 @@ test('replacement account failure APIs persist errors without incrementing repla
     assert.equal(replace.body.account.status, 'failed');
     assert.equal(replace.body.account.replacement_count, 0);
     assert.equal(replacementAccounts.getAccount(created.id).last_error, 'replace failed');
+  } finally {
+    await server.close();
+  }
+});
+
+test('direct replacement API creates notification when fifth failure bans account', async () => {
+  const failingServices = {
+    async fetchSmsCode() {
+      return '123456';
+    },
+    async fetchJson() {
+      return '{}';
+    },
+    async replaceAccount() {
+      throw Object.assign(new Error('replace failed'), { code: 'REPLACE_FAILED' });
+    },
+  };
+  const { app, adminNotifications, replacementAccounts } = createTestContext(failingServices);
+  const created = replacementAccounts.createAccount({ email: 'user@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    let lastResponse;
+    for (let index = 0; index < 5; index += 1) {
+      lastResponse = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace`);
+    }
+
+    assert.equal(lastResponse.response.status, 502);
+    assert.equal(lastResponse.body.account.status, 'banned');
+    assert.equal(adminNotifications.countUnread(), 1);
+    assert.match(adminNotifications.listNotifications()[0].message, /user@example.com 连续自动补号失败 5 次/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('replacement account API resets circuit breaker fields', async () => {
+  const { app, replacementAccounts } = createTestContext();
+  const created = replacementAccounts.createAccount({ email: 'user@example.com' });
+  for (let index = 0; index < 5; index += 1) {
+    replacementAccounts.markReplacementStarted(created.id);
+    replacementAccounts.markReplacementFailure(created.id, `automation failed ${index + 1}`);
+  }
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'PATCH', `/replacement-accounts/${created.id}/circuit-breaker/reset`);
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.account.status, 'pending');
+    assert.equal(response.body.account.status_note, '管理员手动解除熔断');
+    assert.equal(response.body.account.consecutive_replace_failures, 0);
+    assert.equal(response.body.account.circuit_breaker_at, null);
+    assert.equal(response.body.account.circuit_breaker_reason, null);
   } finally {
     await server.close();
   }

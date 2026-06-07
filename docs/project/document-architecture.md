@@ -107,14 +107,15 @@ web/app.js
   -> src/auto/roxy_oauth_login.js
   -> RoxyBrowser CDP + Playwright 执行 OpenAI/Codex OAuth
   -> 生成 sub2api/cpa JSON
-  -> 回写补号状态和自动化日志
+  -> 回写补号状态、连续失败计数和自动化日志
 ```
 
 关键文件：
 
-- `src/replacementAccounts.js`：补号账号仓储、状态流转、公开验证码 key。
+- `src/replacementAccounts.js`：补号账号仓储、状态流转、公开验证码 key、连续补号失败熔断和解除熔断。
 - `src/replacementServices.js`：短信验证码获取、JSON 获取、补号子进程调度、日志写入、停止运行。
 - `src/replacementAutomationRuns.js`：自动化运行记录仓储。
+- `src/adminNotifications.js`：站内通知仓储，用于补号熔断等管理员告警。
 - `src/auto/roxy-browser-client.cjs`：RoxyBrowser 本地 API 客户端。
 - `src/auto/roxy_oauth_login.js`：OpenAI/Codex 登录、邮箱/手机验证码、token 交换、CPA JSON 输出。
 - `scripts/roxy-codegen.cjs`：录制/调试辅助脚本。
@@ -128,6 +129,7 @@ CPA_HEALTH_MONITOR_ENABLED=true
   -> src/cpaCredentialHealth.js 分类凭证健康状态
   -> src/cpaCredentialMonitor.js 将过期凭证加入 repairQueue
   -> src/cpaRepairQueue.js / src/cpaRepairWorker.js 执行补号
+  -> 连续失败达到阈值时自动标记 banned 并创建站内通知
 ```
 
 关键规则：
@@ -135,6 +137,24 @@ CPA_HEALTH_MONITOR_ENABLED=true
 - 只对可自动处理的过期认证类问题入队。
 - `banned` 补号账号不会触发自动补号。
 - 队列用于避免同账号重复补号。
+- 同一补号账号连续补号失败 5 次会触发熔断：`status=banned`、`consecutive_replace_failures=5`、写入 `circuit_breaker_at` / `circuit_breaker_reason`，并创建未读站内通知。
+- 管理员可在补号管理页对 `banned` 账号执行“解除熔断”，系统会将状态改回 `pending`，清零连续失败计数并清空熔断字段。
+
+### 5.6 管理员站内通知链路
+
+```text
+补号熔断 / 后端告警事件
+  -> src/adminNotifications.js 写入 admin_notifications
+  -> GET /admin-notifications 返回最近通知和未读数
+  -> web/notifications.js 在顶部铃铛展示未读数量与通知列表
+  -> PATCH /admin-notifications/:id/read 标记已读
+```
+
+关键规则：
+
+- 站内通知是后台系统内的持久通知，不依赖邮件发送。
+- 顶部铃铛入口存在于 `/accounts` 和 `/replacement-ui` 页面。
+- 当前主要告警类型是 `cpa_repair_circuit_breaker`。
 
 ## 6. 关键配置与存储
 
@@ -164,8 +184,9 @@ CPA_HEALTH_MONITOR_ENABLED=true
 | 表 | 职责 | 初始化位置 |
 |---|---|---|
 | `email_accounts` | Gmail 账号、IMAP app password、抓取状态和错误 | `src/db.js` |
-| `replacement_accounts` | 补号账号、手机号/SMS API、状态、JSON、公开验证码 key | `src/db.js` |
+| `replacement_accounts` | 补号账号、手机号/SMS API、状态、JSON、公开验证码 key、连续失败熔断字段 | `src/db.js` |
 | `replacement_automation_runs` | 补号自动化子进程运行记录和日志路径 | `src/db.js` |
+| `admin_notifications` | 管理员站内通知、未读状态和关联账号信息 | `src/db.js` |
 
 ### 6.3 运行期产物
 
@@ -188,9 +209,10 @@ CPA_HEALTH_MONITOR_ENABLED=true
 | `auth.js` | 后台登录 Cookie 设置、清除和鉴权中间件 |
 | `views.js` | 服务端渲染的登录页、账号页、编辑页 |
 | `accounts.js` | Gmail 账号仓储与 IMAP 抓取状态更新 |
+| `adminNotifications.js` | 管理员站内通知仓储、未读计数、标记已读 |
 | `imapService.js` | Gmail IMAP 连接、邮件解析、验证码提取 |
 | `readLocations.js` | 读信位置解析、自发邮件过滤规则 |
-| `replacementAccounts.js` | 补号账号仓储、状态流转、公开验证码 key 管理 |
+| `replacementAccounts.js` | 补号账号仓储、状态流转、公开验证码 key、补号熔断和解除熔断 |
 | `replacementServices.js` | SMS/JSON 拉取、补号自动化子进程调度、运行停止 |
 | `replacementAutomationRuns.js` | 自动化运行记录与日志读取 |
 | `cpaClient.js` | CPA 管理接口客户端 |
@@ -216,7 +238,8 @@ CPA_HEALTH_MONITOR_ENABLED=true
 
 | 文件 | 职责 |
 |---|---|
-| `index.html` / `app.js` / `styles.css` | 补号账号管理页面 |
+| `index.html` / `app.js` / `styles.css` | 补号账号管理页面，包含补号、注册、状态设置和解除熔断入口 |
+| `notifications.js` | 顶部铃铛站内通知入口，读取未读数、通知列表和标记已读 |
 | `automation-logs.html` / `automation-logs.js` | 补号自动化运行日志页面 |
 | `accounts.html` / `accounts.js` | Gmail 账号管理前端页面 |
 | `sidebar.html` | 复用导航栏 |
@@ -231,6 +254,7 @@ CPA_HEALTH_MONITOR_ENABLED=true
 - IMAP 与读信规则：`imapService.test.js`、`readLocations.test.js`
 - 验证码接口：`verificationCodeApi.test.js`
 - 补号账号仓储/API/前端：`replacementAccounts*.test.js`
+- 站内通知仓储/API：`adminNotifications*.test.js`
 - 补号服务与自动化日志：`replacementServices.test.js`、`replacementAutomationLogPage` 相关测试
 - RoxyBrowser 与 OAuth 自动化：`roxyBrowserClient.test.js`、`roxyOauthLogin.test.js`、`roxyCodegenFlow.test.js`
 - CPA 健康检测与自动补号：`cpa*.test.js`
@@ -253,10 +277,11 @@ CPA_HEALTH_MONITOR_ENABLED=true
 
 ## 10. 本次更新
 
-- 日期：2026-06-04
+- 日期：2026-06-07
 - 范围：整个项目根目录。
 - 变更点：
   - 在既有文档目录表基础上补充项目级目录地图。
   - 增加启动、登录、IMAP 验证码、补号自动化、CPA 健康检测的运行链路。
   - 增加环境变量、SQLite 表、运行期产物和关键文件职责说明。
   - 标注可能遗留或未确认事项。
+  - 补充 CPA 自动补号连续失败熔断、解除熔断和管理员站内通知链路。

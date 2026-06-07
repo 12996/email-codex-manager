@@ -382,3 +382,69 @@ test('markReplacementFailure does not increment replacement_count', () => {
   assert.equal(failed.replacement_count, 0);
   assert.equal(failed.last_error, 'automation failed');
 });
+
+test('markReplacementFailure tracks consecutive failures before circuit breaker threshold', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'user@example.com' });
+
+  let updated = account;
+  for (let index = 0; index < 4; index += 1) {
+    repo.markReplacementStarted(account.id);
+    updated = repo.markReplacementFailure(account.id, `automation failed ${index + 1}`);
+  }
+
+  assert.equal(updated.status, 'failed');
+  assert.equal(updated.consecutive_replace_failures, 4);
+  assert.equal(updated.circuit_breaker_at, null);
+  assert.equal(updated.circuit_breaker_reason, null);
+});
+
+test('markReplacementFailure bans account at fifth consecutive failure', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'user@example.com' });
+
+  let updated = account;
+  for (let index = 0; index < 5; index += 1) {
+    repo.markReplacementStarted(account.id);
+    updated = repo.markReplacementFailure(account.id, `automation failed ${index + 1}`);
+  }
+
+  assert.equal(updated.status, 'banned');
+  assert.equal(updated.consecutive_replace_failures, 5);
+  assert.ok(updated.circuit_breaker_at);
+  assert.match(updated.circuit_breaker_reason, /连续补号失败 5 次/);
+  assert.equal(updated.last_error, 'automation failed 5');
+});
+
+test('markReplacementSuccess resets consecutive failure counter and circuit breaker fields', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'user@example.com' });
+
+  repo.markReplacementStarted(account.id);
+  repo.markReplacementFailure(account.id, 'automation failed');
+  repo.markReplacementStarted(account.id);
+  const replaced = repo.markReplacementSuccess(account.id);
+
+  assert.equal(replaced.status, 'replaced');
+  assert.equal(replaced.consecutive_replace_failures, 0);
+  assert.equal(replaced.circuit_breaker_at, null);
+  assert.equal(replaced.circuit_breaker_reason, null);
+});
+
+test('resetCircuitBreaker clears breaker fields and moves account back to pending', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'user@example.com' });
+  for (let index = 0; index < 5; index += 1) {
+    repo.markReplacementStarted(account.id);
+    repo.markReplacementFailure(account.id, `automation failed ${index + 1}`);
+  }
+
+  const reset = repo.resetCircuitBreaker(account.id);
+
+  assert.equal(reset.status, 'pending');
+  assert.equal(reset.status_note, '管理员手动解除熔断');
+  assert.equal(reset.consecutive_replace_failures, 0);
+  assert.equal(reset.circuit_breaker_at, null);
+  assert.equal(reset.circuit_breaker_reason, null);
+  assert.ok(reset.status_updated_at);
+});

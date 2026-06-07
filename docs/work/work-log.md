@@ -49,3 +49,5 @@
 | 2026-06-05 | 前端列表取消局部竖向滚动并显示补号备注 | done | `2026-06-05-frontend-list-remark-no-inner-scroll.md` |
 | 2026-06-06 | Windows 3000 端口 EACCES 修复 | done | `2026-06-06-port-3100-eacces.md` |
 | 2026-06-06 | Roxy OAuth 密码页 one-time code 与邮箱后异常重试 | done | `2026-06-06-roxy-openai-password-one-time-code.md` |
+| 2026-06-07 | PRD-002 change 基线合并 | done | `2026-06-07-prd-002-change-merge.md` |
+| 2026-06-07 | CPA 自动补号连续失败熔断与站内通知 | done | `2026-06-07-cpa-repair-circuit-breaker-notifications.md` |

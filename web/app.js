@@ -143,6 +143,7 @@ function accountRow(account) {
             <button type="button" data-action="json" data-id="${account.id}">▣ 获取 JSON</button>
             <button type="button" data-action="register" data-id="${account.id}">✚ 注册</button>
             <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
+            ${account.status === 'banned' ? `<button type="button" data-action="reset-circuit-breaker" data-id="${account.id}">解除熔断</button>` : ''}
             <button type="button" data-action="copy-public-code-url" data-id="${account.id}">⧉ 复制公开验证码 URL</button>
             <button type="button" data-action="status" data-id="${account.id}">⊙ 状态设置</button>
             <button class="danger" type="button" data-action="delete" data-id="${account.id}">🗑 删除账号</button>
@@ -191,6 +192,7 @@ async function handleAction(action, id) {
   if (action === 'json') return fetchJson(account);
   if (action === 'register') return registerAccount(account);
   if (action === 'replace') return replaceAccount(account);
+  if (action === 'reset-circuit-breaker') return resetCircuitBreaker(account);
   if (action === 'toggle-public-code') return togglePublicCode(account);
   if (action === 'copy-public-code-url') return copyPublicCodeUrl(account);
 }
@@ -323,6 +325,19 @@ async function replaceAccount(account) {
     await loadAccounts();
   } catch (error) {
     addActivity('补号失败', account.email);
+    toast(error.message);
+    await loadAccounts();
+  }
+}
+
+async function resetCircuitBreaker(account) {
+  if (!confirm(`确认解除 ${account.email} 的补号熔断？账号将回到 pending 并清零连续失败次数。`)) return;
+  try {
+    await api(`/replacement-accounts/${account.id}/circuit-breaker/reset`, { method: 'PATCH' });
+    addActivity('解除熔断', account.email);
+    toast('已解除熔断，账号状态已回到 pending');
+    await loadAccounts();
+  } catch (error) {
     toast(error.message);
     await loadAccounts();
   }

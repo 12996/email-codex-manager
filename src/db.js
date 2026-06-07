@@ -40,6 +40,9 @@ function initializeSchema(db) {
       status_updated_at TEXT,
       status_note TEXT,
       replacement_count INTEGER NOT NULL DEFAULT 0,
+      consecutive_replace_failures INTEGER NOT NULL DEFAULT 0,
+      circuit_breaker_at TEXT,
+      circuit_breaker_reason TEXT,
       json_payload TEXT,
       json_fetched_at TEXT,
       last_replace_at TEXT,
@@ -58,6 +61,9 @@ function initializeSchema(db) {
 
   ensureColumn(db, 'replacement_accounts', 'public_code_enabled', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn(db, 'replacement_accounts', 'public_code_key', 'TEXT');
+  ensureColumn(db, 'replacement_accounts', 'consecutive_replace_failures', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn(db, 'replacement_accounts', 'circuit_breaker_at', 'TEXT');
+  ensureColumn(db, 'replacement_accounts', 'circuit_breaker_reason', 'TEXT');
 
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_replacement_accounts_public_code_key_unique
@@ -84,6 +90,26 @@ function initializeSchema(db) {
 
     CREATE INDEX IF NOT EXISTS idx_replacement_automation_runs_account_id
     ON replacement_automation_runs (account_id);
+  `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS admin_notifications (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      type TEXT NOT NULL DEFAULT 'info',
+      severity TEXT NOT NULL DEFAULT 'warning',
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      account_id INTEGER,
+      email TEXT,
+      read_at TEXT,
+      created_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_admin_notifications_created_at
+    ON admin_notifications (created_at DESC);
+
+    CREATE INDEX IF NOT EXISTS idx_admin_notifications_read_at
+    ON admin_notifications (read_at);
   `);
 }
 

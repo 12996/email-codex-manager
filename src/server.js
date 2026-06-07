@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { config } from './config.js';
 import { createAccountRepository } from './accounts.js';
+import { createAdminNotificationRepository } from './adminNotifications.js';
 import { createAuthMiddleware, clearAuthCookie, setAuthCookie } from './auth.js';
 import { createCpaClient } from './cpaClient.js';
 import { createCpaCredentialMonitor } from './cpaCredentialMonitor.js';
@@ -30,6 +31,7 @@ const webDir = join(__dirname, '..', 'web');
 export function createApp({
   db = createDatabase(config.databasePath),
   accounts = createAccountRepository(db),
+  adminNotifications = createAdminNotificationRepository(db),
   replacementAccounts = createReplacementAccountRepository(db),
   replacementAutomationRuns = createReplacementAutomationRunRepository(db, {
     maxRuns: config.replacementAutomationLogMaxRuns,
@@ -279,6 +281,15 @@ export function createApp({
     }
   });
 
+  app.patch('/replacement-accounts/:id/circuit-breaker/reset', requireAuth, (req, res) => {
+    try {
+      const account = replacementAccounts.resetCircuitBreaker(req.params.id);
+      res.json({ ok: true, account });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
   app.post('/replacement-accounts/:id/fetch-sms-code', requireAuth, async (req, res) => {
     const account = replacementAccounts.getAccount(req.params.id);
     if (!account) {
@@ -342,6 +353,7 @@ export function createApp({
       res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
     } catch (error) {
       const updated = replacementAccounts.markReplacementFailure(account.id, error.message);
+      notifyCircuitBreaker(adminNotifications, updated);
       sendApiError(res, error, { account: updated });
     }
   });
@@ -371,6 +383,23 @@ export function createApp({
     try {
       const result = await cpaCredentialMonitor.runOnce();
       res.json({ ok: true, result });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
+  app.get('/admin-notifications', requireAuth, (req, res) => {
+    res.json({
+      ok: true,
+      unreadCount: adminNotifications.countUnread(),
+      notifications: adminNotifications.listNotifications({ limit: req.query?.limit }),
+    });
+  });
+
+  app.patch('/admin-notifications/:id/read', requireAuth, (req, res) => {
+    try {
+      const notification = adminNotifications.markRead(req.params.id);
+      res.json({ ok: true, notification, unreadCount: adminNotifications.countUnread() });
     } catch (error) {
       sendApiError(res, error);
     }
@@ -598,6 +627,20 @@ function sendApiError(res, error, extra = {}) {
   });
 }
 
+function notifyCircuitBreaker(adminNotifications, account) {
+  if (!adminNotifications?.createNotification) return;
+  if (account?.status !== 'banned' || Number(account?.consecutive_replace_failures || 0) !== 5) return;
+  const email = String(account.email || '').trim().toLowerCase();
+  adminNotifications.createNotification({
+    type: 'cpa_repair_circuit_breaker',
+    severity: 'critical',
+    title: '账号已触发补号熔断',
+    message: `${email} 连续自动补号失败 5 次，已自动标记为 banned，不再进入 CPA 自动补号队列。`,
+    account_id: account.id,
+    email,
+  });
+}
+
 function errorBody(error, message) {
   return { ok: false, error, message };
 }
@@ -613,6 +656,7 @@ function inferErrorCode(error) {
 function statusForApiError(code) {
   if (code === 'EMAIL_DUPLICATE') return 409;
   if (code === 'ACCOUNT_NOT_FOUND') return 404;
+  if (code === 'NOTIFICATION_NOT_FOUND') return 404;
   if (
     code === 'SMS_FETCH_FAILED'
     || code === 'JSON_FETCH_FAILED'
@@ -634,6 +678,7 @@ function stripErrorCodePrefix(message) {
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env.PORT || 3000);
   const db = createDatabase(config.databasePath);
+  const adminNotifications = createAdminNotificationRepository(db);
   const replacementAccounts = createReplacementAccountRepository(db);
   const replacementAutomationRuns = createReplacementAutomationRunRepository(db, {
     maxRuns: config.replacementAutomationLogMaxRuns,
@@ -644,6 +689,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     cpaClient,
     replacementAccounts,
     replacementServices,
+    adminNotifications,
     cpaOutputDir: join(__dirname, 'auto', 'product_files', 'cpa'),
   });
   const cpaRepairQueue = createCpaRepairQueue({ worker: (job) => cpaRepairWorker.repair(job) });
@@ -659,6 +705,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   });
   createApp({
     db,
+    adminNotifications,
     replacementAccounts,
     replacementAutomationRuns,
     replacementServices,

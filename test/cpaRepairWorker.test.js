@@ -85,3 +85,50 @@ test('repair worker appends CPA upload steps to replacement run log', async () =
   assert.match(log, /step=cpa-verify action=复查 CPA 凭证健康/);
   assert.match(log, /step=cpa-success action=CPA repair 完成/);
 });
+
+test('repair worker creates notification when replacement failure triggers circuit breaker', async () => {
+  const notifications = [];
+  const worker = createCpaRepairWorker({
+    cpaOutputDir: 'src/auto/product_files/cpa',
+    cpaClient: {},
+    adminNotifications: {
+      createNotification(input) {
+        notifications.push(input);
+      },
+    },
+    replacementAccounts: {
+      markReplacementStarted() {},
+      markReplacementSuccess() { throw new Error('not expected'); },
+      markReplacementFailure(id, message) {
+        assert.equal(id, 7);
+        assert.equal(message, 'automation failed');
+        return {
+          id,
+          email: 'user@example.com',
+          status: 'banned',
+          consecutive_replace_failures: 5,
+          circuit_breaker_at: '2026-06-07T00:00:00.000Z',
+          circuit_breaker_reason: '连续补号失败 5 次，自动熔断',
+        };
+      },
+    },
+    replacementServices: {
+      async replaceAccount() {
+        throw new Error('automation failed');
+      },
+    },
+  });
+
+  const result = await worker.repair({ account: { id: 7, email: 'user@example.com' } });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.account.status, 'banned');
+  assert.deepEqual(notifications, [{
+    type: 'cpa_repair_circuit_breaker',
+    severity: 'critical',
+    title: '账号已触发补号熔断',
+    message: 'user@example.com 连续自动补号失败 5 次，已自动标记为 banned，不再进入 CPA 自动补号队列。',
+    account_id: 7,
+    email: 'user@example.com',
+  }]);
+});

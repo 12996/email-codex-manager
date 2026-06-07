@@ -1,6 +1,6 @@
 # CHG-039 避免 Windows 保留 3000 端口导致启动失败
 
-状态：implemented
+状态：merged
 创建日期：2026-06-06
 关联 PRD：PRD-002
 关联 Issue：issue-007
@@ -34,6 +34,6 @@ Error: listen EACCES: permission denied 0.0.0.0:3000
 
 ## 合并记录
 
-- 合并目标 PRD：
-- 合并日期：
-- 备注：待后续 PRD-002 基线合并。
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-07
+- 备注：已合并到 PRD-002 最近基线，补充本机默认端口 3100，以及验证码 API 未显式配置时随 `PORT` 推导的需求。

@@ -31,7 +31,11 @@
     <header class="topbar">
       <button class="menu-btn" type="button">☰</button>
       <div class="admin">
-        <span class="bell">🔔<em>12</em></span>
+        <button id="notificationBell" class="bell" type="button" aria-label="通知">🔔<em id="notificationCount" hidden>0</em></button>
+        <div id="notificationPanel" class="notification-panel" hidden>
+          <h2>通知</h2>
+          <ul id="notificationList"></ul>
+        </div>
         <span class="avatar">👤</span>
         <strong>管理员⌄</strong>
       </div>
@@ -171,6 +175,7 @@
   </dialog>
 
   <div id="toast" role="status" aria-live="polite"></div>
+  <script src="web/notifications.js"></script>
   <script src="web/accounts.js"></script>
 </body>
 </html>

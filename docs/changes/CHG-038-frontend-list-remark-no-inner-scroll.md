@@ -1,6 +1,6 @@
 # CHG-038 前端列表取消局部竖向滚动并显示补号备注
 
-状态：implemented
+状态：merged
 创建日期：2026-06-05
 关联 PRD：PRD-002
 关联 Issue：
@@ -27,6 +27,6 @@
 
 ## 合并记录
 
-- 合并目标 PRD：
-- 合并日期：
-- 备注：待后续 PRD-002 基线合并。
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-07
+- 备注：已合并到 PRD-002 最近基线，补充列表无内部纵向滚动、补号主表显示备注、`sms_last_error` 保留在详情 JSON 的需求。

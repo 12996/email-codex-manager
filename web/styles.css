@@ -82,8 +82,8 @@ nav a.sub.active { background: #eaf2ff; color: var(--blue); }
   cursor: pointer;
   font-weight: 700;
 }
-.admin { display: flex; align-items: center; gap: 18px; }
-.bell { position: relative; }
+.admin { display: flex; align-items: center; gap: 18px; position: relative; }
+.bell { position: relative; border: 0; background: transparent; cursor: pointer; font-size: 20px; padding: 0; }
 .bell em {
   position: absolute;
   top: -10px;
@@ -95,6 +95,35 @@ nav a.sub.active { background: #eaf2ff; color: var(--blue); }
   padding: 2px 5px;
   font-style: normal;
 }
+.notification-panel {
+  position: absolute;
+  right: 88px;
+  top: 42px;
+  width: 360px;
+  max-width: calc(100vw - 32px);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  padding: 14px;
+  z-index: 7;
+}
+.notification-panel[hidden] { display: none; }
+.notification-panel h2 { margin-bottom: 10px; }
+.notification-panel ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
+.notification-panel li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: start;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 10px;
+  background: #fbfdff;
+}
+.notification-panel li.unread { border-color: #ffd6dc; background: #fff8f9; }
+.notification-panel small { display: block; color: var(--muted); margin-top: 4px; line-height: 1.4; white-space: normal; }
+.notification-panel button { border: 0; background: #eaf2ff; color: var(--blue); border-radius: 7px; padding: 6px 8px; cursor: pointer; font-weight: 700; }
 .avatar { width: 34px; height: 34px; border-radius: 50%; background: #eaf2ff; display: grid; place-items: center; }
 
 .page-head, .cards, .panel, .dashboard-grid { margin: 18px 24px; }

@@ -136,6 +136,15 @@ test('web frontend exposes public verification code key controls and copy action
   assert.match(appJs, /\/api\/verification-code\/public\/latest\?key=/);
 });
 
+test('web frontend exposes circuit breaker reset action', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+
+  assert.match(appJs, /解除熔断/);
+  assert.match(appJs, /data-action="reset-circuit-breaker"/);
+  assert.match(appJs, /account\.status === 'banned'/);
+  assert.match(appJs, /\/replacement-accounts\/\$\{account\.id\}\/circuit-breaker\/reset/);
+});
+
 test('replacement account table fully displays required runtime fields', () => {
   const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
   const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');

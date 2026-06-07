@@ -1,6 +1,6 @@
 # CHG-040 Roxy OAuth 密码页 one-time code 与邮箱后异常重试
 
-状态：implemented
+状态：merged
 创建日期：2026-06-06
 关联 PRD：PRD-002
 关联 Issue：`docs/issues/issue-008-roxy-openai-password-email-code-misclassification.md`
@@ -42,3 +42,9 @@
 ## 未完成 / 风险
 
 - 尚未重新执行完整 `/replace` 实机链路确认该密码页分支在真实 Roxy 环境下通过。
+
+## 合并记录
+
+- 合并目标 PRD：`docs/prd/PRD-002-account-management-system.md`
+- 合并日期：2026-06-07
+- 备注：已合并到 PRD-002 最近基线，补充 OpenAI 密码页 one-time code、邮箱提交后阶段识别、未知页面重试和相关日志要求。完整 `/replace` 实机链路风险仍保留在本 change 记录中。
