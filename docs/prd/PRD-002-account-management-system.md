@@ -2,7 +2,7 @@
 
 状态：active
 创建日期：2026-06-01
-最近基线合并：2026-06-07
+最近基线合并：2026-06-08
 
 ## 1. 背景与目标
 
@@ -51,6 +51,7 @@
 - `email`: 绑定邮箱 (大小写不敏感唯一)
 - `phone`: 手机号
 - `sms_api`: 短信验证码获取 API
+- `email_code_api`: 账号级外部邮箱验证码获取 API
 - `activation_method`: 开通方式/渠道 (如 manual, auto)
 - `activated_at`: 开通激活时间；新增补号账号时为空则由系统自动写入当前时间
 - `status`: 状态 (`pending` 待补号, `active` 正常, `banned` 被封禁, `replacing` 补号中, `replaced` 补号成功, `failed` 补号失败)
@@ -90,7 +91,10 @@
   - 这里的“手动”仅指后台按钮或 API 手动触发；网页注册流程仍由后端子进程自动执行。
   - 注册脚本必须复用 RoxyBrowser 开窗和 Playwright CDP 接管流程，不允许主流程裸启动普通 Chromium。
   - 注册脚本从 `https://chatgpt.com/` 进入注册流程。
-  - 注册阶段只使用邮箱验证码，通过 `POST /api/verification-code/latest` 和请求体 `{ "account": "<email>" }` 获取。
+  - 注册阶段只使用邮箱验证码，不使用短信验证码。
+  - 若补号账号配置 `email_code_api`，注册子进程必须优先通过外部邮箱验证码接口获取验证码；该接口通过 GET 读取 HTML/text/JSON，并从清理后的正文或常见 JSON code 字段提取 6 位验证码。
+  - 若补号账号未配置 `email_code_api`，注册脚本通过本地 `POST /api/verification-code/latest` 和请求体 `{ "account": "<email>" }` 获取邮箱验证码。
+  - 注册脚本直接运行时，也应支持 `registrationEmailCodeApiUrl` / `email_code_api` / `emailCodeApiUrl` 参数或 `REGISTRATION_EMAIL_CODE_API_URL` / `EMAIL_CODE_API` / `email_code_api` 环境变量指定外部邮箱验证码接口。
   - 注册阶段不得使用 `replacement_accounts.sms_api`，也不得向子进程注入 `PHONE_VERIFICATION_SMS_API_URL`。
   - 注册运行必须复用补号自动化运行记录和日志能力，日志以 `registration` 或 `[roxy-register-openai]` 区分。
   - 注册日志不得输出验证码、Cookie、token、代理密码等敏感明文。
@@ -110,10 +114,14 @@
   - 手动补号和 CPA 自动补号在配置 CPA repair worker 时必须统一执行：Roxy OAuth、读取本地 CPA JSON、上传 CPA、上传后健康复查和状态落库。
   - 设置为 `banned` 的本地补号账号不得触发 CPA 自动补号。
 - **补号列表展示**:
-  - 补号列表主表必须展示 `email`、`phone`、`sms_api`、`remark`、`activation_method`、`activated_at`、`status`、`status_updated_at`、`public_code_key` 和 `replacement_count`。
+  - 补号列表主表必须展示 `email`、`phone`、`sms_api`、`email_code_api`、`remark`、`activation_method`、`activated_at`、`status`、`status_updated_at`、`public_code_key` 和 `replacement_count`。
   - `sms_last_error` 仍保留在账号详情 JSON 中供排查使用，但不在补号列表主表直接展示。
   - `phone` 在补号列表中显示原文，不做脱敏。
-  - 长字段不得省略为 `...`；页面宽度不足时，通过表格外层水平滚动查看所有列。
+  - 邮箱、手机号、SMS API、邮箱验证码 API、备注、开通信息、状态时间、公开验证码 Key、更新时间等长字段在主表按字段级最大显示长度截断。
+  - 仅当字段原文超出显示长度且非空时，单元格旁显示“复制”按钮；点击后复制该字段完整原始值，剪贴板不可用时回退到浏览器提示框。
+  - 公开验证码 URL 的原有复制入口必须保持不变。
+  - 账号详情弹窗仍展示完整账号 JSON，不受主表截断影响。
+  - 页面宽度不足时，通过表格外层水平滚动查看所有列。
   - 补号列表必须通过服务端分页加载，支持 `page`、`pageSize`、`status`、`keyword` 查询；页面支持每页 10/20/50 条、上一页、下一页和当前页显示，筛选状态或搜索关键词时回到第 1 页。
 
 ---
@@ -217,12 +225,14 @@
   - `replacement_accounts.email` 覆盖子进程 `ROXY_OAUTH_EMAIL`。
   - `replacement_accounts.phone` 覆盖子进程 `ROXY_OAUTH_PHONE`。
   - `replacement_accounts.sms_api` 覆盖子进程 `PHONE_VERIFICATION_SMS_API_URL`。
+  - `replacement_accounts.email_code_api` 存在时覆盖子进程 `VERIFICATION_CODE_API_URL`，OAuth 邮箱验证码阶段通过 GET 读取外部接口并提取 6 位验证码；为空时继续走本地 `POST /api/verification-code/latest`。
   - 子进程退出码为 `0` 时视为补号成功；非 `0` 或启动失败时视为 `REPLACE_FAILED`。
 - `POST /replacement-accounts/:id/register` 默认通过子进程运行 `src/auto/roxy_register_openai.js`：
   - 子进程继承 `.env` / `process.env` 中的 Roxy 配置。
   - `replacement_accounts.email` 覆盖子进程 `ROXY_REGISTER_EMAIL` 和 `ROXY_OAUTH_EMAIL`。
+  - `replacement_accounts.email_code_api` 存在时覆盖子进程 `REGISTRATION_EMAIL_CODE_API_URL`。
   - 子进程不得接收 `PHONE_VERIFICATION_SMS_API_URL`。
-  - 子进程使用内部 POST 邮箱验证码接口获取注册验证码。
+  - 子进程优先使用外部邮箱验证码接口；未配置 `email_code_api` 时使用内部 POST 邮箱验证码接口获取注册验证码。
   - 子进程退出码为 `0` 时视为注册自动化成功；非 `0` 或启动失败时视为 `REGISTER_FAILED`。
 - 本机默认 Web 服务端口为 `PORT=3100`；验证码 API 地址未显式配置时，自动化脚本应根据当前 `PORT` 推导本机 `POST /api/verification-code/latest` 地址，避免固定依赖 `3000` 端口。
 
@@ -236,7 +246,7 @@
   - 服务端在输出 HTML 时，读取该侧边栏模板，将其注入到 `<aside class="sidebar">` 内，并根据访问的路由自动为对应的导航项高亮 `active` 样式。
   - 页面包括：仪表盘、邮箱账号、补号管理。
 - **弹窗展示**: 所有的操作详情（如账号 JSON、邮件内容、编辑表单）必须使用 HTML5 原生 `<dialog>` 以模态遮罩弹窗（Modal）形式呈现，并具备磨砂玻璃半透明质感，支持 Esc 键快捷关闭。
-- **性能与排版**: 邮箱账号表格、补号账号表格和邮件结果列表不设置内部纵向滚动，内容随页面自然上下滚动；宽表字段通过表格外层水平滚动查看，避免长字段被省略。
+- **性能与排版**: 邮箱账号表格、补号账号表格和邮件结果列表不设置内部纵向滚动，内容随页面自然上下滚动；补号宽表长字段在主表中截断展示并提供复制完整值能力，表格外层保留水平滚动。
 - **补号日志页面**: 后台应提供补号自动化运行列表、日志详情和运行中停止操作入口，方便定位长流程卡点。
 - **通知入口**: 顶部铃铛作为站内通知入口，显示未读数量和最近通知，至少覆盖 CPA 自动补号熔断告警。
 
@@ -265,6 +275,8 @@
 - [x] 自动化失败时可生成失败截图，且截图文件名不泄露敏感信息。
 - [x] 正式补号入口通过子进程执行自动化，成功/失败结果能驱动补号账号状态流转。
 - [x] 管理员可手动触发 OpenAI 注册自动化，注册流程只使用邮箱验证码且不使用 SMS API。
+- [x] 注册和 OAuth 补号均支持账号级 `email_code_api` 外部邮箱验证码接口；未配置时回退本地 `POST /api/verification-code/latest`。
+- [x] 外部邮箱验证码接口支持 HTML/text/JSON 提取 6 位验证码，并避免 HTML CSS 色值误匹配。
 - [x] 补号子进程运行记录、日志查看和停止操作可用。
 - [x] CPA 凭证健康检测、失效分类、自动补号、CPA 上传和上传后复查可用。
 - [x] 本地 `banned` 补号账号不会触发 CPA 自动补号。
@@ -273,6 +285,7 @@
 - [x] 自动补号熔断会创建站内通知，顶部铃铛显示未读数量并支持查看、标记已读。
 - [x] 手动补号和 CPA 自动补号统一走 CPA repair worker。
 - [x] 补号列表完整显示关键字段，并支持水平滚动查看长字段。
+- [x] 补号列表长字段按最大长度截断，超长字段可复制完整原始值。
 - [x] 补号管理主表展示管理员备注，`sms_last_error` 保留在详情 JSON 中供排查。
 - [x] 补号账号列表支持服务端分页、服务端状态筛选和关键词搜索。
 - [x] 本机默认访问端口与示例配置使用 3100，验证码 API 未显式配置时会随 `PORT` 推导。

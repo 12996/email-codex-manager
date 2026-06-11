@@ -593,6 +593,30 @@ test('openAi_email_code sends configured admin_auth cookie when fetching email c
   });
 });
 
+test('openAi_email_code fetches external email code API by GET and extracts code from HTML', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
+  page.request.get = async (url, options) => {
+    calls.push(['request.get', url, options]);
+    return {
+      async text() {
+        return '<style>.x{color:#123456}</style><main>Your code is <b>445566</b></main>';
+      },
+    };
+  };
+
+  const result = await openAi_email_code(page, 'jregkolpig+s2@gmail.com', {
+    verificationApiUrl: 'https://example.invalid/latest-code',
+    timeoutMs: 100,
+  });
+
+  assert.equal(result.code, '445566');
+  assert.deepEqual(calls.filter((call) => ['request.get', 'request.post', 'code.fill'].includes(call[0])), [
+    ['request.get', 'https://example.invalid/latest-code', { timeout: 100 }],
+    ['code.fill', '445566'],
+  ]);
+});
+
 test('openAi_email_code polls email verification API until a valid code is available', async () => {
   const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
   const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');

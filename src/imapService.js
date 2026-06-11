@@ -7,6 +7,7 @@ import {
   normalizeFetchLimit,
   resolveReadLocation,
 } from './readLocations.js';
+import { extractVerificationCode, htmlToText } from './verificationCodeService.js';
 
 export async function testConnection(account) {
   const client = createClient(account);
@@ -168,18 +169,7 @@ export function deriveMainGmailAccount(email) {
 }
 
 export function extractSixDigitCode(message) {
-  const candidates = [
-    message?.bodyText,
-    stripHtml(message?.bodyHtml || ''),
-    message?.subject,
-  ];
-  for (const candidate of candidates) {
-    const match = String(candidate || '').match(/(?<!\d)\d{6}(?!\d)/);
-    if (match) {
-      return match[0];
-    }
-  }
-  return null;
+  return extractVerificationCode(message);
 }
 
 export function findLatestVerificationCode(messages) {
@@ -316,7 +306,7 @@ function normalizeBodyText(value) {
 }
 
 function stripHtml(html) {
-  return String(html || '').replace(/<[^>]*>/g, ' ');
+  return htmlToText(html);
 }
 
 function sanitizeEmailHtml(html) {

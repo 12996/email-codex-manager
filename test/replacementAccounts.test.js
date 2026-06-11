@@ -111,6 +111,24 @@ test('createAccount trims email and defaults status to pending', () => {
   assert.ok(account.updated_at);
 });
 
+test('createAccount and updateAccount store external email code API URL', () => {
+  const repo = createTestRepository();
+
+  const account = repo.createAccount({
+    email: 'email-code-api@example.com',
+    email_code_api: ' https://example.invalid/code ',
+  });
+
+  assert.equal(account.email_code_api, 'https://example.invalid/code');
+
+  const updated = repo.updateAccount(account.id, {
+    email: 'email-code-api@example.com',
+    email_code_api: ' https://example.invalid/next-code ',
+  });
+
+  assert.equal(updated.email_code_api, 'https://example.invalid/next-code');
+});
+
 test('createAccount defaults activated_at to current time when omitted', () => {
   const repo = createTestRepository();
   const before = Date.now();

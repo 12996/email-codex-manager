@@ -71,3 +71,71 @@ test('registration email verification uses POST latest API and does not log code
   assert.equal(logs.some((line) => String(line).includes('654321')), false);
   assert.equal(logs.some((line) => String(line).includes('code=received')), true);
 });
+
+test('registration email verification prefers external GET API and does not log code', async () => {
+  const { fetchRegistrationEmailVerificationCodeOnce } = requireRegisterModuleWithStubs();
+  const calls = [];
+  const logs = [];
+  const page = {
+    request: {
+      async post() {
+        throw new Error('POST should not be called');
+      },
+      async get(url, options) {
+        calls.push(['get', url, options]);
+        return {
+          async text() {
+            return '<style>.c{color:#123456}</style><p>Your code is 789012</p>';
+          },
+        };
+      },
+    },
+  };
+
+  const result = await fetchRegistrationEmailVerificationCodeOnce(page, 'user@example.com', {
+    registrationEmailCodeApiUrl: 'https://example.invalid/code',
+    logger: { log: (message) => logs.push(message), warn: (message) => logs.push(message), error: (message) => logs.push(message) },
+  }, 1, 3);
+
+  assert.equal(result.code, '789012');
+  assert.deepEqual(calls, [[
+    'get',
+    'https://example.invalid/code',
+    { timeout: 30000 },
+  ]]);
+  assert.equal(logs.some((line) => String(line).includes('789012')), false);
+  assert.equal(logs.some((line) => String(line).includes('https://example.invalid/code')), false);
+  assert.equal(logs.some((line) => String(line).includes('api=external-email-code')), true);
+  assert.equal(logs.some((line) => String(line).includes('code=received')), true);
+});
+
+test('registration email verification accepts email_code_api option alias before local POST', async () => {
+  const { fetchRegistrationEmailVerificationCodeOnce } = requireRegisterModuleWithStubs();
+  const calls = [];
+  const page = {
+    request: {
+      async post() {
+        throw new Error('POST should not be called');
+      },
+      async get(url, options) {
+        calls.push(['get', url, options]);
+        return {
+          async text() {
+            return 'OpenAI verification code: 345678';
+          },
+        };
+      },
+    },
+  };
+
+  const result = await fetchRegistrationEmailVerificationCodeOnce(page, 'user@example.com', {
+    email_code_api: 'https://example.invalid/email-code',
+  }, 1, 1);
+
+  assert.equal(result.code, '345678');
+  assert.deepEqual(calls, [[
+    'get',
+    'https://example.invalid/email-code',
+    { timeout: 30000 },
+  ]]);
+});

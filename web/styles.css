@@ -198,7 +198,30 @@ thead th {
 .email-main { font-weight: 800; }
 .muted { color: var(--muted); font-size: 12px; }
 .field-raw { font-family: Consolas, "Courier New", monospace; }
-.remark-cell { min-width: 180px; max-width: 280px; white-space: normal; line-height: 1.45; }
+.limited-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 100%;
+  vertical-align: middle;
+}
+.limited-field-text {
+  display: inline-block;
+  max-width: 420px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.copy-field-button {
+  border: 1px solid #dbe3ef;
+  border-radius: 6px;
+  box-shadow: none;
+  color: var(--blue);
+  font-size: 12px;
+  padding: 3px 7px;
+}
+.remark-cell { min-width: 180px; max-width: 280px; line-height: 1.45; }
 .status { border-radius: 7px; padding: 5px 9px; font-weight: 800; font-size: 12px; }
 .status.active, .status.replaced { background: #dff8ea; color: #16a35b; }
 .status.banned, .status.failed { background: #ffe6e9; color: #e52f42; }

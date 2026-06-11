@@ -137,6 +137,67 @@ test('replaceAccount runs roxy oauth script in a child process with account env'
   assert.equal(calls[0].options.env.PHONE_VERIFICATION_SMS_API_URL, 'https://example.invalid/sms');
 });
 
+test('registerAccount injects per-account external email code API URL', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    registerScriptPath: 'src/auto/roxy_register_openai.js',
+    baseEnv: {
+      REGISTRATION_EMAIL_CODE_API_URL: 'https://old.example/code',
+      VERIFICATION_CODE_API_URL: 'http://127.0.0.1:3100/api/verification-code/latest',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.registerAccount({
+    id: 12,
+    email: ' user@example.com ',
+    email_code_api: ' https://example.invalid/latest-code ',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['src/auto/roxy_register_openai.js']);
+  assert.equal(calls[0].options.env.ROXY_REGISTER_EMAIL, 'user@example.com');
+  assert.equal(calls[0].options.env.REGISTRATION_EMAIL_CODE_API_URL, 'https://example.invalid/latest-code');
+});
+
+test('replaceAccount injects per-account external email code API URL for oauth', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    scriptPath: 'src/auto/roxy_oauth_login.js',
+    baseEnv: {
+      VERIFICATION_CODE_API_URL: 'http://127.0.0.1:3100/api/verification-code/latest',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccount({
+    id: 18,
+    email: ' user@example.com ',
+    email_code_api: ' https://example.invalid/latest-code ',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['src/auto/roxy_oauth_login.js']);
+  assert.equal(calls[0].options.env.ROXY_OAUTH_EMAIL, 'user@example.com');
+  assert.equal(calls[0].options.env.VERIFICATION_CODE_API_URL, 'https://example.invalid/latest-code');
+});
+
 test('replaceAccount creates automation run and writes child logs', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-logs-'));
   const calls = [];

@@ -38,9 +38,13 @@ async function main() {
   });
 
   const result = await response.json();
+  const safeResult = {
+    ...result,
+    code: result?.code ? '[redacted-6-digit]' : result?.code,
+  };
 
   console.log('HTTP status:', response.status);
-  console.log(JSON.stringify(result, null, 2));
+  console.log(JSON.stringify(safeResult, null, 2));
 }
 
 main().catch((error) => {

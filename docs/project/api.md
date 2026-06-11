@@ -795,6 +795,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
   "email": "user@example.com",
   "phone": "13800000000",
   "sms_api": "https://example.invalid/sms",
+  "email_code_api": "https://example.invalid/email-code",
   "activation_method": "manual",
   "activated_at": "2026-06-01T00:00:00.000Z",
   "status": "pending",
@@ -815,6 +816,11 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 ### PUT `/replacement-accounts/:id`
 
 修改补号账号基础信息。请求字段同新增账号。`email` 仍按大小写不敏感规则校验唯一。
+
+字段说明：
+
+- `sms_api`：补号/OAuth 手机短信验证码接口。
+- `email_code_api`：OpenAI 注册阶段的账号级外部邮箱验证码接口。配置后，注册子进程优先通过 GET 请求该 URL 获取 HTML/text/JSON payload，并从清理后的正文或常见 JSON code 字段提取 6 位验证码。
 
 ### DELETE `/replacement-accounts/:id`
 
@@ -970,8 +976,10 @@ src/auto/roxy_register_openai.js
 2. 默认适配器启动子进程调用 `src/auto/roxy_register_openai.js`。
 3. 子进程 env 使用 `replacement_accounts.email` 覆盖 `ROXY_REGISTER_EMAIL` 和 `ROXY_OAUTH_EMAIL`。
 4. 注册脚本从 `https://chatgpt.com/` 进入注册流程。
-5. 注册脚本通过 `POST /api/verification-code/latest`、请求体 `{ "account": "<email>" }` 获取邮箱验证码。
-6. 日志写入 `data/automation-logs/registration-<id>-<timestamp>.log`，包含 `step=...` 阶段日志，不记录验证码、Cookie、token 或代理密码明文。
+5. 若账号配置 `email_code_api`，后端向子进程注入 `REGISTRATION_EMAIL_CODE_API_URL`，注册脚本优先 GET 该外部接口获取邮箱验证码。
+6. 若账号未配置 `email_code_api`，注册脚本保持原行为：通过 `POST /api/verification-code/latest`、请求体 `{ "account": "<email>" }` 获取邮箱验证码。
+7. 邮箱验证码提取会先移除 HTML `script/style` 和标签，再匹配独立 6 位数字，避免 CSS 色值误匹配；JSON payload 支持 `code`、`otp`、`verification_code`、`verificationCode` 等字段。
+8. 日志写入 `data/automation-logs/registration-<id>-<timestamp>.log`，包含 `step=...` 阶段日志，不记录验证码、Cookie、token 或代理密码明文。
 
 成功响应：
 
@@ -1041,13 +1049,14 @@ src/auto/roxy_oauth_login.js
 | `email` / `ROXY_OAUTH_EMAIL` | `replacement_accounts.email` | OpenAI 登录邮箱；默认适配器会覆盖子进程 env 中的 `ROXY_OAUTH_EMAIL`；也用于邮箱验证码接口的 `account` 参数。 |
 | `smsApiUrl` / `PHONE_VERIFICATION_SMS_API_URL` | `replacement_accounts.sms_api` | 手机短信验证码接口；存在时默认适配器会覆盖子进程 env 中的 `PHONE_VERIFICATION_SMS_API_URL`；脚本会从响应文本或 JSON 中提取 6 位验证码。 |
 | `phone` | `replacement_accounts.phone` | 当前脚本不直接填写手机号；仅作为补号账号记录和人工排查信息。 |
-| `publicCodeKey` | `replacement_accounts.public_code_key` | 当前脚本默认走本地 `POST /api/verification-code/latest`，不需要该字段；外部公开取邮箱验证码时才使用。 |
+| `publicCodeKey` | `replacement_accounts.public_code_key` | 当前 OAuth 补号脚本不需要该字段；外部公开取邮箱验证码时才使用。 |
+| `emailCodeApi` / `VERIFICATION_CODE_API_URL` | `replacement_accounts.email_code_api` | 存在时默认适配器会覆盖子进程 env 中的 `VERIFICATION_CODE_API_URL`，OAuth 邮箱验证码阶段通过 GET 读取该外部接口并提取 6 位码；为空时脚本按 `PORT` 使用本地 `POST /api/verification-code/latest`。 |
 | Roxy API 地址 | `.env` / 运行配置 | `ROXY_API_BASE_URL` 或 `ROXY_API_PORT`，由子进程继承，不来自补号表。 |
 | Roxy API Token | `.env` / 运行配置 | `ROXY_API_TOKEN`，不来自补号表。 |
 | Roxy 工作区 | `.env` / 运行配置 | `ROXY_WORKSPACE_ID`，不来自补号表。 |
 | Roxy 窗口定位 | `.env` / 运行配置 | `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者至少配置一种；不来自补号表。 |
 | 复用 CDP | `.env` / 运行配置 | `ROXY_CDP_ENDPOINT`；配置后脚本跳过 Roxy 准备流程并直接连接现有浏览器。 |
-| 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`；留空时自动使用 `http://127.0.0.1:${PORT}/api/verification-code/latest`。 |
+| 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`；补号账号未配置 `email_code_api` 时留空并自动使用 `http://127.0.0.1:${PORT}/api/verification-code/latest`。 |
 | 后台 Cookie | `.env` / 运行配置 | `ADMIN_AUTH_COOKIE`；非本机调用邮箱验证码接口时使用。 |
 | 浏览器关闭/有头无头策略 | `.env` / 运行配置 | `ROXY_KEEP_OPEN`、`ROXY_HEADLESS`、`ROXY_ENSURE_CLOSED`。`ROXY_HEADLESS=auto` 时，`ROXY_KEEP_OPEN=1` 默认有头并保留窗口，`ROXY_KEEP_OPEN=0` 默认无头并关闭窗口。 |
 | 代理提示 | `.env` / 运行配置 | `ROXY_PROXY`；当前 token 请求阶段仅记录提示，浏览器代理由 Roxy 窗口自身配置决定。 |

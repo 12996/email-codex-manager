@@ -20,6 +20,20 @@ const statusLabels = {
   failed: 'failed',
 };
 
+const tableFieldLimits = {
+  email: 30,
+  phone: 18,
+  sms_api: 46,
+  email_code_api: 46,
+  remark: 60,
+  activation_method: 18,
+  activated_at: 20,
+  status_updated_at: 20,
+  public_code_key: 32,
+  last_operation: 18,
+  updated_at: 20,
+};
+
 const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -121,18 +135,19 @@ function accountRow(account) {
   return `
     <tr>
       <td><input class="row-check" type="checkbox" data-id="${account.id}" ${checked}></td>
-      <td><div class="email-main field-raw">${escapeHtml(account.email)}</div><div class="muted">ID: ${account.id}</div></td>
-      <td><span class="field-raw">${escapeHtml(account.phone || '-')}</span></td>
-      <td><span class="field-raw">${escapeHtml(account.sms_api || '-')}</span></td>
-      <td><div class="remark-cell">${escapeHtml(account.remark || '-')}</div></td>
-      <td>${escapeHtml(account.activation_method || '-')}</td>
-      <td><span class="field-raw">${escapeHtml(account.activated_at || '-')}</span></td>
+      <td>${renderLimitedField(account, 'email', account.email, { className: 'email-main field-raw' })}<div class="muted">ID: ${account.id}</div></td>
+      <td>${renderLimitedField(account, 'phone', account.phone, { className: 'field-raw' })}</td>
+      <td>${renderLimitedField(account, 'sms_api', account.sms_api, { className: 'field-raw' })}</td>
+      <td>${renderLimitedField(account, 'email_code_api', account.email_code_api, { className: 'field-raw' })}</td>
+      <td>${renderLimitedField(account, 'remark', account.remark, { className: 'remark-cell' })}</td>
+      <td>${renderLimitedField(account, 'activation_method', account.activation_method)}</td>
+      <td>${renderLimitedField(account, 'activated_at', account.activated_at, { className: 'field-raw' })}</td>
       <td><span class="status ${account.status}">${statusLabels[account.status] || account.status}</span></td>
-      <td><span class="field-raw">${escapeHtml(account.status_updated_at || '-')}</span></td>
-      <td><span class="field-raw">${escapeHtml(account.public_code_key || '-')}</span><div class="muted">${account.public_code_enabled ? '公开验证码已启用' : '公开验证码未启用'}</div></td>
+      <td>${renderLimitedField(account, 'status_updated_at', account.status_updated_at, { className: 'field-raw' })}</td>
+      <td>${renderLimitedField(account, 'public_code_key', account.public_code_key, { className: 'field-raw' })}<div class="muted">${account.public_code_enabled ? '公开验证码已启用' : '公开验证码未启用'}</div></td>
       <td>${account.replacement_count || 0}</td>
-      <td><span class="dot ${lastText.type}"></span>${escapeHtml(lastText.label)}<div class="muted">${escapeHtml(formatDate(account.last_replace_at || account.json_fetched_at || account.status_updated_at))}</div></td>
-      <td>${escapeHtml(formatDate(account.updated_at))}</td>
+      <td><span class="dot ${lastText.type}"></span>${renderLimitedField(account, 'last_operation', lastText.label)}<div class="muted">${escapeHtml(formatDate(account.last_replace_at || account.json_fetched_at || account.status_updated_at))}</div></td>
+      <td>${renderLimitedField(account, 'updated_at', formatDate(account.updated_at))}</td>
       <td>
         <div class="actions">
           <button class="primary action-toggle" type="button" data-id="${account.id}">操作⌄</button>
@@ -152,6 +167,25 @@ function accountRow(account) {
         <button type="button" data-action="detail" data-id="${account.id}">详情</button>
       </td>
     </tr>
+  `;
+}
+
+function renderLimitedField(account, field, value, options = {}) {
+  const rawText = String(value || '-');
+  const maxLength = tableFieldLimits[field] || 24;
+  const isEmpty = rawText === '-';
+  const isLong = !isEmpty && rawText.length > maxLength;
+  const text = isLong ? `${rawText.slice(0, maxLength)}...` : rawText;
+  const className = ['limited-field-text', options.className].filter(Boolean).join(' ');
+  const copyButton = isLong
+    ? `<button class="copy-field-button" type="button" data-action="copy-field" data-id="${account.id}" data-field="${escapeHtml(field)}">复制</button>`
+    : '';
+
+  return `
+    <span class="limited-field" title="${escapeHtml(rawText)}">
+      <span class="${escapeHtml(className)}">${escapeHtml(text)}</span>
+      ${copyButton}
+    </span>
   `;
 }
 
@@ -175,13 +209,13 @@ function bindRowEvents() {
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', (event) => {
       event.stopPropagation();
-      handleAction(button.dataset.action, Number(button.dataset.id));
+      handleAction(button.dataset.action, Number(button.dataset.id), button.dataset);
       closeOpenMenus();
     });
   });
 }
 
-async function handleAction(action, id) {
+async function handleAction(action, id, dataset = {}) {
   const account = state.accounts.find((item) => item.id === id);
   if (!account) return;
   if (action === 'edit') return openAccountDialog(account);
@@ -195,13 +229,14 @@ async function handleAction(action, id) {
   if (action === 'reset-circuit-breaker') return resetCircuitBreaker(account);
   if (action === 'toggle-public-code') return togglePublicCode(account);
   if (action === 'copy-public-code-url') return copyPublicCodeUrl(account);
+  if (action === 'copy-field') return copyAccountField(account, dataset.field);
 }
 
 function openAccountDialog(account = null) {
   const form = $('#accountForm');
   form.reset();
   $('#dialogTitle').textContent = account ? '编辑账号' : '新增账号';
-  for (const field of ['id', 'email', 'phone', 'sms_api', 'activation_method', 'activated_at', 'status', 'remark']) {
+  for (const field of ['id', 'email', 'phone', 'sms_api', 'email_code_api', 'activation_method', 'activated_at', 'status', 'remark']) {
     form.elements[field].value = account?.[field] || (field === 'status' ? 'pending' : '');
   }
   form.elements.public_code_enabled.checked = Boolean(Number(account?.public_code_enabled || 0));
@@ -241,6 +276,22 @@ async function copyPublicCodeUrl(account) {
     toast('公开验证码 URL 已复制');
   } catch (error) {
     prompt('复制公开验证码 URL', url);
+  }
+}
+
+async function copyAccountField(account, field) {
+  const value = account?.[field];
+  const text = String(value || '');
+  if (!text) {
+    toast('该字段为空，无法复制');
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    addActivity('复制列表字段', `${account.email}: ${field}`);
+    toast('字段完整内容已复制');
+  } catch (error) {
+    prompt('复制字段完整内容', text);
   }
 }
 

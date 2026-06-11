@@ -51,3 +51,6 @@
 | 2026-06-06 | Roxy OAuth 密码页 one-time code 与邮箱后异常重试 | done | `2026-06-06-roxy-openai-password-one-time-code.md` |
 | 2026-06-07 | PRD-002 change 基线合并 | done | `2026-06-07-prd-002-change-merge.md` |
 | 2026-06-07 | CPA 自动补号连续失败熔断与站内通知 | done | `2026-06-07-cpa-repair-circuit-breaker-notifications.md` |
+| 2026-06-08 | 补号注册与 OAuth 外部邮箱验证码接口 | done | `2026-06-08-email-code-api-extraction-service.md` |
+| 2026-06-08 | 补号列表长字段截断与复制 | done | `2026-06-08-replacement-table-limited-field-copy.md` |
+| 2026-06-08 | PRD-002 change 基线合并 | done | `2026-06-08-prd-002-change-merge.md` |

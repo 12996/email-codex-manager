@@ -114,12 +114,17 @@ export function createRoxyChildProcessAutomation({
       const email = normalizeRequired(account?.email, 'REPLACE_FAILED', 'replacement account email is required');
       const phone = normalizeOptional(account?.phone);
       const smsApi = normalizeOptional(account?.sms_api);
+      const emailCodeApi = normalizeOptional(account?.email_code_api);
       const env = {
         ...baseEnv,
         ROXY_OAUTH_EMAIL: email,
         ...(phone ? { ROXY_OAUTH_PHONE: phone } : {}),
         ...(smsApi ? { PHONE_VERIFICATION_SMS_API_URL: smsApi } : {}),
+        ...(emailCodeApi ? { VERIFICATION_CODE_API_URL: emailCodeApi } : {}),
       };
+      if (!emailCodeApi) {
+        delete env.VERIFICATION_CODE_API_URL;
+      }
 
       return runChildProcess({
         spawnImpl,
@@ -131,18 +136,23 @@ export function createRoxyChildProcessAutomation({
         logDir,
         kind: 'replacement',
         failureCode: 'REPLACE_FAILED',
-        envSummaryKeys: ['ROXY_OAUTH_EMAIL', 'ROXY_OAUTH_PHONE', 'PHONE_VERIFICATION_SMS_API_URL'],
+        envSummaryKeys: ['ROXY_OAUTH_EMAIL', 'ROXY_OAUTH_PHONE', 'PHONE_VERIFICATION_SMS_API_URL', 'VERIFICATION_CODE_API_URL'],
       });
     },
 
     registerAccount(account) {
       const email = normalizeRequired(account?.email, 'REGISTER_FAILED', 'registration account email is required');
+      const emailCodeApi = normalizeOptional(account?.email_code_api);
       const env = {
         ...baseEnv,
         ROXY_REGISTER_EMAIL: email,
         ROXY_OAUTH_EMAIL: email,
+        ...(emailCodeApi ? { REGISTRATION_EMAIL_CODE_API_URL: emailCodeApi } : {}),
       };
       delete env.PHONE_VERIFICATION_SMS_API_URL;
+      if (!emailCodeApi) {
+        delete env.REGISTRATION_EMAIL_CODE_API_URL;
+      }
 
       return runChildProcess({
         spawnImpl,
@@ -154,7 +164,7 @@ export function createRoxyChildProcessAutomation({
         logDir,
         kind: 'registration',
         failureCode: 'REGISTER_FAILED',
-        envSummaryKeys: ['ROXY_REGISTER_EMAIL', 'ROXY_OAUTH_EMAIL', 'VERIFICATION_CODE_API_URL'],
+        envSummaryKeys: ['ROXY_REGISTER_EMAIL', 'ROXY_OAUTH_EMAIL', 'VERIFICATION_CODE_API_URL', 'REGISTRATION_EMAIL_CODE_API_URL'],
       });
     },
   };

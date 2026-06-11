@@ -2,6 +2,38 @@
 
 状态：active
 
+## 2026-06-08 PRD-002 change 基线合并
+
+- 来源工作日志：`docs/work/2026-06-08-prd-002-change-merge.md`
+- 合并范围：`CHG-042`、`CHG-043`。
+- 当前进展：`docs/prd/PRD-002-account-management-system.md` 最近基线合并日期已更新为 `2026-06-08`，并吸收账号级 `email_code_api`、注册/OAuth 外部邮箱验证码接口、外部 HTML/text/JSON 验证码提取、本地 POST 回退、补号主表 `email_code_api` 展示、长字段截断和复制完整原始值等要求。
+- 状态更新：`docs/changes/CHANGE_REGISTRY.md` 及对应 change 文件中 `CHG-042`、`CHG-043` 已更新为 `merged`，并补充合并目标 PRD 和合并日期。
+- 当前提醒：`CHANGE_REGISTRY.md` 中当前未发现未合并的 `implemented` change。
+
+## 2026-06-08 补号 OAuth 外部邮箱验证码接口
+
+- 来源工作日志：`docs/work/2026-06-08-email-code-api-extraction-service.md`
+- change：`docs/changes/CHG-042-email-code-api-extraction-service.md`，状态 `merged`，已合并 PRD。
+- 当前进展：`CHG-042` 已从“补号注册支持账号级外部邮箱验证码接口”扩展为“补号注册与 OAuth 支持账号级外部邮箱验证码接口”。`replacementServices.replaceAccount()` 现在读取补号账号 `email_code_api`，有值时向 `src/auto/roxy_oauth_login.js` 子进程注入 `VERIFICATION_CODE_API_URL`；无值时移除该 env，让脚本按 `PORT` 继续走本地 `POST /api/verification-code/latest`。`roxy_oauth_login.js` 对本地验证码接口保持 POST JSON，对外部 `VERIFICATION_CODE_API_URL` 使用 GET，并复用通用验证码提取核心处理 HTML/text/JSON，避免 CSS 色值误匹配。`roxy_register_openai.js` 也已直接兼容 `email_code_api` / `emailCodeApiUrl` 参数和 `EMAIL_CODE_API` / `email_code_api` 环境变量，均优先于本地 POST。
+- 验证：RED 阶段测试先失败于 `replaceAccount` 未注入外部邮箱验证码 URL、`openAi_email_code` 对外部 URL 仍走旧 POST/JSON 解析，以及注册脚本传入 `email_code_api` 选项时仍调用本地 POST；修复后 `node --test test\replacementServices.test.js` 通过，15/15 pass；`node --test test\roxyOauthLogin.test.js` 通过，69/69 pass；`node --test test\roxyRegisterOpenai.test.js` 通过，3/3 pass；`node --check src\auto\roxy_oauth_login.js` 和 `node --check src\auto\roxy_register_openai.js` 通过。
+- 当前提醒：`CHG-042` 已在 2026-06-08 PRD 基线合并中更新为 `merged`。
+
+## 2026-06-08 补号列表长字段截断与复制
+
+- 来源工作日志：`docs/work/2026-06-08-replacement-table-limited-field-copy.md`
+- change：`docs/changes/CHG-043-replacement-table-limited-field-copy.md`，状态 `merged`，已合并 PRD。
+- 当前进展：补号管理主表已对邮箱、手机号、SMS API、邮箱验证码 API、备注、开通信息、状态时间、公开验证码 Key、更新时间等字段使用 `tableFieldLimits` 做最大显示长度控制；超长字段旁新增“复制”按钮，点击复制该字段完整原始值，剪贴板不可用时回退 `prompt`。详情弹窗和后端接口未改变。
+- 验证：`node --check .\web\app.js` 通过；`node --test .\test\replacementAccountsWeb.test.js` 通过，9/9 pass。
+- 当前提醒：`CHG-043` 已在 2026-06-08 PRD 基线合并中更新为 `merged`。
+
+## 2026-06-08 补号注册外部邮箱验证码接口
+
+- 来源工作日志：`docs/work/2026-06-08-email-code-api-extraction-service.md`
+- change：`docs/changes/CHG-042-email-code-api-extraction-service.md`，状态 `merged`，已合并 PRD。
+- 当前进展：新增通用验证码提取核心，ESM 与 `src/auto` CommonJS 脚本共用同一份 `.cjs` 核心；HTML 提取会先移除 `script/style` 和标签，再匹配独立 6 位数字，避免 CSS 色值误匹配。`imapService.extractSixDigitCode()` 已复用该逻辑，本地 `POST /api/verification-code/latest` 保持原接口行为。补号账号新增 `email_code_api` 字段，数据库、仓储、前端表单和列表已做最小支持。`POST /replacement-accounts/:id/register` 启动注册子进程时，若账号配置该字段，会注入 `REGISTRATION_EMAIL_CODE_API_URL`；注册脚本优先 GET 外部接口提取验证码，未配置时继续 POST 本地验证码接口。日志只记录 `code=received/empty`，不记录验证码明文。
+- 验证：RED 阶段测试先失败于服务缺失、env 未注入、注册脚本仍 POST、仓储字段未持久化；修复后 `npm test -- test/verificationCodeService.test.js test/replacementAccounts.test.js test/replacementServices.test.js test/roxyRegisterOpenai.test.js test/verificationCodeApi.test.js test/imapService.test.js` 通过，65/65 pass。
+- 待办：尚未执行真实外部邮箱验证码页面端到端注册实机验证。`CHG-042` 已在 2026-06-08 PRD 基线合并中更新为 `merged`。
+
 ## 2026-06-07 CPA 自动补号连续失败熔断与站内通知
 
 - 来源工作日志：`docs/work/2026-06-07-cpa-repair-circuit-breaker-notifications.md`

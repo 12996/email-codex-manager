@@ -18,6 +18,7 @@ export function createReplacementAccountRepository(db) {
           email,
           phone,
           sms_api,
+          email_code_api,
           activation_method,
           activated_at,
           status,
@@ -29,11 +30,12 @@ export function createReplacementAccountRepository(db) {
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         data.email,
         data.phone,
         data.sms_api,
+        data.email_code_api,
         data.activation_method,
         data.activated_at,
         data.status,
@@ -111,6 +113,7 @@ export function createReplacementAccountRepository(db) {
           email = ?,
           phone = ?,
           sms_api = ?,
+          email_code_api = ?,
           activation_method = ?,
           activated_at = ?,
           status = ?,
@@ -124,6 +127,7 @@ export function createReplacementAccountRepository(db) {
         data.email,
         data.phone,
         data.sms_api,
+        data.email_code_api,
         data.activation_method,
         data.activated_at,
         data.status,
@@ -345,6 +349,7 @@ function normalizeAccountInput(input, { requireEmail }) {
     email,
     phone: normalizeOptional(input?.phone),
     sms_api: normalizeOptional(input?.sms_api),
+    email_code_api: normalizeOptional(input?.email_code_api),
     activation_method: normalizeOptional(input?.activation_method),
     activated_at: normalizeOptional(input?.activated_at),
     status: normalizeOptional(input?.status) || 'pending',

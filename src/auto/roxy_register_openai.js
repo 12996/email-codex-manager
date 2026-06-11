@@ -26,6 +26,7 @@ const path = require('path');
 const { getImapAuthHeaders } = optionalRequire('./imap-auth', { getImapAuthHeaders: async () => ({}) });
 const { fetchLatestOpenAiOtpOnce } = optionalRequire('./pool-email-imap', { fetchLatestOpenAiOtpOnce: async () => '' });
 const inboxEmail = optionalRequire('./inbox-email', {});
+const { extractVerificationCode } = optionalRequire('./verification-code-adapter', { extractVerificationCode: () => null });
 const { createProxyBridge, closeProxyBridge } = optionalRequire('./local-proxy-bridge', {
     createProxyBridge: async () => ({ localProxy: '' }),
     closeProxyBridge: async () => {}
@@ -62,6 +63,20 @@ function resolveVerificationApiUrl(options = {}, env = process.env) {
     return options.verificationApiUrl
         || env.VERIFICATION_CODE_API_URL
         || buildDefaultVerificationApiUrl(env);
+}
+
+function resolveRegistrationEmailCodeApiUrl(options = {}, env = process.env) {
+    return options.registrationEmailCodeApiUrl
+        || options.email_code_api
+        || options.emailCodeApiUrl
+        || env.REGISTRATION_EMAIL_CODE_API_URL
+        || env.EMAIL_CODE_API
+        || env.email_code_api
+        || '';
+}
+
+function verificationApiUrlForLog(verificationApiUrl, registrationEmailCodeApiUrl) {
+    return registrationEmailCodeApiUrl ? 'external-email-code' : verificationApiUrl;
 }
 
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 30000;
@@ -520,13 +535,26 @@ const OTP_REFETCH_AFTER_RECOVERY = 'OTP_REFETCH_AFTER_RECOVERY';
 
 async function fetchRegistrationEmailVerificationCodeOnce(page, email, options = {}, attempt = 1, maxAttempts = 1) {
     const verificationApiUrl = resolveVerificationApiUrl(options);
+    const registrationEmailCodeApiUrl = resolveRegistrationEmailCodeApiUrl(options);
     const timeout = Number(options.timeoutMs || DEFAULT_VERIFICATION_TIMEOUT_MS);
     const request = options.request || page?.request || (typeof page?.context === 'function' ? page.context().request : null);
+    const apiUrl = verificationApiUrlForLog(verificationApiUrl, registrationEmailCodeApiUrl);
 
-    registerLog(options.logger, 'email-code-request', 'action=request-email-code', `attempt=${attempt}/${maxAttempts} api=${verificationApiUrl}`);
+    registerLog(options.logger, 'email-code-request', 'action=request-email-code', `attempt=${attempt}/${maxAttempts} api=${apiUrl}`);
 
     let data;
-    if (request && typeof request.post === 'function') {
+    if (registrationEmailCodeApiUrl && request && typeof request.get === 'function') {
+        const response = await request.get(registrationEmailCodeApiUrl, { timeout });
+        const text = await response.text();
+        data = { ok: true, code: extractVerificationCode(text) };
+    } else if (registrationEmailCodeApiUrl && typeof fetch === 'function') {
+        const response = await fetch(registrationEmailCodeApiUrl, {
+            method: 'GET',
+            signal: AbortSignal.timeout(timeout)
+        });
+        const text = await response.text();
+        data = { ok: response.ok, code: extractVerificationCode(text) };
+    } else if (request && typeof request.post === 'function') {
         const response = await request.post(verificationApiUrl, {
             data: { account: email },
             timeout

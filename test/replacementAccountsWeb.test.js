@@ -186,6 +186,24 @@ test('replacement account table fully displays required runtime fields', () => {
   assert.match(css, /table\s*{[^}]*min-width:\s*2[0-9]{3}px/s);
 });
 
+test('replacement account table truncates long cells and exposes field copy action', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+  const css = readFileSync(join(process.cwd(), 'web', 'styles.css'), 'utf8');
+
+  assert.match(appJs, /tableFieldLimits/);
+  assert.match(appJs, /renderLimitedField/);
+  assert.match(appJs, /data-action="copy-field"/);
+  assert.match(appJs, /copyAccountField/);
+  assert.match(appJs, /navigator\.clipboard\.writeText\(text\)/);
+
+  for (const field of ['email', 'phone', 'sms_api', 'email_code_api', 'remark', 'public_code_key']) {
+    assert.match(appJs, new RegExp(`${field}:\\s*\\d+`));
+  }
+
+  assert.match(css, /\.limited-field-text\s*{[^}]*text-overflow:\s*ellipsis/s);
+  assert.match(css, /\.copy-field-button\s*{/);
+});
+
 test('replacement account frontend exposes real pagination controls and query params', () => {
   const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
   const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');

@@ -3,6 +3,7 @@ const { RoxyBrowserClient } = require('./roxy-browser-client.cjs');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const { extractVerificationCode } = require('./verification-code-adapter');
 
 // 配置文件
 const DEFAULT_TARGET_URL = 'https://chatgpt.com/';
@@ -35,6 +36,16 @@ function resolveVerificationApiUrl(options = {}, env = process.env) {
     return options.verificationApiUrl
         || env.VERIFICATION_CODE_API_URL
         || buildDefaultVerificationApiUrl(env);
+}
+
+function shouldPostLocalVerificationApi(url) {
+    try {
+        const parsed = new URL(String(url));
+        return ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)
+            && parsed.pathname === '/api/verification-code/latest';
+    } catch {
+        return false;
+    }
 }
 
 
@@ -511,6 +522,7 @@ async function fetchEmailVerificationCode(page, email, options) {
 async function fetchEmailVerificationCodeOnce(page, email, options, attempt = 1, maxAttempts = 1) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
     const verificationApiUrl = resolveVerificationApiUrl(options);
+    const useLocalPost = shouldPostLocalVerificationApi(verificationApiUrl);
 
     const apiRequest = options.request || page.request || (typeof page.context === 'function' ? page.context().request : null);
     const configuredAdminAuth = options.adminAuthCookie || options.adminAuth || admin_auth;
@@ -520,14 +532,14 @@ async function fetchEmailVerificationCodeOnce(page, email, options, attempt = 1,
     let data;
 
     logConfigured(options, 'openai-email-code', '请求邮箱验证码', `attempt=${attempt}/${maxAttempts} api=${verificationApiUrl} admin_auth=${configuredAdminAuth ? 'set' : 'unset'}`);
-    if (apiRequest && typeof apiRequest.post === 'function') {
+    if (useLocalPost && apiRequest && typeof apiRequest.post === 'function') {
         const response = await apiRequest.post(verificationApiUrl, {
             data: { account: email },
             ...(requestHeaders ? { headers: requestHeaders } : {}),
             timeout: timeoutMs
         });
         data = await response.json();
-    } else if (typeof fetch === 'function') {
+    } else if (useLocalPost && typeof fetch === 'function') {
         const response = await fetch(verificationApiUrl, {
             method: 'POST',
             headers: {
@@ -538,13 +550,24 @@ async function fetchEmailVerificationCodeOnce(page, email, options, attempt = 1,
             signal: AbortSignal.timeout(timeoutMs)
         });
         data = await response.json();
+    } else if (apiRequest && typeof apiRequest.get === 'function') {
+        const response = await apiRequest.get(verificationApiUrl, { timeout: timeoutMs });
+        data = await response.text();
+    } else if (typeof fetch === 'function') {
+        const response = await fetch(verificationApiUrl, {
+            method: 'GET',
+            signal: AbortSignal.timeout(timeoutMs)
+        });
+        data = await response.text();
     } else {
         throw createAutomationError('OPENAI_EMAIL_CODE_FETCH_FAILED', '当前运行环境不支持通过 API 获取邮箱验证码');
     }
 
-    const code = String(data?.code || '').trim();
+    const code = useLocalPost
+        ? String(data?.code || '').trim()
+        : String(extractVerificationCode(data) || '').trim();
     return {
-        code: data?.ok && /^\d{6}$/.test(code) ? code : '',
+        code: (useLocalPost ? data?.ok : true) && /^\d{6}$/.test(code) ? code : '',
         apiResult: data
     };
 }
