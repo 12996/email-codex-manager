@@ -2,6 +2,38 @@
 
 状态：active
 
+## 2026-06-25 CPA 上传凭证文件名 codex 前缀
+
+- 来源工作日志：`docs/work/2026-06-25-cpa-upload-file-name-codex-prefix.md`
+- change：`docs/changes/CHG-047-cpa-upload-file-name-codex-prefix.md`，状态 `implemented`，尚未合并 PRD。
+- 当前进展：CPA repair worker 读取本地 CPA JSON 时仍使用 `src/auto/product_files/cpa/<email>.json`；上传到 CPA 的 auth file 名称改为 `codex-<email>-plus.json`，例如 `codex-slide.emoji.2w+rv4okxgrtg9hc7cvf@icloud.com-plus.json`。上传后健康复查仍按邮箱判断。
+- 验证：`npm test -- test/cpaRepairWorker.test.js` 通过，5/5 pass。
+- 待办：需要重启当前 `node src/server.js` 服务后，新 CPA 上传命名才会在运行中的服务生效；当前未合并的 `implemented` change 数量为 4。
+
+## 2026-06-25 注册 token 保存与列表空态
+
+- 来源工作日志：`docs/work/2026-06-25-registration-token-output-and-list-empty-state.md`
+- change：`docs/changes/CHG-046-registration-token-output-and-list-empty-state.md`，状态 `implemented`，尚未合并 PRD。
+- 当前进展：OpenAI 注册自动化在成功读取 `chatgpt.com/api/auth/session` 的 `accessToken` 后，会保存 `src/auto/product_files/registration/<email>.json`；文件名默认使用补号邮箱号，仅替换 Windows 不允许的文件名字符。注册日志只输出 token 文件路径，不输出 token 明文。`/accounts` 页面改为复用统一 sidebar，补号日志入口在邮箱账号页可见；邮箱账号列表和补号日志列表在无数据或筛选无结果时显示空态行。
+- 验证：`node --test test\roxyRegisterOpenai.test.js` 通过，4/4 pass；`node --test test\replacementAccountsWeb.test.js` 通过，10/10 pass。
+- 待办：重启当前 `node src/server.js` 服务后，前端页面和注册子进程新逻辑才会在 13100 端口生效；当前未合并的 `implemented` change 数量为 3。
+
+## 2026-06-21 CPA 自动补号触发原因日志
+
+- 来源工作日志：`docs/work/2026-06-21-cpa-repair-trigger-log.md`
+- change：`docs/changes/CHG-045-cpa-repair-trigger-log.md`，状态 `implemented`，尚未合并 PRD。
+- 当前进展：CPA 自动补号运行日志已新增 `step=cpa-trigger`，记录触发补号的 CPA provider、email、status、unavailable、disabled、reasons 和截断后的 `status_message`。真实 Roxy OAuth 子进程日志会在自动化启动前写入该信息，即使后续 OAuth 自动化失败也能从 run log 判断为什么执行了补号。
+- 验证：`node --test test\cpaRepairWorker.test.js` 通过，5/5 pass；`node --test test\replacementServices.test.js` 通过，15/15 pass。
+- 待办：需要重启当前 `node src/server.js` 服务让新日志逻辑在定时 CPA monitor 中生效；当前未合并的 `implemented` change 数量为 2。
+
+## 2026-06-11 CPA 同邮箱多凭证任一健康判断
+
+- 来源工作日志：`docs/work/2026-06-11-cpa-email-any-healthy.md`
+- change：`docs/changes/CHG-044-cpa-email-any-healthy.md`，状态 `implemented`，尚未合并 PRD。
+- 当前进展：CPA 健康巡检和补号后复查已改为按邮箱归并判断；同一邮箱存在多个 CPA auth file 时，只要任一凭证为健康状态，邮箱整体视为健康，不再因为其他旧异常凭证触发补号或导致 repair worker 复查失败。若同邮箱没有任何健康凭证，仍按原逻辑报告异常或触发补号。
+- 验证：`node --test test\cpaRepairWorker.test.js test\cpaCredentialMonitor.test.js` 通过，8/8 pass。
+- 待办：尚未执行真实 CPA `/cpa/auth-health` 实机复查；当前未合并的 `implemented` change 数量为 1。
+
 ## 2026-06-08 PRD-002 change 基线合并
 
 - 来源工作日志：`docs/work/2026-06-08-prd-002-change-merge.md`

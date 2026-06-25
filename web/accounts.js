@@ -89,7 +89,9 @@ function accountListQuery() {
 function renderAccounts() {
   state.filtered = state.accounts;
 
-  $('#accountsBody').innerHTML = state.filtered.map(accountRow).join('');
+  $('#accountsBody').innerHTML = state.filtered.length
+    ? state.filtered.map(accountRow).join('')
+    : emptyAccountRow();
   $('#totalText').textContent = `共 ${state.pagination.total} 条`;
   renderPager();
   bindRowEvents();
@@ -127,6 +129,14 @@ function accountRow(account) {
         <button type="button" data-action="edit" data-id="${account.id}">编辑</button>
         <button class="danger" type="button" data-action="delete" data-id="${account.id}">删除</button>
       </td>
+    </tr>
+  `;
+}
+
+function emptyAccountRow() {
+  return `
+    <tr>
+      <td colspan="9" class="empty-table-cell">暂无邮箱账号。请点击“新增邮箱”添加 Gmail IMAP 账号，或调整筛选条件。</td>
     </tr>
   `;
 }

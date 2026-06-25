@@ -12,17 +12,22 @@ export function createCpaRepairWorker({
   readFileImpl = readFileSync,
 } = {}) {
   return {
-    async repair({ account }) {
+    async repair({ account, credential, reasons } = {}) {
       replacementAccounts.markReplacementStarted(account.id);
       let runLogPath = '';
+      const triggerDetails = formatCpaTriggerDetails({ credential, reasons });
       try {
-        const replacementResult = await replacementServices.replaceAccount(account);
+        const replacementResult = await replacementServices.replaceAccount(account, { cpaTriggerDetails: triggerDetails });
         runLogPath = replacementResult?.run?.log_path || '';
-        const fileName = `${String(account.email).trim().toLowerCase()}.json`;
-        appendRepairLog(runLogPath, 'cpa-read-file', '读取本地 CPA JSON', `file=${fileName}`);
-        const payload = readFileImpl(join(cpaOutputDir, fileName), 'utf8');
-        appendRepairLog(runLogPath, 'cpa-upload', '上传 CPA auth file', `name=${fileName}`);
-        await cpaClient.uploadAuthFile({ name: fileName, payload });
+        if (!replacementResult?.cpaTriggerLogged) {
+          appendRepairLog(runLogPath, 'cpa-trigger', '记录 CPA 自动补号触发原因', triggerDetails);
+        }
+        const localFileName = `${String(account.email).trim().toLowerCase()}.json`;
+        const uploadFileName = buildCpaUploadFileName(account.email);
+        appendRepairLog(runLogPath, 'cpa-read-file', '读取本地 CPA JSON', `file=${localFileName}`);
+        const payload = readFileImpl(join(cpaOutputDir, localFileName), 'utf8');
+        appendRepairLog(runLogPath, 'cpa-upload', '上传 CPA auth file', `name=${uploadFileName}`);
+        await cpaClient.uploadAuthFile({ name: uploadFileName, payload });
         appendRepairLog(runLogPath, 'cpa-verify', '复查 CPA 凭证健康', `email=${String(account.email).trim().toLowerCase()}`);
         await assertCredentialHealthy(cpaClient, account.email);
         const updated = replacementAccounts.markReplacementSuccess(account.id);
@@ -38,6 +43,27 @@ export function createCpaRepairWorker({
   };
 }
 
+function formatCpaTriggerDetails({ credential, reasons } = {}) {
+  if (!credential && !Array.isArray(reasons)) return '';
+  const fields = [
+    `provider=${sanitizeDetail(credential?.provider)}`,
+    `email=${sanitizeDetail(credential?.email)}`,
+    `status=${sanitizeDetail(credential?.status)}`,
+    `unavailable=${credential?.unavailable === true}`,
+    `disabled=${credential?.disabled === true}`,
+    `reasons=${sanitizeDetail(Array.isArray(reasons) ? reasons.join(',') : '')}`,
+    `status_message=${sanitizeDetail(credential?.status_message, 500)}`,
+  ];
+  return fields.join(' ');
+}
+
+function sanitizeDetail(value, maxLength = 200) {
+  const normalized = String(value ?? '')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim();
+  return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
+}
+
 function notifyCircuitBreaker(adminNotifications, account) {
   if (!adminNotifications?.createNotification) return;
   if (account?.status !== 'banned' || Number(account?.consecutive_replace_failures || 0) !== 5) return;
@@ -50,6 +76,11 @@ function notifyCircuitBreaker(adminNotifications, account) {
     account_id: account.id,
     email,
   });
+}
+
+function buildCpaUploadFileName(email) {
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  return `codex-${normalizedEmail}-plus.json`;
 }
 
 function appendRepairLog(logPath, step, action, details = '') {
@@ -70,8 +101,9 @@ async function assertCredentialHealthy(cpaClient, email) {
   if (matching.length === 0) {
     throw new Error(`uploaded CPA credential not found for ${normalizedEmail}`);
   }
-  const unhealthy = matching.find((file) => !classifyCpaAuthFile(file).healthy);
-  if (unhealthy) {
-    throw new Error(`uploaded CPA credential is still unhealthy: ${unhealthy.status || ''} ${unhealthy.status_message || ''}`.trim());
+  if (matching.some((file) => classifyCpaAuthFile(file).healthy)) {
+    return;
   }
+  const unhealthy = matching[0];
+  throw new Error(`uploaded CPA credential is still unhealthy: ${unhealthy.status || ''} ${unhealthy.status_message || ''}`.trim());
 }

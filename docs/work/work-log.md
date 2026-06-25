@@ -54,3 +54,7 @@
 | 2026-06-08 | 补号注册与 OAuth 外部邮箱验证码接口 | done | `2026-06-08-email-code-api-extraction-service.md` |
 | 2026-06-08 | 补号列表长字段截断与复制 | done | `2026-06-08-replacement-table-limited-field-copy.md` |
 | 2026-06-08 | PRD-002 change 基线合并 | done | `2026-06-08-prd-002-change-merge.md` |
+| 2026-06-11 | CPA 同邮箱多凭证任一健康判断 | done | `2026-06-11-cpa-email-any-healthy.md` |
+| 2026-06-21 | CPA 自动补号触发原因日志 | done | `2026-06-21-cpa-repair-trigger-log.md` |
+| 2026-06-25 | 注册 token 保存与列表空态 | done | `2026-06-25-registration-token-output-and-list-empty-state.md` |
+| 2026-06-25 | CPA 上传凭证文件名 codex 前缀 | done | `2026-06-25-cpa-upload-file-name-codex-prefix.md` |

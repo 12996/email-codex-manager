@@ -43,7 +43,7 @@ test('repair worker replaces account, uploads CPA JSON, and verifies health', as
   assert.deepEqual(events, [
     ['started', 7],
     ['replace', 7],
-    ['upload', 'user@example.com.json', '{"type":"openai"}'],
+    ['upload', 'codex-user@example.com-plus.json', '{"type":"openai"}'],
     ['success', 7],
   ]);
 });
@@ -84,6 +84,108 @@ test('repair worker appends CPA upload steps to replacement run log', async () =
   assert.match(log, /step=cpa-upload action=上传 CPA auth file/);
   assert.match(log, /step=cpa-verify action=复查 CPA 凭证健康/);
   assert.match(log, /step=cpa-success action=CPA repair 完成/);
+});
+
+test('repair worker appends CPA trigger reason to replacement run log', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'cpa-repair-worker-'));
+  const logPath = join(dir, 'replacement.log');
+  const worker = createCpaRepairWorker({
+    cpaOutputDir: 'src/auto/product_files/cpa',
+    readFileImpl() {
+      return '{"type":"openai"}';
+    },
+    cpaClient: {
+      async uploadAuthFile() {
+        return { status: 'ok' };
+      },
+      async listAuthFiles() {
+        return [{ provider: 'codex', email: 'user@example.com', status: 'active', status_message: '' }];
+      },
+    },
+    replacementAccounts: {
+      markReplacementStarted() {},
+      markReplacementSuccess(id) { return { id, status: 'replaced' }; },
+      markReplacementFailure() { throw new Error('not expected'); },
+    },
+    replacementServices: {
+      async replaceAccount() {
+        return { ok: true, run: { log_path: logPath } };
+      },
+    },
+  });
+
+  const result = await worker.repair({
+    account: { id: 7, email: 'user@example.com' },
+    credential: {
+      provider: 'codex',
+      email: 'user@example.com',
+      status: 'error',
+      unavailable: true,
+      disabled: false,
+      status_message: '{"error":{"type":"authentication_error","code":"auth_unavailable","message":"Your authentication token has been invalidated."}}',
+    },
+    reasons: ['unavailable', 'status:error', 'message:auth_expired'],
+  });
+  const log = readFileSync(logPath, 'utf8');
+
+  assert.equal(result.ok, true);
+  assert.match(log, /step=cpa-trigger action=记录 CPA 自动补号触发原因/);
+  assert.match(log, /provider=codex/);
+  assert.match(log, /email=user@example.com/);
+  assert.match(log, /status=error/);
+  assert.match(log, /unavailable=true/);
+  assert.match(log, /disabled=false/);
+  assert.match(log, /reasons=unavailable,status:error,message:auth_expired/);
+  assert.match(log, /status_message=\{"error":\{"type":"authentication_error","code":"auth_unavailable","message":"Your authentication token has been invalidated\."\}\}/);
+});
+
+test('repair worker treats email healthy when any matching CPA credential is healthy', async () => {
+  const events = [];
+  const worker = createCpaRepairWorker({
+    cpaOutputDir: 'src/auto/product_files/cpa',
+    readFileImpl() {
+      return '{"type":"openai"}';
+    },
+    cpaClient: {
+      async uploadAuthFile(input) {
+        events.push(['upload', input.name]);
+        return { status: 'ok' };
+      },
+      async listAuthFiles() {
+        return [
+          {
+            provider: 'codex',
+            email: 'user@example.com',
+            status: 'error',
+            unavailable: true,
+            status_message: '{"error":{"type":"authentication_error","code":"auth_unavailable"}}',
+          },
+          { provider: 'codex', email: 'user@example.com', status: 'active', status_message: '' },
+        ];
+      },
+    },
+    replacementAccounts: {
+      markReplacementStarted(id) { events.push(['started', id]); },
+      markReplacementSuccess(id) { events.push(['success', id]); return { id, status: 'replaced' }; },
+      markReplacementFailure() { throw new Error('not expected'); },
+    },
+    replacementServices: {
+      async replaceAccount(account) {
+        events.push(['replace', account.id]);
+        return { ok: true };
+      },
+    },
+  });
+
+  const result = await worker.repair({ account: { id: 7, email: 'user@example.com' } });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(events, [
+    ['started', 7],
+    ['replace', 7],
+    ['upload', 'codex-user@example.com-plus.json'],
+    ['success', 7],
+  ]);
 });
 
 test('repair worker creates notification when replacement failure triggers circuit breaker', async () => {

@@ -231,3 +231,13 @@ test('automation log frontend calls run APIs and exposes stop action', () => {
   assert.match(html, /id="stopButton"/);
   assert.match(sidebar, /补号日志/);
 });
+
+test('mail account and automation log tables render visible empty states', () => {
+  const accountsJs = readFileSync(join(process.cwd(), 'web', 'accounts.js'), 'utf8');
+  const logsJs = readFileSync(join(process.cwd(), 'web', 'automation-logs.js'), 'utf8');
+
+  assert.match(accountsJs, /暂无邮箱账号/);
+  assert.match(accountsJs, /colspan="9"/);
+  assert.match(logsJs, /暂无补号运行日志/);
+  assert.match(logsJs, /colspan="8"/);
+});

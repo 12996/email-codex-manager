@@ -139,3 +139,27 @@ test('registration email verification accepts email_code_api option alias before
     { timeout: 30000 },
   ]]);
 });
+
+test('registration success saves access token file named by email without logging token', () => {
+  const { saveRegistrationAccessTokenFile } = requireRegisterModuleWithStubs();
+  const dir = require('node:fs').mkdtempSync(require('node:path').join(require('node:os').tmpdir(), 'registration-token-'));
+  const logs = [];
+
+  const result = saveRegistrationAccessTokenFile({
+    email: 'user+tag@example.com',
+    accessToken: 'secret-access-token',
+    outputRootDir: dir,
+    logger: { log: (message) => logs.push(String(message)) },
+    now: () => '2026-06-24T00:00:00.000Z',
+  });
+
+  assert.equal(require('node:path').basename(result.path), 'user+tag@example.com.json');
+  assert.deepEqual(JSON.parse(require('node:fs').readFileSync(result.path, 'utf8')), {
+    email: 'user+tag@example.com',
+    access_token: 'secret-access-token',
+    created_at: '2026-06-24T00:00:00.000Z',
+    source: 'chatgpt_api_auth_session',
+  });
+  assert.equal(logs.some((line) => line.includes('secret-access-token')), false);
+  assert.equal(logs.some((line) => line.includes(result.path)), true);
+});

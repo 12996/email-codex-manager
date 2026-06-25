@@ -71,6 +71,42 @@ test('runOnce skips healthy and already replacing credentials', async () => {
   assert.equal(result.skipped.length, 1);
 });
 
+test('runOnce treats email healthy when any matching CPA credential is healthy', async () => {
+  const monitor = createCpaCredentialMonitor({
+    cpaClient: {
+      async listAuthFiles() {
+        return [
+          {
+            provider: 'codex',
+            email: 'user@example.com',
+            status: 'error',
+            unavailable: true,
+            status_message: 'authentication token invalidated',
+          },
+          { provider: 'codex', email: 'user@example.com', status: 'active', status_message: '' },
+        ];
+      },
+    },
+    replacementAccounts: {
+      getAccountByEmail() {
+        throw new Error('healthy email should not look up replacement account');
+      },
+    },
+    repairQueue: {
+      enqueue() {
+        throw new Error('healthy email should not be enqueued');
+      },
+    },
+  });
+
+  const result = await monitor.runOnce();
+
+  assert.equal(result.checked, 2);
+  assert.equal(result.unhealthy.length, 0);
+  assert.equal(result.enqueued.length, 0);
+  assert.equal(result.skipped.length, 0);
+});
+
 test('runOnce skips auth-expired credential when replacement account is banned', async () => {
   const monitor = createCpaCredentialMonitor({
     cpaClient: {

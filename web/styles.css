@@ -195,6 +195,11 @@ thead th {
   top: 0;
   z-index: 1;
 }
+.empty-table-cell {
+  color: var(--muted);
+  text-align: center;
+  padding: 28px 16px;
+}
 .email-main { font-weight: 800; }
 .muted { color: var(--muted); font-size: 12px; }
 .field-raw { font-family: Consolas, "Courier New", monospace; }

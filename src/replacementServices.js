@@ -61,11 +61,11 @@ export function createReplacementServices({
       return text;
     },
 
-    async replaceAccount(account) {
+    async replaceAccount(account, options) {
       if (!automation?.replaceAccount) {
         throw codedError('REPLACE_NOT_CONFIGURED', 'replacement automation is not configured');
       }
-      return automation.replaceAccount(account);
+      return automation.replaceAccount(account, options);
     },
 
     async registerAccount(account) {
@@ -110,7 +110,7 @@ export function createRoxyChildProcessAutomation({
   logDir = DEFAULT_LOG_DIR,
 } = {}) {
   return {
-    replaceAccount(account) {
+    replaceAccount(account, options = {}) {
       const email = normalizeRequired(account?.email, 'REPLACE_FAILED', 'replacement account email is required');
       const phone = normalizeOptional(account?.phone);
       const smsApi = normalizeOptional(account?.sms_api);
@@ -137,6 +137,7 @@ export function createRoxyChildProcessAutomation({
         kind: 'replacement',
         failureCode: 'REPLACE_FAILED',
         envSummaryKeys: ['ROXY_OAUTH_EMAIL', 'ROXY_OAUTH_PHONE', 'PHONE_VERIFICATION_SMS_API_URL', 'VERIFICATION_CODE_API_URL'],
+        cpaTriggerDetails: options?.cpaTriggerDetails,
       });
     },
 
@@ -181,6 +182,7 @@ function runChildProcess({
   kind = 'replacement',
   failureCode = 'REPLACE_FAILED',
   envSummaryKeys = [],
+  cpaTriggerDetails = '',
 }) {
   return new Promise((resolve, reject) => {
     const logPath = createLogPath(logDir, account, kind);
@@ -192,6 +194,9 @@ function runChildProcess({
       '',
     ].join('\n'));
     writeStepLog(logPath, 'validate-account', 'validated replacement account', `account_id=${account?.id ?? ''} email=${normalizeOptional(account?.email)}`);
+    if (cpaTriggerDetails) {
+      writeStepLog(logPath, 'cpa-trigger', '记录 CPA 自动补号触发原因', cpaTriggerDetails);
+    }
     writeStepLog(logPath, 'prepare-env', 'prepared child process environment', summarizeEnv(env, envSummaryKeys));
     writeStepLog(logPath, 'spawn-child', 'spawning automation child process', `command=${command} args=${args.join(' ')}`);
 
@@ -255,7 +260,7 @@ function runChildProcess({
           writeStepLog(logPath, 'mark-succeeded', 'marked automation run succeeded', `exit_code=${exitCode}`);
         }
         writeStepLog(logPath, 'child-close', 'child process completed successfully', `exit_code=${exitCode}`);
-        resolve({ ok: true, exitCode, stdout, stderr, ...(run ? { run } : {}) });
+        resolve({ ok: true, exitCode, stdout, stderr, ...(cpaTriggerDetails ? { cpaTriggerLogged: true } : {}), ...(run ? { run } : {}) });
         return;
       }
       const details = stderr || stdout || `child process exited with code ${exitCode}`;

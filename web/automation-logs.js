@@ -41,7 +41,9 @@ function renderRuns() {
     return (!status || run.status === status) && (!keyword || haystack.includes(keyword));
   });
 
-  $('#runsBody').innerHTML = filtered.map(runRow).join('');
+  $('#runsBody').innerHTML = filtered.length
+    ? filtered.map(runRow).join('')
+    : emptyRunRow();
   $('#totalText').textContent = `共 ${filtered.length} 条`;
   document.querySelectorAll('[data-run-action="open"]').forEach((button) => {
     button.addEventListener('click', () => openRun(Number(button.dataset.id)));
@@ -59,6 +61,14 @@ function runRow(run) {
       <td>${escapeHtml(formatDate(run.finished_at))}</td>
       <td>${escapeHtml(run.exit_code ?? '-')}</td>
       <td><button type="button" data-run-action="open" data-id="${run.id}">查看日志</button></td>
+    </tr>
+  `;
+}
+
+function emptyRunRow() {
+  return `
+    <tr>
+      <td colspan="8" class="empty-table-cell">暂无补号运行日志。触发注册或补号后，这里会显示子进程运行记录。</td>
     </tr>
   `;
 }

@@ -8,6 +8,10 @@ export function createCpaCredentialMonitor({
   return {
     async runOnce() {
       const files = await cpaClient.listAuthFiles();
+      const healthyEmails = new Set(files
+        .filter((file) => classifyCpaAuthFile(file).healthy)
+        .map((file) => String(file?.email || '').trim().toLowerCase())
+        .filter(Boolean));
       const result = {
         checked: files.length,
         unhealthy: [],
@@ -20,6 +24,8 @@ export function createCpaCredentialMonitor({
         if (health.healthy) continue;
 
         const email = String(file?.email || '').trim().toLowerCase();
+        if (healthyEmails.has(email)) continue;
+
         const item = {
           key: buildCredentialKey(file),
           provider: file?.provider || '',

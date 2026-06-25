@@ -979,7 +979,27 @@ src/auto/roxy_register_openai.js
 5. 若账号配置 `email_code_api`，后端向子进程注入 `REGISTRATION_EMAIL_CODE_API_URL`，注册脚本优先 GET 该外部接口获取邮箱验证码。
 6. 若账号未配置 `email_code_api`，注册脚本保持原行为：通过 `POST /api/verification-code/latest`、请求体 `{ "account": "<email>" }` 获取邮箱验证码。
 7. 邮箱验证码提取会先移除 HTML `script/style` 和标签，再匹配独立 6 位数字，避免 CSS 色值误匹配；JSON payload 支持 `code`、`otp`、`verification_code`、`verificationCode` 等字段。
-8. 日志写入 `data/automation-logs/registration-<id>-<timestamp>.log`，包含 `step=...` 阶段日志，不记录验证码、Cookie、token 或代理密码明文。
+8. 注册成功后，脚本会从 `https://chatgpt.com/api/auth/session` 读取 `accessToken`，并保存到本地注册产物目录；默认文件为 `src/auto/product_files/registration/<email>.json`，文件名直接使用补号邮箱号。
+9. 日志写入 `data/automation-logs/registration-<id>-<timestamp>.log`，包含 `step=...` 阶段日志。日志只记录注册 token 文件保存路径，不记录验证码、Cookie、access token 或代理密码明文。
+
+注册成功后的 access token 文件：
+
+```json
+{
+  "email": "jregkolpig+s2@gmail.com",
+  "access_token": "eyJ...",
+  "created_at": "2026-06-25T00:00:00.000Z",
+  "source": "chatgpt_api_auth_session"
+}
+```
+
+保存目录可通过环境变量覆盖：
+
+```env
+REGISTRATION_TOKEN_OUTPUT_DIR=src/auto/product_files/registration
+```
+
+该文件包含敏感 access token，只用于无头注册完成后的本地查看和排查，不应提交或公开。
 
 成功响应：
 
@@ -1070,7 +1090,7 @@ src/auto/roxy_oauth_login.js
 | OAuth callback `code` | OpenAI/Codex OAuth 回调 | 脚本从当前页面或网络请求捕获。 |
 | `access_token`、`refresh_token`、`id_token` | OpenAI token endpoint | 脚本使用 callback code 换取。 |
 | `chatgpt_account_id`、`chatgpt_user_id`、`plan_type` | access token payload | 写入导出的账号 JSON。 |
-| 导出文件 | `src/auto/product_files/` | 默认写入 `sub2api/邮箱.json` 和 `cpa/邮箱.json`；手动补号和自动补号生产链路都会在成功后上传 CPA JSON 并复查。 |
+| 导出文件 | `src/auto/product_files/` | 默认写入 `sub2api/邮箱.json` 和 `cpa/邮箱.json`；手动补号和自动补号生产链路都会在成功后上传 CPA JSON 并复查。上传到 CPA 的 auth file 名称使用 `codex-邮箱-plus.json`，本地文件名保持 `cpa/邮箱.json`。 |
 
 成功响应：
 
@@ -1147,11 +1167,12 @@ CPA_HEALTH_MONITOR_INTERVAL_MS=600000
 
 1. 请求 CPA `GET /v0/management/auth-files`。
 2. 按 `provider + email` 生成凭证 key。
-3. 将凭证分类为 `healthy`、`banned`、`disabled`、`auth_expired`、`quota_limited` 或 `unknown_error`。
+3. 将凭证分类为 `healthy`、`banned`、`disabled`、`auth_expired`、`quota_limited` 或 `unknown_error`；同一邮箱存在多个 CPA 凭证时，只要任一凭证健康，该邮箱整体视为健康，不再因其他旧异常凭证触发补号。
 4. 只有 `auth_expired` 会按邮箱匹配 `replacement_accounts.email`。
 5. 匹配到且账号未处于 `replacing`/`banned` 时，加入单并发补号队列并触发队列执行；`banned` 账号跳过原因为 `account_banned`。
-6. 补号子进程成功后，上传本地 `src/auto/product_files/cpa/<email>.json` 到 CPA，并再次检查该邮箱凭证是否恢复健康。
-7. 同一账号连续补号失败达到 5 次时，账号自动熔断为 `banned`，后续 CPA 监控按 `account_banned` 跳过，并创建站内通知提醒管理员。
+6. 自动补号运行日志会写入 `step=cpa-trigger`，记录触发补号的 CPA provider、email、status、unavailable、disabled、reasons 和截断后的 `status_message`，用于排查为什么本次执行补号。
+7. 补号子进程成功后，上传本地 `src/auto/product_files/cpa/<email>.json` 到 CPA，并再次检查该邮箱凭证是否恢复健康；同一邮箱任一凭证健康即复查通过。
+8. 同一账号连续补号失败达到 5 次时，账号自动熔断为 `banned`，后续 CPA 监控按 `account_banned` 跳过，并创建站内通知提醒管理员。
 
 成功响应示例：
 

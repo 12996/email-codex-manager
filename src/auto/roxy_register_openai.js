@@ -81,6 +81,7 @@ function verificationApiUrlForLog(verificationApiUrl, registrationEmailCodeApiUr
 
 const DEFAULT_VERIFICATION_TIMEOUT_MS = 30000;
 const OPENAI_REGISTRATION_ENTRY_URL = process.env.OPENAI_REGISTRATION_ENTRY_URL || 'https://chatgpt.com/';
+const DEFAULT_REGISTRATION_TOKEN_OUTPUT_DIR = path.join(__dirname, 'product_files', 'registration');
 
 function registerLog(logger, step, message, details = '') {
     const sink = logger || console;
@@ -95,6 +96,38 @@ function registerWarn(logger, step, message, details = '') {
     const line = `[roxy-register-openai] step=${step} ${message}${suffix}`;
     if (typeof sink.warn === 'function') sink.warn(line);
     else if (typeof sink.log === 'function') sink.log(line);
+}
+
+function safeRegistrationTokenFileName(email) {
+    const normalized = String(email || '').trim().toLowerCase();
+    const safe = normalized.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/^\.+$/, '_');
+    return `${safe || 'unknown-email'}.json`;
+}
+
+function saveRegistrationAccessTokenFile(options = {}) {
+    const email = String(options.email || '').trim().toLowerCase();
+    const accessToken = String(options.accessToken || '');
+    if (!email) {
+        throw new Error('registration email is required before saving access token');
+    }
+    if (!accessToken) {
+        throw new Error('registration access token is required before saving token file');
+    }
+
+    const outputRootDir = options.outputRootDir
+        || process.env.REGISTRATION_TOKEN_OUTPUT_DIR
+        || DEFAULT_REGISTRATION_TOKEN_OUTPUT_DIR;
+    fs.mkdirSync(outputRootDir, { recursive: true });
+    const filePath = path.join(outputRootDir, safeRegistrationTokenFileName(email));
+    const payload = {
+        email,
+        access_token: accessToken,
+        created_at: typeof options.now === 'function' ? options.now() : new Date().toISOString(),
+        source: 'chatgpt_api_auth_session'
+    };
+    fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+    registerLog(options.logger || console, 'registration-token', 'action=saved', `path=${filePath}`);
+    return { path: filePath, payload };
 }
 
 /**
@@ -1859,6 +1892,11 @@ async function runRegistrationFlow() {
         }
 
         console.log(`🎟️  Access Token 已获取`);
+        const registrationTokenFile = saveRegistrationAccessTokenFile({
+            email,
+            accessToken: sessionData.accessToken,
+            logger: console
+        });
         console.log('[roxy-register-openai] step=registration-complete action=success');
         console.log("🎉 [Success] 注册流程全部完成！");
 
@@ -1881,6 +1919,7 @@ async function runRegistrationFlow() {
         return {
             email,
             accessToken: sessionData.accessToken,
+            registrationTokenFile: registrationTokenFile.path,
             emailSource,
             inboxJwt: inboxJwt || '',
             inboxApiBase: useInbox ? inboxApiBase : '',
@@ -1955,5 +1994,6 @@ module.exports = {
     buildDefaultVerificationApiUrl,
     fetchRegistrationEmailVerificationCodeOnce,
     fetchRegistrationEmailVerificationCode,
+    saveRegistrationAccessTokenFile,
     runRegistrationFlow
 };
