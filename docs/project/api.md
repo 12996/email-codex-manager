@@ -658,6 +658,7 @@ web/automation-logs.js
 日志页面同样需要后台登录态，前端通过 `/replacement-automation-runs*` JSON API 读取运行记录、查看日志和停止运行中的子进程。
 
 补号管理页账号列表支持服务端分页、状态筛选和关键词搜索；前端分页控件支持每页 10/20/50 条、上一页和下一页。
+补号管理页主表会压缩显示除邮箱、备注和开通时间外的长字段：默认只展示前 6 位并提供“复制”按钮复制完整原始值；邮箱、备注和开通时间完整显示，并按约 12 个字符宽度换行，避免被压成几字符一行或把操作列挤出可视区域。主表不显示“状态更新时间”“最后操作”“更新时间”三列，这些信息仍可通过详情查看。
 
 补号管理页支持直接配置公开验证码接口：
 
@@ -680,6 +681,9 @@ SQLite 表：`replacement_accounts`
 | `email` | 补号邮箱，必填，大小写不敏感唯一 |
 | `phone` | 手机号，可为空，可重复 |
 | `sms_api` | SMS 验证码接口地址 |
+| `email_code_api` | 账号级外部邮箱验证码接口地址 |
+| `codex_2fa` | Codex/OpenAI 账号 2FA 密钥；前端展示列名为 `2fa-codex` |
+| `password` | 补号账号密码；创建时为空则由系统随机生成 12-16 位字符 |
 | `sms_last_error` | 最近一次 SMS 获取失败原因 |
 | `activation_method` | 开通方式 |
 | `activated_at` | 开通时间；创建补号账号时为空则由系统写入当前时间 |
@@ -796,6 +800,8 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
   "phone": "13800000000",
   "sms_api": "https://example.invalid/sms",
   "email_code_api": "https://example.invalid/email-code",
+  "codex_2fa": "JBSWY3DPEHPK3PXP",
+  "password": "",
   "activation_method": "manual",
   "activated_at": "2026-06-01T00:00:00.000Z",
   "status": "pending",
@@ -821,6 +827,8 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 
 - `sms_api`：补号/OAuth 手机短信验证码接口。
 - `email_code_api`：OpenAI 注册阶段的账号级外部邮箱验证码接口。配置后，注册子进程优先通过 GET 请求该 URL 获取 HTML/text/JSON payload，并从清理后的正文或常见 JSON code 字段提取 6 位验证码。
+- `codex_2fa`：Codex/OpenAI 账号 2FA 密钥。接口也兼容请求体字段名 `2fa-codex` 和 `2fa_codex`，保存后统一以 `codex_2fa` 返回。
+- `password`：补号账号密码。新增账号时为空会自动生成 12-16 位随机密码，字符集为大小写字母、数字和常见特殊字符 `!@#$%^&*_-`；编辑账号时不传或传空会保留原密码，传入非空值则更新。
 
 ### DELETE `/replacement-accounts/:id`
 

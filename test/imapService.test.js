@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
+import { config } from '../src/config.js';
 import {
   classifyImapError,
   createMessageSummary,
@@ -11,6 +12,7 @@ import {
   normalizeAppPassword,
   shouldIncludeMessage,
   toUserFacingImapError,
+  createClient,
 } from '../src/imapService.js';
 
 test('createMessageSummary shapes parsed mail into UI summary', () => {
@@ -126,6 +128,21 @@ test('deriveMainGmailAccount maps Gmail plus aliases to the base mailbox', () =>
   assert.equal(deriveMainGmailAccount('JregKolPig+abc@Gmail.com'), 'jregkolpig@gmail.com');
   assert.equal(deriveMainGmailAccount('jregkolpig+s2@googlemail.com'), 'jregkolpig@googlemail.com');
   assert.equal(deriveMainGmailAccount('user+tag@example.com'), 'user+tag@example.com');
+});
+
+test('createClient passes configured proxy to ImapFlow', () => {
+  const previousProxy = config.imap.proxy;
+  config.imap.proxy = 'socks5://127.0.0.1:11080';
+  try {
+    const client = createClient({
+      gmail_email: 'user+tag@gmail.com',
+      gmail_app_password: 'abcd efgh ijkl mnop',
+    });
+
+    assert.equal(client.options.proxy, 'socks5://127.0.0.1:11080');
+  } finally {
+    config.imap.proxy = previousProxy;
+  }
 });
 
 test('shouldIncludeMessage filters Gmail plus alias recipients', () => {

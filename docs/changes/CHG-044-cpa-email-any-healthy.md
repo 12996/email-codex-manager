@@ -1,8 +1,8 @@
 # CHG-044 CPA 同邮箱多凭证任一健康即视为正常
 
-- 状态：implemented
+- 状态：merged
 - 创建日期：2026-06-11
-- 关联 PRD：PRD-002
+- 关联 PRD：PRD-003
 - 影响范围：`src/cpaCredentialMonitor.js`, `src/cpaRepairWorker.js`, `test/cpaCredentialMonitor.test.js`, `test/cpaRepairWorker.test.js`, `docs/project/api.md`, `docs/work/`
 
 ## 背景
@@ -25,3 +25,8 @@ CPA `/auth-files` 可能同时返回同一邮箱的多个凭证记录，其中�
 ## 验证
 
 - `node --test test\cpaRepairWorker.test.js test\cpaCredentialMonitor.test.js` 通过，8/8 pass。
+
+## 合并记录
+
+- 合并目标：PRD-003
+- 合并日期：2026-06-25

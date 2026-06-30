@@ -187,7 +187,7 @@ h2 { margin: 0 0 16px; font-size: 18px; }
 .table-wrap {
   overflow-x: auto;
 }
-table { width: 100%; min-width: 2400px; border-collapse: collapse; font-size: 14px; }
+table { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { padding: 13px 16px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
 th { background: #f8fafc; color: #415670; }
 thead th {
@@ -203,6 +203,19 @@ thead th {
 .email-main { font-weight: 800; }
 .muted { color: var(--muted); font-size: 12px; }
 .field-raw { font-family: Consolas, "Courier New", monospace; }
+.wrapped-field {
+  display: inline-block;
+  width: 12ch;
+  min-width: 12ch;
+  max-width: 12ch;
+  vertical-align: middle;
+}
+.wrapped-field-text {
+  display: inline-block;
+  line-height: 1.35;
+  word-break: break-all;
+  white-space: normal;
+}
 .limited-field {
   display: inline-flex;
   align-items: center;
@@ -226,7 +239,6 @@ thead th {
   font-size: 12px;
   padding: 3px 7px;
 }
-.remark-cell { min-width: 180px; max-width: 280px; line-height: 1.45; }
 .status { border-radius: 7px; padding: 5px 9px; font-weight: 800; font-size: 12px; }
 .status.active, .status.replaced { background: #dff8ea; color: #16a35b; }
 .status.banned, .status.failed { background: #ffe6e9; color: #e52f42; }

@@ -112,11 +112,14 @@ test('replacement account CRUD API creates, lists, reads, updates, and soft dele
     const created = await jsonRequest(server, 'POST', '/replacement-accounts', {
       email: ' User@Example.COM ',
       phone: '123',
+      '2fa-codex': ' JBSWY3DPEHPK3PXP ',
       status: 'pending',
     });
     assert.equal(created.response.status, 201);
     assert.equal(created.body.ok, true);
     assert.equal(created.body.account.email, 'User@Example.COM');
+    assert.equal(created.body.account.codex_2fa, 'JBSWY3DPEHPK3PXP');
+    assert.match(created.body.account.password, /^[A-Za-z0-9!@#$%^&*_-]{12,16}$/);
     assert.ok(created.body.account.activated_at);
 
     const duplicate = await jsonRequest(server, 'POST', '/replacement-accounts', {
@@ -136,12 +139,23 @@ test('replacement account CRUD API creates, lists, reads, updates, and soft dele
     const updated = await jsonRequest(server, 'PUT', `/replacement-accounts/${created.body.account.id}`, {
       email: 'updated@example.com',
       phone: '456',
+      codex_2fa: 'NEXTSECRET',
       status: 'active',
     });
     assert.equal(updated.response.status, 200);
     assert.equal(updated.body.account.email, 'updated@example.com');
     assert.equal(updated.body.account.phone, '456');
+    assert.equal(updated.body.account.codex_2fa, 'NEXTSECRET');
     assert.equal(updated.body.account.status, 'active');
+    assert.equal(updated.body.account.password, created.body.account.password);
+
+    const passwordUpdated = await jsonRequest(server, 'PUT', `/replacement-accounts/${created.body.account.id}`, {
+      email: 'updated@example.com',
+      password: 'NewPass12!',
+      status: 'active',
+    });
+    assert.equal(passwordUpdated.response.status, 200);
+    assert.equal(passwordUpdated.body.account.password, 'NewPass12!');
 
     const deleted = await jsonRequest(server, 'DELETE', `/replacement-accounts/${created.body.account.id}`);
     assert.equal(deleted.response.status, 200);

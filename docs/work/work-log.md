@@ -58,3 +58,8 @@
 | 2026-06-21 | CPA 自动补号触发原因日志 | done | `2026-06-21-cpa-repair-trigger-log.md` |
 | 2026-06-25 | 注册 token 保存与列表空态 | done | `2026-06-25-registration-token-output-and-list-empty-state.md` |
 | 2026-06-25 | CPA 上传凭证文件名 codex 前缀 | done | `2026-06-25-cpa-upload-file-name-codex-prefix.md` |
+| 2026-06-25 | 补号账号 Codex 2FA 字段 | done | `2026-06-25-replacement-codex-2fa-field.md` |
+| 2026-06-25 | PRD-003 change 基线合并 | done | `2026-06-25-prd-003-change-merge.md` |
+| 2026-06-26 | IMAP 绑定 SSH 代理启动 | done | `2026-06-26-imap-bound-ssh-proxy.md` |
+| 2026-06-27 | IMAP 家宽代理启动 | done | `2026-06-27-home-imap-proxy-start.md` |
+| 2026-06-29 | 补号账号密码字段与列表压缩展示 | done | `2026-06-29-replacement-password-compact-fields.md` |

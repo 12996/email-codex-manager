@@ -1,14 +1,16 @@
-import { randomBytes } from 'node:crypto';
+import { randomBytes, randomInt } from 'node:crypto';
 
 const SYSTEM_STATUSES = new Set(['pending', 'active', 'banned', 'replacing', 'replaced', 'failed']);
 const MANUAL_STATUSES = new Set(['pending', 'active', 'banned', 'replaced', 'failed']);
 const REPLACEMENT_FAILURE_BREAKER_THRESHOLD = 5;
+const REPLACEMENT_PASSWORD_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*_-';
 
 export function createReplacementAccountRepository(db) {
   return {
     createAccount(input) {
       const data = normalizeAccountInput(input, { requireEmail: true });
       data.public_code_key ||= generatePublicCodeKey();
+      data.password ||= generateReplacementPassword();
       validateStatus(data.status, { allowReplacing: false });
       assertEmailAvailable(db, data.email);
       const now = new Date().toISOString();
@@ -19,6 +21,8 @@ export function createReplacementAccountRepository(db) {
           phone,
           sms_api,
           email_code_api,
+          codex_2fa,
+          password,
           activation_method,
           activated_at,
           status,
@@ -30,12 +34,14 @@ export function createReplacementAccountRepository(db) {
           created_at,
           updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(
         data.email,
         data.phone,
         data.sms_api,
         data.email_code_api,
+        data.codex_2fa,
+        data.password,
         data.activation_method,
         data.activated_at,
         data.status,
@@ -103,6 +109,7 @@ export function createReplacementAccountRepository(db) {
       } else {
         data.public_code_key = existing.public_code_key || generatePublicCodeKey();
       }
+      data.password ||= existing.password || generateReplacementPassword();
       validateStatus(data.status, { allowReplacing: false });
       assertEmailAvailable(db, data.email, existing.id);
       const now = new Date().toISOString();
@@ -114,6 +121,8 @@ export function createReplacementAccountRepository(db) {
           phone = ?,
           sms_api = ?,
           email_code_api = ?,
+          codex_2fa = ?,
+          password = ?,
           activation_method = ?,
           activated_at = ?,
           status = ?,
@@ -128,6 +137,8 @@ export function createReplacementAccountRepository(db) {
         data.phone,
         data.sms_api,
         data.email_code_api,
+        data.codex_2fa,
+        data.password,
         data.activation_method,
         data.activated_at,
         data.status,
@@ -350,6 +361,8 @@ function normalizeAccountInput(input, { requireEmail }) {
     phone: normalizeOptional(input?.phone),
     sms_api: normalizeOptional(input?.sms_api),
     email_code_api: normalizeOptional(input?.email_code_api),
+    codex_2fa: normalizeCodex2fa(input),
+    password: normalizeOptional(input?.password),
     activation_method: normalizeOptional(input?.activation_method),
     activated_at: normalizeOptional(input?.activated_at),
     status: normalizeOptional(input?.status) || 'pending',
@@ -358,6 +371,10 @@ function normalizeAccountInput(input, { requireEmail }) {
     public_code_enabled: normalizeBooleanFlag(input?.public_code_enabled),
     public_code_key: normalizeOptional(input?.public_code_key),
   };
+}
+
+function normalizeCodex2fa(input) {
+  return normalizeOptional(input?.codex_2fa ?? input?.['2fa-codex'] ?? input?.['2fa_codex']);
 }
 
 function validateStatus(status, { allowReplacing }) {
@@ -409,6 +426,15 @@ function normalizeBooleanFlag(value) {
 
 function generatePublicCodeKey() {
   return `vc_${randomBytes(24).toString('base64url')}`;
+}
+
+function generateReplacementPassword() {
+  const length = randomInt(12, 17);
+  let password = '';
+  for (let index = 0; index < length; index += 1) {
+    password += REPLACEMENT_PASSWORD_CHARS[randomInt(0, REPLACEMENT_PASSWORD_CHARS.length)];
+  }
+  return password;
 }
 
 function normalizeErrorMessage(value) {

@@ -1,8 +1,8 @@
 # CHG-045 CPA 自动补号触发原因写入运行日志
 
-- 状态：implemented
+- 状态：merged
 - 创建日期：2026-06-21
-- 关联 PRD：PRD-002
+- 关联 PRD：PRD-003
 - 影响范围：`src/cpaRepairWorker.js`, `src/replacementServices.js`, `test/cpaRepairWorker.test.js`, `docs/project/api.md`, `docs/work/`
 
 ## 背景
@@ -27,3 +27,8 @@
 - RED：新增 `repair worker appends CPA trigger reason to replacement run log`，失败于日志中缺少 `cpa-trigger`。
 - GREEN：`node --test test\cpaRepairWorker.test.js` 通过，5/5 pass。
 - 回归：`node --test test\replacementServices.test.js` 通过，15/15 pass。
+
+## 合并记录
+
+- 合并目标：PRD-003
+- 合并日期：2026-06-25

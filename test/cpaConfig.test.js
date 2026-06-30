@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { normalizeAutomationLogMaxRuns, normalizeCpaConfig } from '../src/config.js';
+import { normalizeAutomationLogMaxRuns, normalizeCpaConfig, normalizeImapConfig } from '../src/config.js';
 
 test('normalizeCpaConfig builds auth-files URL and interval defaults', () => {
   const result = normalizeCpaConfig({
@@ -34,4 +34,20 @@ test('normalizeAutomationLogMaxRuns defaults to 30 and accepts positive integers
   assert.equal(normalizeAutomationLogMaxRuns({ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS: '10' }), 10);
   assert.equal(normalizeAutomationLogMaxRuns({ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS: '0' }), 30);
   assert.equal(normalizeAutomationLogMaxRuns({ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS: 'abc' }), 30);
+});
+
+test('normalizeImapConfig includes optional proxy URL', () => {
+  const result = normalizeImapConfig({
+    IMAP_HOST: 'imap.example.test',
+    IMAP_PORT: '1993',
+    IMAP_SECURE: 'false',
+    IMAP_PROXY: ' socks5://127.0.0.1:11080 ',
+  });
+
+  assert.deepEqual(result, {
+    host: 'imap.example.test',
+    port: 1993,
+    secure: false,
+    proxy: 'socks5://127.0.0.1:11080',
+  });
 });

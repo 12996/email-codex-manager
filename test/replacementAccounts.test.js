@@ -129,6 +129,46 @@ test('createAccount and updateAccount store external email code API URL', () => 
   assert.equal(updated.email_code_api, 'https://example.invalid/next-code');
 });
 
+test('createAccount and updateAccount store Codex 2FA secret', () => {
+  const repo = createTestRepository();
+
+  const account = repo.createAccount({
+    email: 'codex-2fa@example.com',
+    codex_2fa: ' JBSWY3DPEHPK3PXP ',
+  });
+
+  assert.equal(account.codex_2fa, 'JBSWY3DPEHPK3PXP');
+
+  const updated = repo.updateAccount(account.id, {
+    email: 'codex-2fa@example.com',
+    '2fa-codex': ' NEXTSECRET ',
+  });
+
+  assert.equal(updated.codex_2fa, 'NEXTSECRET');
+});
+
+test('createAccount generates replacement password and updateAccount preserves it when omitted', () => {
+  const repo = createTestRepository();
+
+  const account = repo.createAccount({ email: 'password@example.com' });
+
+  assert.match(account.password, /^[A-Za-z0-9!@#$%^&*_-]{12,16}$/);
+
+  const preserved = repo.updateAccount(account.id, {
+    email: 'password@example.com',
+    phone: '456',
+  });
+
+  assert.equal(preserved.password, account.password);
+
+  const updated = repo.updateAccount(account.id, {
+    email: 'password@example.com',
+    password: ' CustomPass12! ',
+  });
+
+  assert.equal(updated.password, 'CustomPass12!');
+});
+
 test('createAccount defaults activated_at to current time when omitted', () => {
   const repo = createTestRepository();
   const before = Date.now();

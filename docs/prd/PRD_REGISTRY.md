@@ -6,3 +6,4 @@ PRD 索引。状态：`draft` 草案，`active` 当前有效，`deprecated` 已�
 |---|---|---|---|---|
 | PRD-001 | 项目文档管理体系 | active | P0 | `PRD-001.md` |
 | PRD-002 | 账号管理系统需求文档 | active | P0 | `PRD-002-account-management-system.md` |
+| PRD-003 | 账号管理系统需求文档（2026-06-25 基线） | active | P0 | `PRD-003-account-management-system-2026-06-25-baseline.md` |

@@ -183,11 +183,12 @@ export function findLatestVerificationCode(messages) {
   return null;
 }
 
-function createClient(account) {
+export function createClient(account) {
   const client = new ImapFlow({
     host: config.imap.host,
     port: config.imap.port,
     secure: config.imap.secure,
+    proxy: config.imap.proxy || undefined,
     auth: {
       user: deriveMainGmailAccount(account.gmail_email),
       pass: normalizeAppPassword(account.gmail_app_password),

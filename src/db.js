@@ -34,6 +34,8 @@ function initializeSchema(db) {
       phone TEXT,
       sms_api TEXT,
       email_code_api TEXT,
+      codex_2fa TEXT,
+      password TEXT,
       sms_last_error TEXT,
       activation_method TEXT,
       activated_at TEXT,
@@ -66,6 +68,8 @@ function initializeSchema(db) {
   ensureColumn(db, 'replacement_accounts', 'circuit_breaker_at', 'TEXT');
   ensureColumn(db, 'replacement_accounts', 'circuit_breaker_reason', 'TEXT');
   ensureColumn(db, 'replacement_accounts', 'email_code_api', 'TEXT');
+  ensureColumn(db, 'replacement_accounts', 'codex_2fa', 'TEXT');
+  ensureColumn(db, 'replacement_accounts', 'password', 'TEXT');
 
   db.exec(`
     CREATE UNIQUE INDEX IF NOT EXISTS idx_replacement_accounts_public_code_key_unique

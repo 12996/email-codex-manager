@@ -112,6 +112,7 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
 
   assert.match(html, /一键补号/);
   assert.match(html, /新增账号/);
+  assert.match(html, /name="password"/);
   assert.match(appJs, /获取验证码/);
   assert.match(appJs, /获取 JSON/);
   assert.match(appJs, /执行补号/);
@@ -154,39 +155,49 @@ test('replacement account table fully displays required runtime fields', () => {
     '邮箱',
     '手机号',
     'SMS API',
+    '密码',
     '备注',
+    '2fa-codex',
     '开通方式',
     '开通时间',
     '状态',
-    '状态更新时间',
     '公开验证码 Key',
     '补号次数',
   ]) {
     assert.match(html, new RegExp(label));
+  }
+  for (const hiddenLabel of ['状态更新时间', '最后操作', '更新时间']) {
+    assert.doesNotMatch(html, new RegExp(`<th>${hiddenLabel}</th>`));
   }
 
   for (const field of [
     'account.email',
     'account.phone',
     'account.sms_api',
+    'account.password',
     'account.remark',
+    'account.codex_2fa',
     'account.activation_method',
     'account.activated_at',
-    'account.status_updated_at',
     'account.public_code_key',
     'account.replacement_count',
   ]) {
     assert.match(appJs, new RegExp(field.replaceAll('.', '\\.')));
+  }
+  for (const hiddenField of ['status_updated_at', 'last_operation', 'updated_at']) {
+    assert.doesNotMatch(appJs, new RegExp(`renderLimitedField\\(account, '${hiddenField}'`));
   }
 
   assert.doesNotMatch(appJs, /maskPhone\(account\.phone\)/);
   assert.doesNotMatch(html, /SMS 错误/);
   assert.doesNotMatch(css, /\.table-wrap\s*{[^}]*max-height/s);
   assert.match(css, /\.table-wrap\s*{[^}]*overflow-x:\s*auto/s);
-  assert.match(css, /table\s*{[^}]*min-width:\s*2[0-9]{3}px/s);
+  assert.match(css, /table\s*{[^}]*width:\s*max-content/s);
+  assert.match(css, /table\s*{[^}]*min-width:\s*100%/s);
+  assert.doesNotMatch(css, /table\s*{[^}]*min-width:\s*1[0-9]{3}px/s);
 });
 
-test('replacement account table truncates long cells and exposes field copy action', () => {
+test('replacement account table compacts non-email cells and exposes field copy action', () => {
   const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
   const css = readFileSync(join(process.cwd(), 'web', 'styles.css'), 'utf8');
 
@@ -195,12 +206,23 @@ test('replacement account table truncates long cells and exposes field copy acti
   assert.match(appJs, /data-action="copy-field"/);
   assert.match(appJs, /copyAccountField/);
   assert.match(appJs, /navigator\.clipboard\.writeText\(text\)/);
+  assert.match(appJs, /compactFieldPreviewLength\s*=\s*6/);
+  assert.match(appJs, /renderEmailField/);
 
-  for (const field of ['email', 'phone', 'sms_api', 'email_code_api', 'remark', 'public_code_key']) {
-    assert.match(appJs, new RegExp(`${field}:\\s*\\d+`));
+  for (const field of ['phone', 'sms_api', 'email_code_api', 'codex_2fa', 'password', 'public_code_key']) {
+    assert.match(appJs, new RegExp(`'${field}'`));
   }
+  assert.match(appJs, /renderWrappedField\(account\.remark/);
+  assert.match(appJs, /renderWrappedField\(account\.activated_at/);
+  assert.doesNotMatch(appJs, /compactFields\s*=\s*\[[^\]]*'remark'/s);
+  assert.doesNotMatch(appJs, /compactFields\s*=\s*\[[^\]]*'activated_at'/s);
 
   assert.match(css, /\.limited-field-text\s*{[^}]*text-overflow:\s*ellipsis/s);
+  assert.match(css, /\.wrapped-field\s*{[^}]*width:\s*12ch/s);
+  assert.match(css, /\.wrapped-field\s*{[^}]*min-width:\s*12ch/s);
+  assert.match(css, /\.wrapped-field-text\s*{[^}]*white-space:\s*normal/s);
+  assert.match(css, /\.wrapped-field-text\s*{[^}]*word-break:\s*break-all/s);
+  assert.doesNotMatch(css, /\.email-field-text\s*{[^}]*overflow-wrap:\s*anywhere/s);
   assert.match(css, /\.copy-field-button\s*{/);
 });
 

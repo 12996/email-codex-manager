@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "node src/server.js",
+    "start:proxy": "node scripts/start-with-imap-proxy.cjs",
+    "start:home-proxy": "node scripts/start-with-home-imap-proxy.cjs",
     "test": "node --test"
   },
   "dependencies": {

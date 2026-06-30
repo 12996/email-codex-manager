@@ -1,10 +1,10 @@
 # CHG-046 注册 access token 产物与列表空态显示
 
-状态：implemented
+状态：merged
 
 日期：2026-06-25
 
-关联 PRD：PRD-002
+关联 PRD：PRD-003
 
 影响范围：`src/auto/roxy_register_openai.js`, `web/accounts.html`, `web/accounts.js`, `web/automation-logs.js`, `web/styles.css`, `.env.example`, `test/`, `docs/project/api.md`
 
@@ -37,3 +37,8 @@ node --test test\replacementAccountsWeb.test.js
 ```
 
 均通过。
+
+## 合并记录
+
+- 合并目标：PRD-003
+- 合并日期：2026-06-25

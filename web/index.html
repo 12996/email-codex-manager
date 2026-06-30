@@ -68,15 +68,14 @@
               <th>手机号</th>
               <th>SMS API</th>
               <th>邮箱验证码 API</th>
+              <th>2fa-codex</th>
+              <th>密码</th>
               <th>备注</th>
               <th>开通方式</th>
               <th>开通时间</th>
               <th>状态</th>
-              <th>状态更新时间</th>
               <th>公开验证码 Key</th>
               <th>补号次数</th>
-              <th>最后操作</th>
-              <th>更新时间</th>
               <th>操作</th>
             </tr>
           </thead>
@@ -127,6 +126,8 @@
       <label>手机号 <input name="phone" placeholder="13800000000"></label>
       <label>SMS API <input name="sms_api" placeholder="https://example.invalid/sms"></label>
       <label>邮箱验证码 API <input name="email_code_api" placeholder="https://example.invalid/email-code"></label>
+      <label>2fa-codex <input name="codex_2fa" placeholder="Codex 2FA 密钥"></label>
+      <label>密码 <input name="password" placeholder="留空自动生成 12-16 位密码"></label>
       <label>开通方式 <input name="activation_method" placeholder="manual / auto"></label>
       <label>开通时间 <input name="activated_at" placeholder="2026-06-01T00:00:00.000Z"></label>
       <label><input name="public_code_enabled" type="checkbox" value="1"> 允许公开验证码接口</label>

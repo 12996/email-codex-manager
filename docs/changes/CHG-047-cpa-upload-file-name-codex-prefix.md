@@ -1,10 +1,10 @@
 # CHG-047 CPA 上传凭证文件名增加 codex 前缀
 
-状态：implemented
+状态：merged
 
 日期：2026-06-25
 
-关联 PRD：PRD-002
+关联 PRD：PRD-003
 
 影响范围：`src/cpaRepairWorker.js`, `test/cpaRepairWorker.test.js`, `docs/project/api.md`, `docs/work/`
 
@@ -32,3 +32,8 @@ npm test -- test/cpaRepairWorker.test.js
 ```
 
 通过，5/5 pass。
+
+## 合并记录
+
+- 合并目标：PRD-003
+- 合并日期：2026-06-25

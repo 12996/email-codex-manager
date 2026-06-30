@@ -20,19 +20,19 @@ const statusLabels = {
   failed: 'failed',
 };
 
-const tableFieldLimits = {
-  email: 30,
-  phone: 18,
-  sms_api: 46,
-  email_code_api: 46,
-  remark: 60,
-  activation_method: 18,
-  activated_at: 20,
-  status_updated_at: 20,
-  public_code_key: 32,
-  last_operation: 18,
-  updated_at: 20,
-};
+const compactFieldPreviewLength = 6;
+const compactFields = [
+  'phone',
+  'sms_api',
+  'email_code_api',
+  'codex_2fa',
+  'password',
+  'activation_method',
+  'public_code_key',
+];
+const tableFieldLimits = Object.fromEntries(
+  compactFields.map((field) => [field, compactFieldPreviewLength]),
+);
 
 const $ = (selector) => document.querySelector(selector);
 
@@ -131,23 +131,21 @@ function renderPager() {
 
 function accountRow(account) {
   const checked = state.selectedIds.has(account.id) ? 'checked' : '';
-  const lastText = lastOperationText(account);
   return `
     <tr>
       <td><input class="row-check" type="checkbox" data-id="${account.id}" ${checked}></td>
-      <td>${renderLimitedField(account, 'email', account.email, { className: 'email-main field-raw' })}<div class="muted">ID: ${account.id}</div></td>
+      <td>${renderEmailField(account.email)}<div class="muted">ID: ${account.id}</div></td>
       <td>${renderLimitedField(account, 'phone', account.phone, { className: 'field-raw' })}</td>
       <td>${renderLimitedField(account, 'sms_api', account.sms_api, { className: 'field-raw' })}</td>
       <td>${renderLimitedField(account, 'email_code_api', account.email_code_api, { className: 'field-raw' })}</td>
-      <td>${renderLimitedField(account, 'remark', account.remark, { className: 'remark-cell' })}</td>
+      <td>${renderLimitedField(account, 'codex_2fa', account.codex_2fa, { className: 'field-raw' })}</td>
+      <td>${renderLimitedField(account, 'password', account.password, { className: 'field-raw' })}</td>
+      <td>${renderWrappedField(account.remark)}</td>
       <td>${renderLimitedField(account, 'activation_method', account.activation_method)}</td>
-      <td>${renderLimitedField(account, 'activated_at', account.activated_at, { className: 'field-raw' })}</td>
+      <td>${renderWrappedField(account.activated_at, { className: 'field-raw' })}</td>
       <td><span class="status ${account.status}">${statusLabels[account.status] || account.status}</span></td>
-      <td>${renderLimitedField(account, 'status_updated_at', account.status_updated_at, { className: 'field-raw' })}</td>
       <td>${renderLimitedField(account, 'public_code_key', account.public_code_key, { className: 'field-raw' })}<div class="muted">${account.public_code_enabled ? '公开验证码已启用' : '公开验证码未启用'}</div></td>
       <td>${account.replacement_count || 0}</td>
-      <td><span class="dot ${lastText.type}"></span>${renderLimitedField(account, 'last_operation', lastText.label)}<div class="muted">${escapeHtml(formatDate(account.last_replace_at || account.json_fetched_at || account.status_updated_at))}</div></td>
-      <td>${renderLimitedField(account, 'updated_at', formatDate(account.updated_at))}</td>
       <td>
         <div class="actions">
           <button class="primary action-toggle" type="button" data-id="${account.id}">操作⌄</button>
@@ -170,9 +168,23 @@ function accountRow(account) {
   `;
 }
 
+function renderEmailField(value) {
+  return renderWrappedField(value, { className: 'email-main field-raw' });
+}
+
+function renderWrappedField(value, options = {}) {
+  const rawText = String(value || '-');
+  const className = ['wrapped-field-text', options.className].filter(Boolean).join(' ');
+  return `
+    <span class="wrapped-field" title="${escapeHtml(rawText)}">
+      <span class="${escapeHtml(className)}">${escapeHtml(rawText)}</span>
+    </span>
+  `;
+}
+
 function renderLimitedField(account, field, value, options = {}) {
   const rawText = String(value || '-');
-  const maxLength = tableFieldLimits[field] || 24;
+  const maxLength = tableFieldLimits[field] || compactFieldPreviewLength;
   const isEmpty = rawText === '-';
   const isLong = !isEmpty && rawText.length > maxLength;
   const text = isLong ? `${rawText.slice(0, maxLength)}...` : rawText;
@@ -236,7 +248,7 @@ function openAccountDialog(account = null) {
   const form = $('#accountForm');
   form.reset();
   $('#dialogTitle').textContent = account ? '编辑账号' : '新增账号';
-  for (const field of ['id', 'email', 'phone', 'sms_api', 'email_code_api', 'activation_method', 'activated_at', 'status', 'remark']) {
+  for (const field of ['id', 'email', 'phone', 'sms_api', 'email_code_api', 'codex_2fa', 'password', 'activation_method', 'activated_at', 'status', 'remark']) {
     form.elements[field].value = account?.[field] || (field === 'status' ? 'pending' : '');
   }
   form.elements.public_code_enabled.checked = Boolean(Number(account?.public_code_enabled || 0));
@@ -523,21 +535,6 @@ async function api(path, options = {}) {
     throw new Error(body.message || body.error || `请求失败：${response.status}`);
   }
   return body;
-}
-
-function lastOperationText(account) {
-  if (account.status === 'failed') return { type: 'failed', label: '补号失败' };
-  if (account.status === 'replacing') return { type: 'replacing', label: '补号中' };
-  if (account.last_replace_at || account.status === 'replaced') return { type: '', label: '补号成功' };
-  if (account.json_fetched_at) return { type: 'replacing', label: '获取 JSON' };
-  return { type: 'empty', label: '-' };
-}
-
-function formatDate(value) {
-  if (!value) return '-';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return `${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
 }
 
 function closeOpenMenus() {

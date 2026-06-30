@@ -2,37 +2,77 @@
 
 状态：active
 
+## 2026-06-29 补号账号密码字段与列表压缩展示
+
+- 来源工作日志：`docs/work/2026-06-29-replacement-password-compact-fields.md`
+- change：`docs/changes/CHG-051-replacement-password-and-compact-fields.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：`replacement_accounts` 新增 `password` 字段，既有数据库启动时通过 `ensureColumn` 自动补列。新增补号账号未提交密码时自动生成 12-16 位随机密码，字符集包含大小写字母、数字和 `!@#$%^&*_-`；编辑时密码为空会保留原值，提交非空密码则更新。补号管理页新增“密码”输入框和主表列；主表除邮箱、备注和开通时间外的长字段压缩为前 6 位并提供复制完整值按钮；邮箱、备注和开通时间完整显示并按约 12 个字符宽度换行；主表隐藏“状态更新时间”“最后操作”“更新时间”三列；表格宽度按内容收缩，减少列间距异常和操作列挤压。
+- 验证：`npm test -- test/replacementAccounts.test.js test/replacementAccountsApi.test.js test/replacementAccountsWeb.test.js` 通过，54/54 pass；`node --check .\src\db.js`、`node --check .\src\replacementAccounts.js`、`node --check .\web\app.js` 通过。
+- 待办：需要重启当前 `node src/server.js` 服务后，新数据库字段和前端页面才会在运行中的服务生效。当前未合并 PRD 的 `implemented` change 为 `CHG-049`、`CHG-050`、`CHG-051`，未达到 5 个提醒阈值。
+
+## 2026-06-27 IMAP 家宽代理启动
+
+- 来源工作日志：`docs/work/2026-06-27-home-imap-proxy-start.md`
+- change：`docs/changes/CHG-050-home-imap-proxy-start.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：新增 `npm run start:home-proxy` 和 `scripts/start-with-home-imap-proxy.cjs`，通过 `ssh -N -L 127.0.0.1:11080:127.0.0.1:7891 vps-LA` 将本机 IMAP 代理端口转发到 `vps-LA` 上的家宽代理，再以 `IMAP_PROXY=socks5://127.0.0.1:11080` 启动 `src/server.js`。该启动方式只影响 Gmail IMAP 连接，`npm start` 和 `npm run start:proxy` 保持原行为。
+- 验证：`node --test test\startWithHomeImapProxy.test.js test\startWithImapProxy.test.js test\imapService.test.js test\cpaConfig.test.js` 通过，25/25 pass。
+- 待办：正式启动前确认 `vps-LA` 上 `127.0.0.1:7891` 的家宽代理可用；如本机 `127.0.0.1:11080` 被占用，需要先关闭占用进程或调整 `IMAP_HOME_PROXY_LOCAL_PORT`。
+
+## 2026-06-26 IMAP 绑定 SSH 代理启动
+
+- 来源工作日志：`docs/work/2026-06-26-imap-bound-ssh-proxy.md`
+- change：`docs/changes/CHG-049-imap-bound-ssh-proxy-start.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：已新增 `IMAP_PROXY`，Gmail IMAP 创建 ImapFlow client 时会使用该代理；新增 `npm run start:proxy`，通过 `scripts/start-with-imap-proxy.cjs` 先启动 `ssh -N -D 127.0.0.1:11080 <IMAP_PROXY_SSH_HOST>`，再启动 `src/server.js`，并在服务退出时关闭 SSH 隧道。`npm start` 保持原直连行为。
+- 实机前置验证：`vps-LA` 出口 IP 为 `5.253.38.136`，可访问 `imap.gmail.com:993`，通过本地 SOCKS5 隧道 TLS 握手成功。
+- 验证：`node --test test\imapService.test.js test\cpaConfig.test.js test\startWithImapProxy.test.js` 通过，21/21 pass。
+- 待办：正式启动前如仍有临时 SSH 隧道占用 `127.0.0.1:11080`，需要先关闭该进程，避免绑定启动端口冲突。
+
+## 2026-06-25 PRD-003 change 基线合并
+
+- 来源工作日志：`docs/work/2026-06-25-prd-003-change-merge.md`
+- 合并范围：`CHG-044`、`CHG-045`、`CHG-046`、`CHG-047`、`CHG-048`。
+- 当前进展：已新增 `docs/prd/PRD-003-account-management-system-2026-06-25-baseline.md`，并在 `docs/prd/PRD_REGISTRY.md` 登记 PRD-003。上述 change 已全部更新为 `merged`，关联 PRD 已改为 `PRD-003`，各 change 文件已记录合并目标和合并日期。
+- 当前提醒：`CHANGE_REGISTRY.md` 中当前未发现未合并的 `implemented` change。
+
+## 2026-06-25 补号账号 Codex 2FA 字段
+
+- 来源工作日志：`docs/work/2026-06-25-replacement-codex-2fa-field.md`
+- change：`docs/changes/CHG-048-replacement-codex-2fa-field.md`，状态 `merged`，已合并到 PRD-003。
+- 当前进展：`replacement_accounts` 新增 `codex_2fa` 字段，既有数据库启动时通过 `ensureColumn` 自动补列。`POST /replacement-accounts` 与 `PUT /replacement-accounts/:id` 支持保存 `codex_2fa`，并兼容请求体字段名 `2fa-codex`、`2fa_codex`。补号管理页账号弹窗新增 `2fa-codex` 输入框，主表新增 `2fa-codex` 列并复用长字段截断/复制。
+- 验证：`npm test -- test/replacementAccounts.test.js test/replacementAccountsApi.test.js test/replacementAccountsWeb.test.js` 通过，53/53 pass。
+- 待办：需要重启当前 `node src/server.js` 服务后，`http://localhost:13100/replacement-ui` 才会加载新页面与新 API 逻辑。
+
 ## 2026-06-25 CPA 上传凭证文件名 codex 前缀
 
 - 来源工作日志：`docs/work/2026-06-25-cpa-upload-file-name-codex-prefix.md`
-- change：`docs/changes/CHG-047-cpa-upload-file-name-codex-prefix.md`，状态 `implemented`，尚未合并 PRD。
+- change：`docs/changes/CHG-047-cpa-upload-file-name-codex-prefix.md`，状态 `merged`，已合并到 PRD-003。
 - 当前进展：CPA repair worker 读取本地 CPA JSON 时仍使用 `src/auto/product_files/cpa/<email>.json`；上传到 CPA 的 auth file 名称改为 `codex-<email>-plus.json`，例如 `codex-slide.emoji.2w+rv4okxgrtg9hc7cvf@icloud.com-plus.json`。上传后健康复查仍按邮箱判断。
 - 验证：`npm test -- test/cpaRepairWorker.test.js` 通过，5/5 pass。
-- 待办：需要重启当前 `node src/server.js` 服务后，新 CPA 上传命名才会在运行中的服务生效；当前未合并的 `implemented` change 数量为 4。
+- 待办：需要重启当前 `node src/server.js` 服务后，新 CPA 上传命名才会在运行中的服务生效。
 
 ## 2026-06-25 注册 token 保存与列表空态
 
 - 来源工作日志：`docs/work/2026-06-25-registration-token-output-and-list-empty-state.md`
-- change：`docs/changes/CHG-046-registration-token-output-and-list-empty-state.md`，状态 `implemented`，尚未合并 PRD。
+- change：`docs/changes/CHG-046-registration-token-output-and-list-empty-state.md`，状态 `merged`，已合并到 PRD-003。
 - 当前进展：OpenAI 注册自动化在成功读取 `chatgpt.com/api/auth/session` 的 `accessToken` 后，会保存 `src/auto/product_files/registration/<email>.json`；文件名默认使用补号邮箱号，仅替换 Windows 不允许的文件名字符。注册日志只输出 token 文件路径，不输出 token 明文。`/accounts` 页面改为复用统一 sidebar，补号日志入口在邮箱账号页可见；邮箱账号列表和补号日志列表在无数据或筛选无结果时显示空态行。
 - 验证：`node --test test\roxyRegisterOpenai.test.js` 通过，4/4 pass；`node --test test\replacementAccountsWeb.test.js` 通过，10/10 pass。
-- 待办：重启当前 `node src/server.js` 服务后，前端页面和注册子进程新逻辑才会在 13100 端口生效；当前未合并的 `implemented` change 数量为 3。
+- 待办：重启当前 `node src/server.js` 服务后，前端页面和注册子进程新逻辑才会在 13100 端口生效。
 
 ## 2026-06-21 CPA 自动补号触发原因日志
 
 - 来源工作日志：`docs/work/2026-06-21-cpa-repair-trigger-log.md`
-- change：`docs/changes/CHG-045-cpa-repair-trigger-log.md`，状态 `implemented`，尚未合并 PRD。
+- change：`docs/changes/CHG-045-cpa-repair-trigger-log.md`，状态 `merged`，已合并到 PRD-003。
 - 当前进展：CPA 自动补号运行日志已新增 `step=cpa-trigger`，记录触发补号的 CPA provider、email、status、unavailable、disabled、reasons 和截断后的 `status_message`。真实 Roxy OAuth 子进程日志会在自动化启动前写入该信息，即使后续 OAuth 自动化失败也能从 run log 判断为什么执行了补号。
 - 验证：`node --test test\cpaRepairWorker.test.js` 通过，5/5 pass；`node --test test\replacementServices.test.js` 通过，15/15 pass。
-- 待办：需要重启当前 `node src/server.js` 服务让新日志逻辑在定时 CPA monitor 中生效；当前未合并的 `implemented` change 数量为 2。
+- 待办：需要重启当前 `node src/server.js` 服务让新日志逻辑在定时 CPA monitor 中生效。
 
 ## 2026-06-11 CPA 同邮箱多凭证任一健康判断
 
 - 来源工作日志：`docs/work/2026-06-11-cpa-email-any-healthy.md`
-- change：`docs/changes/CHG-044-cpa-email-any-healthy.md`，状态 `implemented`，尚未合并 PRD。
+- change：`docs/changes/CHG-044-cpa-email-any-healthy.md`，状态 `merged`，已合并到 PRD-003。
 - 当前进展：CPA 健康巡检和补号后复查已改为按邮箱归并判断；同一邮箱存在多个 CPA auth file 时，只要任一凭证为健康状态，邮箱整体视为健康，不再因为其他旧异常凭证触发补号或导致 repair worker 复查失败。若同邮箱没有任何健康凭证，仍按原逻辑报告异常或触发补号。
 - 验证：`node --test test\cpaRepairWorker.test.js test\cpaCredentialMonitor.test.js` 通过，8/8 pass。
-- 待办：尚未执行真实 CPA `/cpa/auth-health` 实机复查；当前未合并的 `implemented` change 数量为 1。
+- 待办：尚未执行真实 CPA `/cpa/auth-health` 实机复查。
 
 ## 2026-06-08 PRD-002 change 基线合并
 

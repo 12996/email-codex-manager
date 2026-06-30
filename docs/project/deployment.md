@@ -13,6 +13,15 @@
 | `IMAP_HOST` | Gmail IMAP 主机 | 否 | `imap.gmail.com` |
 | `IMAP_PORT` | Gmail IMAP 端口 | 否 | `993` |
 | `IMAP_SECURE` | IMAP 是否使用 TLS | 否 | `true` |
+| `IMAP_PROXY` | Gmail IMAP 代理 URL；支持 `socks5://`、`socks://`、`http://` 等 ImapFlow 支持的代理协议 | 否 | 空 |
+| `IMAP_PROXY_SSH_HOST` | `npm run start:proxy` 使用的 SSH Host 别名，例如 `vps-LA` | 使用绑定代理启动时必填 | 空 |
+| `IMAP_PROXY_LOCAL_HOST` | `npm run start:proxy` 本地 SOCKS5 监听地址 | 否 | `127.0.0.1` |
+| `IMAP_PROXY_LOCAL_PORT` | `npm run start:proxy` 本地 SOCKS5 监听端口 | 否 | `11080` |
+| `IMAP_HOME_PROXY_SSH_HOST` | `npm run start:home-proxy` 使用的 SSH Host 别名 | 否 | `vps-LA` |
+| `IMAP_HOME_PROXY_LOCAL_HOST` | `npm run start:home-proxy` 本地转发监听地址 | 否 | `127.0.0.1` |
+| `IMAP_HOME_PROXY_LOCAL_PORT` | `npm run start:home-proxy` 本地转发监听端口 | 否 | `11080` |
+| `IMAP_HOME_PROXY_REMOTE_HOST` | `npm run start:home-proxy` 在远端 SSH 主机上连接的家宽代理地址 | 否 | `127.0.0.1` |
+| `IMAP_HOME_PROXY_REMOTE_PORT` | `npm run start:home-proxy` 在远端 SSH 主机上连接的家宽代理端口 | 否 | `7891` |
 | `MAIL_FETCH_LIMIT` | 单次读取邮件数量上限 | 否 | `5` |
 | `DEFAULT_READ_LOCATION` | 默认读取位置 | 否 | `inbox` |
 | `ROXY_API_BASE_URL` | RoxyBrowser 本地 API 基础地址；配置后优先使用该值 | 使用 Roxy 自动补号时必填其一 | 空 |
@@ -35,6 +44,46 @@
 ```powershell
 npm install
 npm start
+```
+
+如需让 Gmail IMAP 和固定出口代理同启同停，使用：
+
+```powershell
+npm run start:proxy
+```
+
+该命令会先执行 `ssh -N -D 127.0.0.1:11080 <IMAP_PROXY_SSH_HOST>` 启动本地 SOCKS5 隧道，再以 `IMAP_PROXY=socks5://127.0.0.1:11080` 启动 `src/server.js`。服务退出或按 `Ctrl+C` 时，包装器会同时关闭 SSH 隧道。
+
+绑定代理启动示例：
+
+```env
+IMAP_PROXY_SSH_HOST=vps-LA
+IMAP_PROXY_LOCAL_HOST=127.0.0.1
+IMAP_PROXY_LOCAL_PORT=11080
+```
+
+如需只让 Gmail IMAP 走 `vps-LA` 上已运行的家宽代理，使用：
+
+```powershell
+npm run start:home-proxy
+```
+
+该命令会先执行 `ssh -N -L 127.0.0.1:11080:127.0.0.1:7891 vps-LA`，把本机 `127.0.0.1:11080` 转发到 `vps-LA` 上的 `127.0.0.1:7891`，再以 `IMAP_PROXY=socks5://127.0.0.1:11080` 启动 `src/server.js`。这样只有 Gmail IMAP 连接走家宽代理；Web 服务入口、RoxyBrowser 和其他自动化流程不受影响。
+
+家宽代理启动示例：
+
+```env
+IMAP_HOME_PROXY_SSH_HOST=vps-LA
+IMAP_HOME_PROXY_LOCAL_HOST=127.0.0.1
+IMAP_HOME_PROXY_LOCAL_PORT=11080
+IMAP_HOME_PROXY_REMOTE_HOST=127.0.0.1
+IMAP_HOME_PROXY_REMOTE_PORT=7891
+```
+
+启动前可验证本机转发出口：
+
+```powershell
+curl.exe -4 -x socks5h://127.0.0.1:11080 https://api.ipify.org
 ```
 
 启动前建议复制 `.env.example` 为 `.env`，并至少修改：
