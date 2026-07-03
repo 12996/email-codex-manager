@@ -663,6 +663,8 @@ async function clickFirstVisibleEntryAction(page, candidates, actionName, timeou
     return false;
 }
 
+const CHATGPT_EMAIL_INPUT_SELECTOR = 'input[type="email"], input[name="email"]';
+
 const CHATGPT_SIGN_UP_CANDIDATES = [
     { label: 'role-link-sign-up', locator: (page) => page.getByRole('link', { name: /sign up|注册|创建账号|create account/i }) },
     { label: 'role-button-sign-up', locator: (page) => page.getByRole('button', { name: /sign up|注册|创建账号|create account/i }) },
@@ -676,6 +678,48 @@ const CHATGPT_LOG_IN_CANDIDATES = [
     { label: 'role-button-log-in', locator: (page) => page.getByRole('button', { name: /log in|登录|登入/i }) },
     { label: 'href-login', locator: (page) => page.locator('a[href*="log-in"], a[href*="login"]') }
 ];
+
+async function waitForChatGptEmailInput(page, timeoutMs = 1000) {
+    const emailInput = page.locator(CHATGPT_EMAIL_INPUT_SELECTOR).first();
+    await emailInput.waitFor({ state: 'visible', timeout: timeoutMs });
+    return true;
+}
+
+async function hasChatGptEmailInput(page, timeoutMs = 1000) {
+    return waitForChatGptEmailInput(page, timeoutMs).then(() => true).catch(() => false);
+}
+
+async function prepareChatGptEmailEntry(page, options = {}) {
+    const timeoutMs = Number(options.timeoutMs || 30000);
+    const entryClickTimeoutMs = Math.min(Number(options.entryClickTimeoutMs || 4000), timeoutMs);
+    const logger = options.logger || console;
+
+    if (await hasChatGptEmailInput(page, Math.min(1500, timeoutMs))) {
+        registerLog(logger, 'navigation', 'action=email-entry-ready', `source=existing-email-input url=${visibleUrlForLog(page.url())}`);
+        return { status: 'email-input-ready', source: 'existing-email-input' };
+    }
+
+    // 新版 ChatGPT 入口把注册/登录合并成同一个邮箱 modal；优先点 Log in 进入 signin/openai 链路。
+    const enteredLogin = await clickFirstVisibleEntryAction(page, CHATGPT_LOG_IN_CANDIDATES, 'click-log-in', entryClickTimeoutMs);
+    if (enteredLogin && await hasChatGptEmailInput(page, timeoutMs)) {
+        return { status: 'email-input-ready', source: 'click-log-in' };
+    }
+
+    if (await hasChatGptEmailInput(page, Math.min(1500, timeoutMs))) {
+        return { status: 'email-input-ready', source: 'post-login-email-input' };
+    }
+
+    const enteredRegister = await clickFirstVisibleEntryAction(page, CHATGPT_SIGN_UP_CANDIDATES, 'click-sign-up', entryClickTimeoutMs);
+    if (enteredRegister && await hasChatGptEmailInput(page, timeoutMs)) {
+        return { status: 'email-input-ready', source: 'click-sign-up' };
+    }
+
+    if (await hasChatGptEmailInput(page, Math.min(1500, timeoutMs))) {
+        return { status: 'email-input-ready', source: 'post-sign-up-email-input' };
+    }
+
+    throw new Error(`注册入口加载失败：未找到 ChatGPT 邮箱输入入口，URL=${visibleUrlForLog(page.url())}`);
+}
 
 async function clearAndType(page, selector, text) {
     const input = page.locator(selector).first();
@@ -776,11 +820,23 @@ async function fetchRegistrationEmailVerificationCodeOnce(page, email, options =
 async function fetchRegistrationEmailVerificationCode(page, email, options = {}, excludeCode = '') {
     const maxAttempts = Math.max(1, Number(options.codePollMaxAttempts || options.maxRetries || 12));
     const intervalMs = Math.max(0, Number(options.codePollIntervalMs || 5000));
+    const onNoNewCodeFor30Seconds = typeof options.onNoNewCodeFor30Seconds === 'function'
+        ? options.onNoNewCodeFor30Seconds
+        : null;
+    const onBeforePoll = typeof options.onBeforePoll === 'function'
+        ? options.onBeforePoll
+        : null;
     let lastResult;
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        if (onBeforePoll) {
+            await onBeforePoll(attempt);
+        }
         lastResult = await fetchRegistrationEmailVerificationCodeOnce(page, email, options, attempt, maxAttempts);
         if (lastResult.code && lastResult.code !== excludeCode) {
             return lastResult.code;
+        }
+        if (excludeCode && onNoNewCodeFor30Seconds && attempt % 6 === 0) {
+            await onNoNewCodeFor30Seconds(attempt);
         }
         if (attempt < maxAttempts) {
             await sleep(intervalMs);
@@ -825,6 +881,109 @@ async function isOtpIncorrect(page) {
     } catch (_) {
         return false;
     }
+}
+
+function resolveRegistrationPassword(env = process.env) {
+    const password = String(env.ROXY_REGISTER_PASSWORD || env.ROXY_OAUTH_PASSWORD || '').trim();
+    if (!password) {
+        throw new Error('ROXY_REGISTER_PASSWORD is required: 注册创建密码必须使用补号账号数据库 password');
+    }
+    return password;
+}
+
+function isEmailVerificationUrl(value = '') {
+    return String(value || '').includes('auth.openai.com/email-verification')
+        || String(value || '').includes('/email-verification');
+}
+
+async function detectNextRegistrationStep(page, options = {}) {
+    const timeout = Math.max(1, Number(options.timeout || 15000));
+    const passwordSubmitted = Boolean(options.passwordSubmitted);
+    const recoverOperationTimeout = typeof options.recoverOperationTimeout === 'function'
+        ? options.recoverOperationTimeout
+        : null;
+    const deadline = Date.now() + timeout;
+
+    do {
+        if (recoverOperationTimeout && await recoverOperationTimeout()) {
+            await page.waitForTimeout(1500);
+            continue;
+        }
+
+        if (await page.locator('input[name="new-password"]').first().isVisible().catch(() => false)) {
+            return 'password';
+        }
+
+        // OpenAI 可能在设置密码前就落到 email-verification，甚至显示 OTP 框。
+        // 业务要求：密码未提交前一律先推进到 create-account/password，不能填第一次邮件码。
+        if (!passwordSubmitted && isEmailVerificationUrl(page.url())) {
+            return 'email-verification-before-password';
+        }
+
+        if (await page.locator('text=Verify you are human').first().isVisible().catch(() => false)) {
+            return 'captcha';
+        }
+
+        const otpVisible = await findVisibleOtpSelector(page, 1200).then(() => true).catch(() => false);
+        if (!passwordSubmitted && otpVisible) {
+            return 'email-verification-before-password';
+        }
+        if (otpVisible) {
+            return 'otp';
+        }
+    } while (Date.now() < deadline);
+
+    return 'unknown';
+}
+
+async function clickPasswordEntryIfVisible(page, options = {}) {
+    const timeoutMs = Math.max(500, Number(options.timeoutMs || 3000));
+    const candidates = [
+        page.getByRole?.('button', { name: /continue with password|create password|use password|set password|password|创建密码|设置密码/i }),
+        page.getByRole?.('link', { name: /continue with password|create password|use password|set password|password|创建密码|设置密码/i }),
+        page.locator?.('a[href*="create-account/password"], button:has-text("password"), a:has-text("password")')
+    ].filter(Boolean);
+
+    for (const candidate of candidates) {
+        const target = candidate.first();
+        const visible = await target.waitFor({ state: 'visible', timeout: timeoutMs }).then(() => true).catch(() => false);
+        if (!visible) continue;
+        await target.click({ timeout: 10000 }).catch(async () => target.click({ force: true, timeout: 10000 }));
+        return true;
+    }
+    return false;
+}
+
+async function advanceEmailVerificationToPassword(page, options = {}) {
+    const logger = options.logger || console;
+    logger.log?.('📧 [Email Verification] 密码未提交前命中 email-verification，先点击主按钮进入创建密码页...');
+    const clickedPasswordEntry = await clickPasswordEntryIfVisible(page, options);
+    if (!clickedPasswordEntry) {
+        const clickResult = await clickContinueButtonReliably(page, {
+            startUrl: page.url(),
+            maxAttempts: 3,
+            confirmTimeoutMs: Number(options.confirmTimeoutMs || 20000)
+        });
+        if (!clickResult.ok) {
+            logger.warn?.('⚠️ [Email Verification] 点击主按钮后未确认跳转，继续等待 password 输入框...');
+        }
+    }
+    await Promise.race([
+        page.waitForSelector('input[name="new-password"]', { visible: true, timeout: Number(options.timeoutMs || 45000) }).catch(() => null),
+        page.waitForURL((u) => String(u || '').includes('/create-account/password'), { timeout: Number(options.timeoutMs || 45000) }).catch(() => null)
+    ]);
+    if (!await page.locator('input[name="new-password"]').first().isVisible().catch(() => false)) {
+        logger.warn?.('⚠️ [Email Verification] 未自动进入创建密码页，尝试直接访问 create-account/password...');
+        await page.goto('https://auth.openai.com/create-account/password', {
+            waitUntil: 'domcontentloaded',
+            timeout: Number(options.timeoutMs || 45000)
+        }).catch(() => {});
+        await page.waitForSelector('input[name="new-password"]', { visible: true, timeout: Number(options.timeoutMs || 45000) }).catch(() => null);
+    }
+    if (!await page.locator('input[name="new-password"]').first().isVisible().catch(() => false)) {
+        throw new Error(`email-verification 未能推进到创建密码页，URL=${visibleUrlForLog(page.url())}`);
+    }
+    return true;
 }
 
 async function waitForOtpInputReady(page, recoverOperationTimeout, recoverConnectionClosed, timeout = 45000) {
@@ -1328,7 +1487,7 @@ async function submitOtpWithRetry(page, email, maxAttempts = MAX_OTP_RETRIES, op
         }
 
         const pollOpts = {
-            maxRetries: attempt === 1 ? 24 : 36,
+            maxRetries: 24,
             onNoNewCodeFor30Seconds: clickResendEmail,
             onBeforePoll: async () => (beforeAttempt ? beforeAttempt(attempt) : false)
         };
@@ -1446,6 +1605,7 @@ async function runRegistrationFlow() {
     const usePoolImap = (emailSource === 'pool') && (hasOauth || hasPlainPwd);
     const useInbox = emailSource === 'inbox';
     const requestedRegisterEmail = String(process.env.ROXY_REGISTER_EMAIL || process.env.ROXY_OAUTH_EMAIL || '').trim().toLowerCase();
+    const registrationPassword = resolveRegistrationPassword(process.env);
 
     let email = '';
     let inboxJwt = '';
@@ -1549,26 +1709,15 @@ async function runRegistrationFlow() {
 
         const restartFromCreateAccount = async () => {
             console.warn("⚠️  [Warn] 检测到超时错误页，准备从创建账户重新开始并重新提交邮箱...");
+            registrationPasswordSubmitted = false;
             console.log(`[roxy-register-openai] step=navigation action=goto-chatgpt-entry url=${OPENAI_REGISTRATION_ENTRY_URL}`);
             await page.goto(OPENAI_REGISTRATION_ENTRY_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
             await page.waitForSelector('body', { visible: true, timeout: 30000 });
             await sleep(Math.random() * 1200 + 800);
-            let enteredRegister = await clickFirstVisibleEntryAction(page, CHATGPT_SIGN_UP_CANDIDATES, 'click-sign-up', 6000);
-            if (!enteredRegister) {
-                const enteredLogin = await clickFirstVisibleEntryAction(page, CHATGPT_LOG_IN_CANDIDATES, 'click-log-in', 10000);
-                if (!enteredLogin) {
-                    throw new Error(`注册入口加载失败：未找到 ChatGPT 登录/注册按钮，URL=${visibleUrlForLog(page.url())}`);
-                }
-                await sleep(Math.random() * 1200 + 600);
-                enteredRegister = await clickFirstVisibleEntryAction(page, CHATGPT_SIGN_UP_CANDIDATES, 'click-create-account', 15000);
-            }
-            if (!enteredRegister) {
-                throw new Error(`注册入口加载失败：未找到创建账号按钮，URL=${visibleUrlForLog(page.url())}`);
-            }
-            await page.waitForSelector('input[type="email"]', { visible: true, timeout: 30000 });
+            await prepareChatGptEmailEntry(page, { timeoutMs: 30000, logger: console });
             await sleep(Math.random() * 1200 + 600);
             console.log("ℹ️  [Info] 超时恢复：正在重新输入邮箱...");
-            await ensureInputValue(page, 'input[type="email"]', email, '邮箱输入框');
+            await ensureInputValue(page, CHATGPT_EMAIL_INPUT_SELECTOR, email, '邮箱输入框');
             await sleep(Math.random() * 800 + 500);
             await humanClick(page, 'button[type="submit"]');
         };
@@ -1652,34 +1801,12 @@ async function runRegistrationFlow() {
             return true;
         };
 
-        const waitForNextRegistrationStep = async (timeout = 15000) => {
-            const deadline = Date.now() + timeout;
-
-            while (Date.now() < deadline) {
-                if (await recoverOperationTimeout()) {
-                    await page.waitForTimeout(1500);
-                    continue;
-                }
-
-                if (await page.locator('input[name="new-password"]').first().isVisible().catch(() => false)) {
-                    return 'password';
-                }
-
-                if (await page.locator('text=Verify you are human').first().isVisible().catch(() => false)) {
-                    return 'captcha';
-                }
-
-                const otpVisible = await Promise.race([
-                    findVisibleOtpSelector(page, 1200).then(() => true).catch(() => false),
-                    page.waitForTimeout(1200).then(() => false)
-                ]);
-                if (otpVisible) {
-                    return 'otp';
-                }
-            }
-
-            return 'unknown';
-        };
+        let registrationPasswordSubmitted = false;
+        const waitForNextRegistrationStep = async (timeout = 15000) => detectNextRegistrationStep(page, {
+            timeout,
+            passwordSubmitted: registrationPasswordSubmitted,
+            recoverOperationTimeout
+        });
 
         const recoverConnectionClosed = async () => {
             if (!(await isConnectionClosedPage())) {
@@ -1805,48 +1932,36 @@ async function runRegistrationFlow() {
         await ensurePageLoaded(null, "ChatGPT 入口加载");
 
         await sleep(Math.random() * 2000 + 1000);
-        let enteredRegister = await clickFirstVisibleEntryAction(page, CHATGPT_SIGN_UP_CANDIDATES, 'click-sign-up', 6000);
-        if (!enteredRegister) {
-            const enteredLogin = await clickFirstVisibleEntryAction(page, CHATGPT_LOG_IN_CANDIDATES, 'click-log-in', 12000);
-            if (!enteredLogin) {
-                throw new Error(`注册入口加载失败：未找到 ChatGPT 登录/注册按钮，URL=${visibleUrlForLog(page.url())}`);
-            }
-
-            await ensurePageLoaded(null, "登录页加载", 3, 30000);
-            await sleep(Math.random() * 1500 + 500);
-            enteredRegister = await clickFirstVisibleEntryAction(page, CHATGPT_SIGN_UP_CANDIDATES, 'click-create-account', 15000);
-        }
-        if (!enteredRegister) {
-            throw new Error(`注册入口加载失败：未找到创建账号按钮，URL=${visibleUrlForLog(page.url())}`);
-        }
+        await prepareChatGptEmailEntry(page, { timeoutMs: 30000, logger: console });
         await recoverOperationTimeout();
 
         console.log('[roxy-register-openai] step=fill-email action=start');
         console.log("📧 ℹ️  [Info] 正在输入邮箱...");
 
-        await ensurePageLoaded('input[type="email"]', "邮箱输入框加载");
+        await ensurePageLoaded(CHATGPT_EMAIL_INPUT_SELECTOR, "邮箱输入框加载");
         await recoverOperationTimeout();
         await sleep(Math.random() * 1500 + 1000);
-        await ensureInputValue(page, 'input[type="email"]', email, '邮箱输入框');
+        await ensureInputValue(page, CHATGPT_EMAIL_INPUT_SELECTOR, email, '邮箱输入框');
 
         await sleep(Math.random() * 1000 + 800); // 拟人提交前停顿
         await humanClick(page, 'button[type="submit"]');
 
         console.log("⏳ [等待] 正在检测下一步流程（验证码 / 创建密码 / 合并页）...");
         await recoverOperationTimeout();
-        const nextStep = await waitForNextRegistrationStep(20000);
+        let nextStep = await waitForNextRegistrationStep(20000);
+
+        if (nextStep === 'email-verification-before-password') {
+            await advanceEmailVerificationToPassword(page, { logger: console });
+            nextStep = await waitForNextRegistrationStep(45000);
+        }
 
         if (nextStep === 'password') {
-            console.log("🔒 [Step 4.5] 检测到创建密码页面，正在生成随机密码...");
-            const chars = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
-            let randomPassword = "";
-            for (let i = 0; i < 12; i++) {
-                randomPassword += chars.charAt(Math.floor(Math.random() * chars.length));
-            }
+            console.log("🔒 [Step 4.5] 检测到创建密码页面，正在填写数据库密码...");
             await sleep(Math.random() * 1500 + 1000);
-            await humanType(page, 'input[name="new-password"]', randomPassword);
+            await humanType(page, 'input[name="new-password"]', registrationPassword);
             await sleep(Math.random() * 1000 + 500);
             await humanClick(page, 'button[type="submit"]');
+            registrationPasswordSubmitted = true;
             console.log("✅ [密码] 密码设置完成，正在进入验证码阶段...");
         } else if (nextStep === 'captcha') {
             console.log("⚠️ [挑战] 触发了真人验证，请手动处理或检查代理...");
@@ -1876,6 +1991,8 @@ async function runRegistrationFlow() {
             codePollIntervalMs: Number(process.env.VERIFICATION_CODE_POLL_INTERVAL_MS || 5000),
             verificationApiUrl: resolveVerificationApiUrl(),
             timeoutMs: Number(process.env.REGISTRATION_CODE_REQUEST_TIMEOUT_MS || DEFAULT_VERIFICATION_TIMEOUT_MS),
+            onNoNewCodeFor30Seconds: pollOpts.onNoNewCodeFor30Seconds,
+            onBeforePoll: pollOpts.onBeforePoll,
             logger: console
         }, excludeCode);
 
@@ -2166,6 +2283,10 @@ module.exports = {
     buildDefaultVerificationApiUrl,
     fetchRegistrationEmailVerificationCodeOnce,
     fetchRegistrationEmailVerificationCode,
+    prepareChatGptEmailEntry,
+    detectNextRegistrationStep,
+    resolveRegistrationPassword,
+    advanceEmailVerificationToPassword,
     enableChatGptTotpMfa,
     saveRegistrationAccessTokenFile,
     shouldEnableRegistrationMfa,

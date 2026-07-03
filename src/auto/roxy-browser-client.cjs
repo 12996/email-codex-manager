@@ -215,6 +215,17 @@ class RoxyBrowserClient {
         });
     }
 
+    async updateBrowserConfig(config = {}) {
+        await this.resolveDirId();
+        assertRequired(this.workspaceId, 'workspaceId');
+        assertRequired(this.dirId, 'dirId');
+        return this.request('POST', '/browser/mdf', {
+            workspaceId: this.workspaceId,
+            dirId: this.dirId,
+            ...config
+        });
+    }
+
     async openBrowser(args = []) {
         await this.resolveDirId();
         assertRequired(this.workspaceId, 'workspaceId');

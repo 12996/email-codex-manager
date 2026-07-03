@@ -17,6 +17,8 @@ const DEFAULT_TOKEN_PAGE_TIMEOUT_MS = 10000;
 const DEFAULT_TOKEN_PAGE_MAX_ATTEMPTS = 3;
 const DEFAULT_POST_EMAIL_STAGE_TIMEOUT_MS = 8000;
 const DEFAULT_POST_EMAIL_STAGE_MAX_RETRIES = 3;
+const DEFAULT_ROXY_WINDOW_WIDTH = 2048;
+const DEFAULT_ROXY_WINDOW_HEIGHT = 1152;
 const Default_EMAIL='jregkolpig+s4@gmail.com';
 const DEFAULT_PHONE_VERIFICATION_SMS_API_URL = 'https://cdc.smslease.link/adminapi/jsscript/smsInfo/ABC_sms?key=3b7c79633a6a3cd91862eb32e5f3f5cd';
 const EMAIL_SUBTITLE_SELECTOR = 'body > div > div > div._titleBlock_l85du_108 > div > span > div > div._subtitle_7asl0_13';
@@ -1150,8 +1152,55 @@ function shouldRunRoxyHeadless(env) {
     return !shouldKeepOpen(env);
 }
 
+function normalizeWindowDimension(value, fallback) {
+    const number = Number(value);
+    return Number.isInteger(number) && number >= 320 ? number : fallback;
+}
+
+function resolveRoxyWindowSize(env) {
+    const configured = String(env.ROXY_WINDOW_SIZE || '').trim().toLowerCase();
+    if (['0', 'false', 'no', 'off', 'disabled'].includes(configured)) {
+        return null;
+    }
+
+    if (/^\d+x\d+$/i.test(configured)) {
+        const [width, height] = configured.split(/x/i).map((part) => Number(part));
+        return {
+            width: normalizeWindowDimension(width, DEFAULT_ROXY_WINDOW_WIDTH),
+            height: normalizeWindowDimension(height, DEFAULT_ROXY_WINDOW_HEIGHT)
+        };
+    }
+
+    return {
+        width: normalizeWindowDimension(env.ROXY_WINDOW_WIDTH, DEFAULT_ROXY_WINDOW_WIDTH),
+        height: normalizeWindowDimension(env.ROXY_WINDOW_HEIGHT, DEFAULT_ROXY_WINDOW_HEIGHT)
+    };
+}
+
 function resolveRoxyOpenArgs(env) {
-    return shouldRunRoxyHeadless(env) ? ['--headless=new'] : [];
+    const args = [];
+    const windowSize = resolveRoxyWindowSize(env);
+    if (windowSize) {
+        args.push(`--window-size=${windowSize.width},${windowSize.height}`);
+    }
+    if (shouldRunRoxyHeadless(env)) {
+        args.push('--headless=new');
+    }
+    return args;
+}
+
+async function applyRoxyWindowSizeProfile(client, windowSize, logger) {
+    if (!windowSize || typeof client?.updateBrowserConfig !== 'function') {
+        return false;
+    }
+    await client.updateBrowserConfig({
+        fingerInfo: {
+            openWidth: String(windowSize.width),
+            openHeight: String(windowSize.height)
+        }
+    });
+    log(logger, 'prepare', '写入 Roxy 窗口尺寸', `openWidth=${windowSize.width} openHeight=${windowSize.height}`);
+    return true;
 }
 
 async function disconnectPlaywright(browser, logger) {
@@ -1235,8 +1284,15 @@ async function openRoxyBrowserForAutomation(deps = {}) {
     log(logger, 'prepare', '随机指纹', `dirId=${dirId}`);
     await client.randomFingerprint();
 
+    const windowSize = resolveRoxyWindowSize(env);
+    try {
+        await applyRoxyWindowSizeProfile(client, windowSize, logger);
+    } catch (error) {
+        log(logger, 'prepare', '写入 Roxy 窗口尺寸失败，继续使用启动参数兜底', `诊断=${error.message || error}`);
+    }
+
     const openArgs = resolveRoxyOpenArgs(env);
-    log(logger, 'open', '打开窗口', `dirId=${dirId} headless=${openArgs.length > 0 ? 'true' : 'false'}`);
+    log(logger, 'open', '打开窗口', `dirId=${dirId} headless=${shouldRunRoxyHeadless(env) ? 'true' : 'false'} args=${openArgs.join(',') || 'none'}`);
     await client.openBrowser(openArgs);
 
     log(logger, 'cdp', '获取 CDP', `dirId=${dirId}`);
