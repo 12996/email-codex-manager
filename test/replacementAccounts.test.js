@@ -28,9 +28,12 @@ test('initializeSchema creates replacement_accounts table and email unique index
     SELECT name FROM sqlite_master
     WHERE type = 'index' AND name = 'idx_replacement_accounts_email_unique'
   `).get();
+  const statusColumn = db.prepare(`PRAGMA table_info(replacement_accounts)`).all()
+    .find((column) => column.name === 'status');
 
   assert.equal(table.name, 'replacement_accounts');
   assert.equal(index.name, 'idx_replacement_accounts_email_unique');
+  assert.equal(statusColumn.dflt_value, "'for_sale'");
 });
 
 test('replacement automation run repository creates and finishes runs', () => {
@@ -94,14 +97,14 @@ test('replacement automation run pruning keeps running runs even beyond max', ()
   assert.equal(existsSync(finishedLog), true);
 });
 
-test('createAccount trims email and defaults status to pending', () => {
+test('createAccount trims email and defaults status to for_sale', () => {
   const repo = createTestRepository();
 
   const account = repo.createAccount({ email: ' User@Example.COM ', phone: '123' });
 
   assert.equal(account.email, 'User@Example.COM');
   assert.equal(account.phone, '123');
-  assert.equal(account.status, 'pending');
+  assert.equal(account.status, 'for_sale');
   assert.equal(account.replacement_count, 0);
   assert.equal(account.public_code_enabled, 0);
   assert.match(account.public_code_key, /^vc_[A-Za-z0-9_-]{32}$/);
@@ -334,11 +337,11 @@ test('listAccountsPage returns one replacement account page with pagination meta
 
 test('listAccountsPage filters replacement accounts by status and keyword before pagination', () => {
   const repo = createTestRepository();
-  const active = repo.createAccount({
+  const plusActive = repo.createAccount({
     email: 'alpha@example.com',
     phone: '111',
     remark: 'main alpha',
-    status: 'active',
+    status: 'plus_active',
   });
   const banned = repo.createAccount({
     email: 'beta@example.com',
@@ -352,7 +355,7 @@ test('listAccountsPage filters replacement accounts by status and keyword before
 
   assert.deepEqual(statusPage.accounts.map((account) => account.id), [banned.id]);
   assert.equal(statusPage.pagination.total, 1);
-  assert.deepEqual(keywordPage.accounts.map((account) => account.id), [active.id]);
+  assert.deepEqual(keywordPage.accounts.map((account) => account.id), [plusActive.id]);
   assert.equal(keywordPage.pagination.total, 1);
 });
 
@@ -369,25 +372,40 @@ test('updateAccount enforces unique email excluding current row', () => {
 
   assert.equal(updated.email, 'FIRST@example.com');
   assert.equal(updated.phone, '555');
-  assert.equal(updated.status, 'active');
+  assert.equal(updated.status, 'plus_active');
   assert.throws(
     () => repo.updateAccount(first.id, { email: 'second@example.com' }),
     /EMAIL_DUPLICATE/,
   );
 });
 
-test('updateStatus updates manual status and rejects replacing', () => {
+test('legacy replacement account statuses normalize to the new status model', () => {
+  const repo = createTestRepository();
+
+  assert.equal(repo.createAccount({ email: 'pending@example.com', status: 'pending' }).status, 'for_sale');
+  assert.equal(repo.createAccount({ email: 'active@example.com', status: 'active' }).status, 'plus_active');
+  assert.equal(repo.createAccount({ email: 'replaced@example.com', status: 'replaced' }).status, 'cpa_mounted');
+
+  const account = repo.createAccount({ email: 'updated@example.com' });
+  assert.equal(repo.updateStatus(account.id, { status: 'pending' }).status, 'for_sale');
+  assert.equal(repo.updateStatus(account.id, { status: 'active' }).status, 'plus_active');
+  assert.equal(repo.updateStatus(account.id, { status: 'replaced' }).status, 'cpa_mounted');
+});
+
+test('updateStatus accepts manual business statuses and rejects replacing', () => {
   const repo = createTestRepository();
   const account = repo.createAccount({ email: 'user@example.com' });
 
-  const updated = repo.updateStatus(account.id, {
-    status: 'banned',
-    status_note: 'manual mark',
-  });
+  for (const status of ['unregistered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned', 'failed']) {
+    const updated = repo.updateStatus(account.id, {
+      status,
+      status_note: `manual ${status}`,
+    });
+    assert.equal(updated.status, status);
+    assert.equal(updated.status_note, `manual ${status}`);
+    assert.ok(updated.status_updated_at);
+  }
 
-  assert.equal(updated.status, 'banned');
-  assert.equal(updated.status_note, 'manual mark');
-  assert.ok(updated.status_updated_at);
   assert.throws(
     () => repo.updateStatus(account.id, { status: 'replacing' }),
     /STATUS_INVALID/,
@@ -423,7 +441,7 @@ test('markReplacementSuccess increments replacement_count', () => {
   repo.markReplacementStarted(account.id);
   const replaced = repo.markReplacementSuccess(account.id);
 
-  assert.equal(replaced.status, 'replaced');
+  assert.equal(replaced.status, 'cpa_mounted');
   assert.equal(replaced.replacement_count, 1);
   assert.equal(replaced.last_error, null);
   assert.ok(replaced.last_replace_at);
@@ -457,7 +475,7 @@ test('markReplacementFailure tracks consecutive failures before circuit breaker 
   assert.equal(updated.circuit_breaker_reason, null);
 });
 
-test('markReplacementFailure bans account at fifth consecutive failure', () => {
+test('markReplacementFailure marks failed and opens circuit breaker at fifth consecutive failure', () => {
   const repo = createTestRepository();
   const account = repo.createAccount({ email: 'user@example.com' });
 
@@ -467,7 +485,7 @@ test('markReplacementFailure bans account at fifth consecutive failure', () => {
     updated = repo.markReplacementFailure(account.id, `automation failed ${index + 1}`);
   }
 
-  assert.equal(updated.status, 'banned');
+  assert.equal(updated.status, 'failed');
   assert.equal(updated.consecutive_replace_failures, 5);
   assert.ok(updated.circuit_breaker_at);
   assert.match(updated.circuit_breaker_reason, /连续补号失败 5 次/);
@@ -483,13 +501,13 @@ test('markReplacementSuccess resets consecutive failure counter and circuit brea
   repo.markReplacementStarted(account.id);
   const replaced = repo.markReplacementSuccess(account.id);
 
-  assert.equal(replaced.status, 'replaced');
+  assert.equal(replaced.status, 'cpa_mounted');
   assert.equal(replaced.consecutive_replace_failures, 0);
   assert.equal(replaced.circuit_breaker_at, null);
   assert.equal(replaced.circuit_breaker_reason, null);
 });
 
-test('resetCircuitBreaker clears breaker fields and moves account back to pending', () => {
+test('resetCircuitBreaker clears breaker fields without changing status', () => {
   const repo = createTestRepository();
   const account = repo.createAccount({ email: 'user@example.com' });
   for (let index = 0; index < 5; index += 1) {
@@ -499,7 +517,7 @@ test('resetCircuitBreaker clears breaker fields and moves account back to pendin
 
   const reset = repo.resetCircuitBreaker(account.id);
 
-  assert.equal(reset.status, 'pending');
+  assert.equal(reset.status, 'failed');
   assert.equal(reset.status_note, '管理员手动解除熔断');
   assert.equal(reset.consecutive_replace_failures, 0);
   assert.equal(reset.circuit_breaker_at, null);

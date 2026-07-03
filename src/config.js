@@ -34,6 +34,7 @@ export const config = {
   sessionSecret: process.env.SESSION_SECRET || 'change-me-session-secret',
   databasePath: process.env.DATABASE_PATH || './data/app.db',
   imap: normalizeImapConfig(),
+  icloudCodeDefaultGmailAccount: process.env.ICLOUD_CODE_GMAIL_ACCOUNT || 'rosannathornton1@gmail.com',
   mailFetchLimit: Number(process.env.MAIL_FETCH_LIMIT || 5),
   defaultReadLocation: process.env.DEFAULT_READ_LOCATION || 'inbox',
   replacementAutomationLogMaxRuns: normalizeAutomationLogMaxRuns(),

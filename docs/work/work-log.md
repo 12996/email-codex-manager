@@ -63,3 +63,10 @@
 | 2026-06-26 | IMAP 绑定 SSH 代理启动 | done | `2026-06-26-imap-bound-ssh-proxy.md` |
 | 2026-06-27 | IMAP 家宽代理启动 | done | `2026-06-27-home-imap-proxy-start.md` |
 | 2026-06-29 | 补号账号密码字段与列表压缩展示 | done | `2026-06-29-replacement-password-compact-fields.md` |
+| 2026-06-30 | 补号账号状态模型与行内编辑 | done | `2026-06-30-replacement-account-status-model.md` |
+| 2026-07-02 | Roxy 2FA OAuth 登录自动化脚本 | done | `2026-07-02-roxy-2fa-oauth-login.md` |
+| 2026-07-02 | 补号管理页新增 2FA 补号操作 | done | `2026-07-02-replacement-2fa-action.md` |
+| 2026-07-02 | 本地 2FA 验证码 API | done | `2026-07-02-local-2fa-code-api.md` |
+| 2026-07-02 | 注册后自动启用 2FA | done | `2026-07-02-registration-auto-enable-2fa.md` |
+| 2026-07-02 | iCloud 验证码 Gmail 收件 API | done | `2026-07-02-icloud-verification-code-api.md` |
+| 2026-07-03 | iCloud 邮箱验证码 API 优先级对齐 | done | `2026-07-03-icloud-email-code-api-priority.md` |

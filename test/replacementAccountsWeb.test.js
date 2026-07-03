@@ -105,6 +105,7 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
     '/fetch-sms-code',
     '/fetch-json',
     '/replace',
+    '/replace-2fa',
     '/status',
   ]) {
     assert.match(appJs, new RegExp(endpoint.replaceAll('/', '\\/')));
@@ -116,7 +117,8 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(appJs, /获取验证码/);
   assert.match(appJs, /获取 JSON/);
   assert.match(appJs, /执行补号/);
-  assert.match(appJs, /状态设置/);
+  assert.match(appJs, /2FA补号/);
+  assert.match(appJs, /状态已更新/);
   assert.match(appJs, /删除账号/);
 });
 
@@ -142,8 +144,55 @@ test('web frontend exposes circuit breaker reset action', () => {
 
   assert.match(appJs, /解除熔断/);
   assert.match(appJs, /data-action="reset-circuit-breaker"/);
-  assert.match(appJs, /account\.status === 'banned'/);
+  assert.match(appJs, /account\.circuit_breaker_at/);
+  assert.doesNotMatch(appJs, /account\.status === 'banned'/);
   assert.match(appJs, /\/replacement-accounts\/\$\{account\.id\}\/circuit-breaker\/reset/);
+});
+
+test('replacement frontend exposes new Chinese status filters and inline status editing', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+  const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');
+
+  for (const [value, label] of [
+    ['unregistered', '未注册'],
+    ['pending_activation', '待开通'],
+    ['plus_active', '开通 plus'],
+    ['cpa_mounted', 'CPA 挂载'],
+    ['for_sale', '待出售'],
+    ['sold', '已售出'],
+    ['banned', '账号封禁'],
+    ['failed', '失败'],
+    ['circuit_breaker', '已熔断'],
+  ]) {
+    assert.match(html, new RegExp(`value="${value}"[^>]*>${label}`));
+  }
+
+  assert.match(appJs, /const statusLabels = \{/);
+  assert.match(appJs, /plus_active:\s*'开通 plus'/);
+  assert.match(appJs, /cpa_mounted:\s*'CPA 挂载'/);
+  assert.match(appJs, /renderStatusSelect\(account\)/);
+  assert.match(appJs, /class="status-select \$\{escapeHtml\(status\)\}"/);
+  assert.match(appJs, /class="\$\{escapeHtml\(value\)\}"/);
+  assert.match(appJs, /changeStatus/);
+  assert.match(appJs, /applyStatusSelectClass/);
+  assert.match(appJs, /\/replacement-accounts\/\$\{id\}\/status/);
+  assert.match(appJs, /params\.set\('circuit_breaker', '1'\)/);
+  assert.match(appJs, /已熔断/);
+  assert.doesNotMatch(appJs, /value="replacing"/);
+});
+
+test('replacement status inline control is large and color-coded by status', () => {
+  const css = readFileSync(join(process.cwd(), 'web', 'styles.css'), 'utf8');
+
+  assert.match(css, /\.status-select\s*{[^}]*min-width:\s*128px/s);
+  assert.match(css, /\.status-select\s*{[^}]*padding:\s*10px 14px/s);
+  assert.match(css, /\.status-select\.for_sale\s*{[^}]*background:\s*#e7f0ff/s);
+  assert.match(css, /\.status-select\.plus_active\s*{[^}]*background:\s*#dff8ea/s);
+  assert.match(css, /\.status-select\.cpa_mounted\s*{[^}]*background:\s*#e4fbf8/s);
+  assert.match(css, /\.status-select\.banned\s*{[^}]*background:\s*#ffe6e9/s);
+  assert.match(css, /\.status-select\.sold\s*{[^}]*background:\s*#f1ebff/s);
+  assert.match(css, /\.status-select option\.for_sale\s*{[^}]*background:\s*#e7f0ff/s);
+  assert.match(css, /\.status-select option\.banned\s*{[^}]*background:\s*#ffe6e9/s);
 });
 
 test('replacement account table fully displays required runtime fields', () => {
@@ -240,6 +289,7 @@ test('replacement account frontend exposes real pagination controls and query pa
   assert.match(appJs, /pageSize/);
   assert.match(appJs, /keyword/);
   assert.match(appJs, /status/);
+  assert.match(appJs, /circuit_breaker/);
 });
 
 test('automation log frontend calls run APIs and exposes stop action', () => {

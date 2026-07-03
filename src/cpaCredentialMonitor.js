@@ -53,6 +53,10 @@ export function createCpaCredentialMonitor({
           result.skipped.push({ ...item, account_id: account.id, reason: 'account_banned' });
           continue;
         }
+        if (account.circuit_breaker_at) {
+          result.skipped.push({ ...item, account_id: account.id, reason: 'account_circuit_breaker' });
+          continue;
+        }
 
         const queued = repairQueue.enqueue({ account, credential: file, reasons: health.reasons });
         if (queued) {

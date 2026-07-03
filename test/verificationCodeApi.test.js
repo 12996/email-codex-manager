@@ -171,6 +171,137 @@ test('POST /api/verification-code/latest allows localhost requests without admin
   }
 });
 
+test('POST /api/icloud-verification-code/latest uses default Gmail mailbox and prefers target iCloud recipient', async () => {
+  const gmailAccount = {
+    id: 1,
+    gmail_email: 'rosannathornton1@gmail.com',
+    gmail_app_password: 'abcdefghijklmnop',
+  };
+  const calls = [];
+  const app = createApp({
+    icloudCodeDefaultGmailAccount: 'rosannathornton1@gmail.com',
+    accounts: {
+      getAccountByGmailEmail(email) {
+        calls.push(['getAccountByGmailEmail', email]);
+        return email === 'rosannathornton1@gmail.com' ? gmailAccount : null;
+      },
+    },
+    mailService: {
+      async fetchMessages(account, options) {
+        calls.push(['fetchMessages', account, options]);
+        return [
+          {
+            from: 'Apple <noreply@apple.com>',
+            subject: 'Your Apple Account code',
+            date: '2026-07-02T10:05:00.000Z',
+            bodyText: 'Your code is 999999',
+            toAddresses: ['someone-else@icloud.com'],
+          },
+          {
+            from: 'Apple <noreply@apple.com>',
+            subject: 'Your Apple Account code',
+            date: '2026-07-02T10:00:00.000Z',
+            bodyText: 'Your code is 123456',
+            toAddresses: ['target-user@icloud.com'],
+          },
+        ];
+      },
+    },
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await fetch(`${server.baseUrl}/api/icloud-verification-code/latest`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ account: 'target-user@icloud.com' }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, {
+      ok: true,
+      account: 'target-user@icloud.com',
+      gmailAccount: 'rosannathornton1@gmail.com',
+      mainAccount: 'rosannathornton1@gmail.com',
+      code: '123456',
+      targetMatched: true,
+      from: 'Apple <noreply@apple.com>',
+      subject: 'Your Apple Account code',
+      date: '2026-07-02T10:00:00.000Z',
+    });
+    assert.deepEqual(calls, [
+      ['getAccountByGmailEmail', 'rosannathornton1@gmail.com'],
+      ['fetchMessages', gmailAccount, { readLocation: 'inbox', limit: 30, targetEmail: 'target-user@icloud.com' }],
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/icloud-verification-code/latest allows caller to specify Gmail mailbox', async () => {
+  const gmailAccount = {
+    id: 2,
+    gmail_email: 'backup-codes@gmail.com',
+    gmail_app_password: 'abcdefghijklmnop',
+  };
+  const calls = [];
+  const app = createApp({
+    icloudCodeDefaultGmailAccount: 'rosannathornton1@gmail.com',
+    accounts: {
+      getAccountByGmailEmail(email) {
+        calls.push(['getAccountByGmailEmail', email]);
+        return email === 'backup-codes@gmail.com' ? gmailAccount : null;
+      },
+    },
+    mailService: {
+      async fetchMessages(account, options) {
+        calls.push(['fetchMessages', account, options]);
+        return [
+          {
+            from: 'Apple <noreply@apple.com>',
+            subject: 'Apple verification',
+            date: '2026-07-02T11:00:00.000Z',
+            bodyText: 'Use 654321 to continue.',
+          },
+        ];
+      },
+    },
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await fetch(`${server.baseUrl}/api/icloud-verification-code/latest`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        account: 'future-target@icloud.com',
+        gmailAccount: 'backup-codes@gmail.com',
+      }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, {
+      ok: true,
+      account: 'future-target@icloud.com',
+      gmailAccount: 'backup-codes@gmail.com',
+      mainAccount: 'backup-codes@gmail.com',
+      code: '654321',
+      targetMatched: false,
+      from: 'Apple <noreply@apple.com>',
+      subject: 'Apple verification',
+      date: '2026-07-02T11:00:00.000Z',
+    });
+    assert.deepEqual(calls, [
+      ['getAccountByGmailEmail', 'backup-codes@gmail.com'],
+      ['fetchMessages', gmailAccount, { readLocation: 'inbox', limit: 30, targetEmail: 'future-target@icloud.com' }],
+    ]);
+  } finally {
+    await server.close();
+  }
+});
+
 test('GET /api/verification-code/public/latest resolves allowed replacement account by public key', async () => {
   const mainAccount = {
     id: 1,

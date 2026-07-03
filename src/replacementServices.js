@@ -7,6 +7,7 @@ import { codedError } from './replacementAccounts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROXY_OAUTH_SCRIPT = join(__dirname, 'auto', 'roxy_oauth_login.js');
+const DEFAULT_ROXY_2FA_AUTH_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_auth_login.js');
 const DEFAULT_ROXY_REGISTER_SCRIPT = join(__dirname, 'auto', 'roxy_register_openai.js');
 const DEFAULT_LOG_DIR = join(__dirname, '..', 'data', 'automation-logs');
 const activeChildren = new Map();
@@ -17,6 +18,7 @@ export function createReplacementServices({
   spawnImpl = spawn,
   nodePath = process.execPath,
   scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
+  twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
   registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
   baseEnv = process.env,
   automationRuns,
@@ -26,6 +28,7 @@ export function createReplacementServices({
     spawnImpl,
     nodePath,
     scriptPath,
+    twoFaScriptPath,
     registerScriptPath,
     baseEnv,
     automationRuns,
@@ -68,6 +71,16 @@ export function createReplacementServices({
       return automation.replaceAccount(account, options);
     },
 
+    async replaceAccountWith2FA(account, options) {
+      if (automation?.replaceAccountWith2FA) {
+        return automation.replaceAccountWith2FA(account, options);
+      }
+      if (!defaultAutomation?.replaceAccountWith2FA) {
+        throw codedError('REPLACE_2FA_NOT_CONFIGURED', '2fa replacement automation is not configured');
+      }
+      return defaultAutomation.replaceAccountWith2FA(account, options);
+    },
+
     async registerAccount(account) {
       if (automation?.registerAccount) {
         return automation.registerAccount(account);
@@ -85,6 +98,7 @@ export function createRoxyOAuthChildProcessAutomation({
   spawnImpl = spawn,
   nodePath = process.execPath,
   scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
+  twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
@@ -93,6 +107,7 @@ export function createRoxyOAuthChildProcessAutomation({
     spawnImpl,
     nodePath,
     scriptPath,
+    twoFaScriptPath,
     registerScriptPath: DEFAULT_ROXY_REGISTER_SCRIPT,
     baseEnv,
     automationRuns,
@@ -104,6 +119,7 @@ export function createRoxyChildProcessAutomation({
   spawnImpl = spawn,
   nodePath = process.execPath,
   scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
+  twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
   registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
   baseEnv = process.env,
   automationRuns,
@@ -114,7 +130,7 @@ export function createRoxyChildProcessAutomation({
       const email = normalizeRequired(account?.email, 'REPLACE_FAILED', 'replacement account email is required');
       const phone = normalizeOptional(account?.phone);
       const smsApi = normalizeOptional(account?.sms_api);
-      const emailCodeApi = normalizeOptional(account?.email_code_api);
+      const emailCodeApi = normalizeEmailCodeApiForAccount(account);
       const env = {
         ...baseEnv,
         ROXY_OAUTH_EMAIL: email,
@@ -141,9 +157,64 @@ export function createRoxyChildProcessAutomation({
       });
     },
 
+    replaceAccountWith2FA(account, options = {}) {
+      const email = normalizeRequired(account?.email, 'REPLACE_FAILED', 'replacement account email is required');
+      const phone = normalizeOptional(account?.phone);
+      const smsApi = normalizeOptional(account?.sms_api);
+      const emailCodeApi = normalizeEmailCodeApiForAccount(account);
+      const password = normalizeOptional(account?.password);
+      const codex2fa = normalizeOptional(account?.codex_2fa);
+      const env = {
+        ...baseEnv,
+        ROXY_OAUTH_EMAIL: email,
+        ...(phone ? { ROXY_OAUTH_PHONE: phone } : {}),
+        ...(smsApi ? { PHONE_VERIFICATION_SMS_API_URL: smsApi } : {}),
+        ...(emailCodeApi ? { VERIFICATION_CODE_API_URL: emailCodeApi } : {}),
+        ...(password ? { ROXY_OAUTH_PASSWORD: password } : {}),
+      };
+
+      if (!emailCodeApi) {
+        delete env.VERIFICATION_CODE_API_URL;
+      }
+      if (codex2fa) {
+        if (/^\d{6,8}$/.test(codex2fa)) {
+          env.ROXY_OAUTH_2FA_CODE = codex2fa;
+          delete env.ROXY_OAUTH_TOTP_SECRET;
+        } else {
+          env.ROXY_OAUTH_TOTP_SECRET = codex2fa;
+          delete env.ROXY_OAUTH_2FA_CODE;
+        }
+      } else {
+        delete env.ROXY_OAUTH_2FA_CODE;
+        delete env.ROXY_OAUTH_TOTP_SECRET;
+      }
+
+      return runChildProcess({
+        spawnImpl,
+        command: nodePath,
+        args: [twoFaScriptPath],
+        env,
+        account,
+        automationRuns,
+        logDir,
+        kind: 'replacement-2fa',
+        failureCode: 'REPLACE_FAILED',
+        envSummaryKeys: [
+          'ROXY_OAUTH_EMAIL',
+          'ROXY_OAUTH_PHONE',
+          'PHONE_VERIFICATION_SMS_API_URL',
+          'VERIFICATION_CODE_API_URL',
+          'ROXY_OAUTH_PASSWORD',
+          'ROXY_OAUTH_2FA_CODE',
+          'ROXY_OAUTH_TOTP_SECRET',
+        ],
+        cpaTriggerDetails: options?.cpaTriggerDetails,
+      });
+    },
+
     registerAccount(account) {
       const email = normalizeRequired(account?.email, 'REGISTER_FAILED', 'registration account email is required');
-      const emailCodeApi = normalizeOptional(account?.email_code_api);
+      const emailCodeApi = normalizeEmailCodeApiForAccount(account);
       const env = {
         ...baseEnv,
         ROXY_REGISTER_EMAIL: email,
@@ -153,6 +224,7 @@ export function createRoxyChildProcessAutomation({
       delete env.PHONE_VERIFICATION_SMS_API_URL;
       if (!emailCodeApi) {
         delete env.REGISTRATION_EMAIL_CODE_API_URL;
+        delete env.VERIFICATION_CODE_API_URL;
       }
 
       return runChildProcess({
@@ -169,6 +241,10 @@ export function createRoxyChildProcessAutomation({
       });
     },
   };
+}
+
+function normalizeEmailCodeApiForAccount(account) {
+  return normalizeOptional(account?.email_code_api);
 }
 
 function runChildProcess({
@@ -255,12 +331,21 @@ function runChildProcess({
         activeChildren.delete(run.id);
       }
       if (exitCode === 0) {
+        const childResult = parseChildResult(stdout);
         if (run?.id) {
           automationRuns?.markSucceeded?.(run.id, { exitCode });
           writeStepLog(logPath, 'mark-succeeded', 'marked automation run succeeded', `exit_code=${exitCode}`);
         }
         writeStepLog(logPath, 'child-close', 'child process completed successfully', `exit_code=${exitCode}`);
-        resolve({ ok: true, exitCode, stdout, stderr, ...(cpaTriggerDetails ? { cpaTriggerLogged: true } : {}), ...(run ? { run } : {}) });
+        resolve({
+          ok: true,
+          exitCode,
+          stdout,
+          stderr,
+          ...(childResult ? { childResult } : {}),
+          ...(cpaTriggerDetails ? { cpaTriggerLogged: true } : {}),
+          ...(run ? { run } : {}),
+        });
         return;
       }
       const details = stderr || stdout || `child process exited with code ${exitCode}`;
@@ -277,6 +362,20 @@ function runChildProcess({
       reject(codedError(failureCode, details.trim()));
     });
   });
+}
+
+function parseChildResult(stdout) {
+  const lines = String(stdout || '').split(/\r?\n/);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const match = lines[index].match(/^ROXY_REGISTER_RESULT_JSON=(.+)$/);
+    if (!match) continue;
+    try {
+      return JSON.parse(match[1]);
+    } catch {
+      return null;
+    }
+  }
+  return null;
 }
 
 export function stopReplacementRun(runId) {
@@ -372,6 +471,8 @@ function sanitizeLogText(text) {
     .replace(/(refresh[_-]?token["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
     .replace(/(id[_-]?token["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
     .replace(/(proxyPassword["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
+    .replace(/("secret"\s*:\s*")[A-Z2-7]{16,}(")/g, '$1[redacted-secret]$2')
+    .replace(/\b(secret=)[A-Z2-7]{16,}\b/gi, '$1[redacted-secret]')
     .replace(/\b(code=)\d{6}\b/gi, '$1[redacted-code]')
     .replace(/(验证码[:：]?\s*)\d{6}/g, '$1[redacted-code]')
     .replace(/(verification code[:：]?\s*)\d{6}/gi, '$1[redacted-code]')

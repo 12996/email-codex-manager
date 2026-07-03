@@ -104,6 +104,62 @@ test('GET /replacement-accounts redirects unauthenticated requests to login', as
   }
 });
 
+test('POST /api/2fa-code returns current TOTP code for local automation callers', async () => {
+  const { app } = createTestContext();
+  const server = await startTestServer(app);
+
+  try {
+    const response = await fetch(`${server.baseUrl}/api/2fa-code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        secret: 'ANA6DKOETWQDNSF2O6UGJ6VNJI2WYBSJ',
+        timestampMs: 1782993169067,
+      }),
+    });
+    const body = await response.json();
+
+    assert.equal(response.status, 200);
+    assert.deepEqual(body, {
+      ok: true,
+      code: '454976',
+      expiresIn: 11,
+      step: 30,
+      digits: 6,
+      algorithm: 'sha1',
+    });
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /api/2fa-code rejects missing or invalid secrets', async () => {
+  const { app } = createTestContext();
+  const server = await startTestServer(app);
+
+  try {
+    const missing = await fetch(`${server.baseUrl}/api/2fa-code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    const missingBody = await missing.json();
+    assert.equal(missing.status, 400);
+    assert.equal(missingBody.error, 'TOTP_SECRET_REQUIRED');
+
+    const invalid = await fetch(`${server.baseUrl}/api/2fa-code`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ secret: 'not-valid-***' }),
+    });
+    const invalidBody = await invalid.json();
+    assert.equal(invalid.status, 400);
+    assert.equal(invalidBody.error, 'TOTP_SECRET_INVALID');
+  } finally {
+    await server.close();
+  }
+});
+
 test('replacement account CRUD API creates, lists, reads, updates, and soft deletes accounts', async () => {
   const { app } = createTestContext();
   const server = await startTestServer(app);
@@ -119,6 +175,7 @@ test('replacement account CRUD API creates, lists, reads, updates, and soft dele
     assert.equal(created.body.ok, true);
     assert.equal(created.body.account.email, 'User@Example.COM');
     assert.equal(created.body.account.codex_2fa, 'JBSWY3DPEHPK3PXP');
+    assert.equal(created.body.account.status, 'for_sale');
     assert.match(created.body.account.password, /^[A-Za-z0-9!@#$%^&*_-]{12,16}$/);
     assert.ok(created.body.account.activated_at);
 
@@ -146,7 +203,7 @@ test('replacement account CRUD API creates, lists, reads, updates, and soft dele
     assert.equal(updated.body.account.email, 'updated@example.com');
     assert.equal(updated.body.account.phone, '456');
     assert.equal(updated.body.account.codex_2fa, 'NEXTSECRET');
-    assert.equal(updated.body.account.status, 'active');
+    assert.equal(updated.body.account.status, 'plus_active');
     assert.equal(updated.body.account.password, created.body.account.password);
 
     const passwordUpdated = await jsonRequest(server, 'PUT', `/replacement-accounts/${created.body.account.id}`, {
@@ -156,6 +213,7 @@ test('replacement account CRUD API creates, lists, reads, updates, and soft dele
     });
     assert.equal(passwordUpdated.response.status, 200);
     assert.equal(passwordUpdated.body.account.password, 'NewPass12!');
+    assert.equal(passwordUpdated.body.account.status, 'plus_active');
 
     const deleted = await jsonRequest(server, 'DELETE', `/replacement-accounts/${created.body.account.id}`);
     assert.equal(deleted.response.status, 200);
@@ -173,7 +231,7 @@ test('replacement account API returns paginated accounts with filters', async ()
   const first = replacementAccounts.createAccount({
     email: 'first@example.com',
     remark: 'first slot',
-    status: 'active',
+    status: 'plus_active',
   });
   const second = replacementAccounts.createAccount({
     email: 'second@example.com',
@@ -198,9 +256,31 @@ test('replacement account API returns paginated accounts with filters', async ()
       totalPages: 3,
     });
 
-    const filtered = await jsonRequest(server, 'GET', '/replacement-accounts?status=active&keyword=first');
+    const filtered = await jsonRequest(server, 'GET', '/replacement-accounts?status=plus_active&keyword=first');
     assert.deepEqual(filtered.body.accounts.map((account) => account.id), [first.id]);
     assert.equal(filtered.body.pagination.total, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test('replacement account API filters accounts with circuit breaker enabled', async () => {
+  const { app, replacementAccounts } = createTestContext();
+  const normal = replacementAccounts.createAccount({ email: 'normal@example.com' });
+  const circuitBroken = replacementAccounts.createAccount({ email: 'broken@example.com' });
+  for (let index = 0; index < 5; index += 1) {
+    replacementAccounts.markReplacementStarted(circuitBroken.id);
+    replacementAccounts.markReplacementFailure(circuitBroken.id, `automation failed ${index + 1}`);
+  }
+  const server = await startTestServer(app);
+
+  try {
+    const filtered = await jsonRequest(server, 'GET', '/replacement-accounts?circuit_breaker=1');
+
+    assert.equal(filtered.response.status, 200);
+    assert.deepEqual(filtered.body.accounts.map((account) => account.id), [circuitBroken.id]);
+    assert.equal(filtered.body.pagination.total, 1);
+    assert.equal(filtered.body.accounts.some((account) => account.id === normal.id), false);
   } finally {
     await server.close();
   }
@@ -243,8 +323,53 @@ test('replacement account action APIs update status and call injected services',
 
     const replaced = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace`);
     assert.equal(replaced.response.status, 200);
-    assert.equal(replaced.body.account.status, 'replaced');
+    assert.equal(replaced.body.account.status, 'cpa_mounted');
     assert.equal(replaced.body.account.replacement_count, 1);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/replace-2fa starts 2fa replacement automation', async () => {
+  const events = [];
+  const services = {
+    async fetchSmsCode() {
+      return '123456';
+    },
+    async fetchJson() {
+      return '{}';
+    },
+    async replaceAccount() {
+      events.push('replace');
+      return { ok: true };
+    },
+    async replaceAccountWith2FA(account) {
+      events.push(['replace-2fa', account.id, account.email, account.password, account.codex_2fa]);
+      return { ok: true, run: { id: 707 } };
+    },
+    async registerAccount() {
+      return { ok: true };
+    },
+    stopReplacementRun() {
+      return { ok: true };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({
+    email: 'user@example.com',
+    password: 'account-password',
+    codex_2fa: 'JBSWY3DPEHPK3PXP',
+  });
+
+  const server = await startTestServer(app);
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace-2fa`);
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.account.status, 'cpa_mounted');
+    assert.equal(response.body.account.replacement_count, 1);
+    assert.equal(response.body.run.id, 707);
+    assert.deepEqual(events, [['replace-2fa', created.id, 'user@example.com', 'account-password', 'JBSWY3DPEHPK3PXP']]);
   } finally {
     await server.close();
   }
@@ -266,7 +391,7 @@ test('manual replacement uses CPA repair worker when configured', async () => {
         ok: true,
         account: {
           ...account,
-          status: 'replaced',
+          status: 'cpa_mounted',
           replacement_count: Number(account.replacement_count || 0) + 1,
         },
         upload: { status: 'ok' },
@@ -282,7 +407,7 @@ test('manual replacement uses CPA repair worker when configured', async () => {
 
     assert.equal(response.response.status, 200);
     assert.equal(response.body.ok, true);
-    assert.equal(response.body.account.status, 'replaced');
+    assert.equal(response.body.account.status, 'cpa_mounted');
     assert.deepEqual(events, [['cpa-repair', created.id, 'user@example.com']]);
   } finally {
     await server.close();
@@ -295,7 +420,16 @@ test('POST /replacement-accounts/:id/register starts registration automation', a
     ...successfulServices(),
     async registerAccount(account) {
       events.push(['register', account.id, account.email]);
-      return { ok: true, run: { id: 88, status: 'running' } };
+      return {
+        ok: true,
+        run: { id: 88, status: 'running' },
+        childResult: {
+          registrationMfa: {
+            secret: 'WAITOC2YTXEEBUXP2266NLIGOLYSNYWE',
+            enabled: true,
+          },
+        },
+      };
     },
   };
   const { app, replacementAccounts } = createTestContext(services);
@@ -308,6 +442,8 @@ test('POST /replacement-accounts/:id/register starts registration automation', a
     assert.equal(response.response.status, 200);
     assert.equal(response.body.ok, true);
     assert.equal(response.body.account.id, created.id);
+    assert.equal(response.body.account.codex_2fa, 'WAITOC2YTXEEBUXP2266NLIGOLYSNYWE');
+    assert.equal(replacementAccounts.getAccount(created.id).codex_2fa, 'WAITOC2YTXEEBUXP2266NLIGOLYSNYWE');
     assert.deepEqual(response.body.run, { id: 88, status: 'running' });
     assert.deepEqual(events, [['register', created.id, 'user@example.com']]);
   } finally {
@@ -450,7 +586,7 @@ test('replacement account failure APIs persist errors without incrementing repla
   }
 });
 
-test('direct replacement API creates notification when fifth failure bans account', async () => {
+test('direct replacement API creates notification when fifth failure opens circuit breaker', async () => {
   const failingServices = {
     async fetchSmsCode() {
       return '123456';
@@ -473,9 +609,10 @@ test('direct replacement API creates notification when fifth failure bans accoun
     }
 
     assert.equal(lastResponse.response.status, 502);
-    assert.equal(lastResponse.body.account.status, 'banned');
+    assert.equal(lastResponse.body.account.status, 'failed');
     assert.equal(adminNotifications.countUnread(), 1);
     assert.match(adminNotifications.listNotifications()[0].message, /user@example.com 连续自动补号失败 5 次/);
+    assert.doesNotMatch(adminNotifications.listNotifications()[0].message, /banned/);
   } finally {
     await server.close();
   }
@@ -494,7 +631,7 @@ test('replacement account API resets circuit breaker fields', async () => {
     const response = await jsonRequest(server, 'PATCH', `/replacement-accounts/${created.id}/circuit-breaker/reset`);
 
     assert.equal(response.response.status, 200);
-    assert.equal(response.body.account.status, 'pending');
+    assert.equal(response.body.account.status, 'failed');
     assert.equal(response.body.account.status_note, '管理员手动解除熔断');
     assert.equal(response.body.account.consecutive_replace_failures, 0);
     assert.equal(response.body.account.circuit_breaker_at, null);

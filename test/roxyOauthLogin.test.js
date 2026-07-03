@@ -575,6 +575,63 @@ test('openAi_email_code derives verification API URL from PORT when URL is not c
   assert.equal(postCall[1], 'http://127.0.0.1:4567/api/verification-code/latest');
 });
 
+test('openAi_email_code derives iCloud verification API URL for iCloud email when URL is not configured', async () => {
+  const { openAi_email_code, buildDefaultVerificationApiUrl } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
+  const previousPort = process.env.PORT;
+  const previousUrl = process.env.VERIFICATION_CODE_API_URL;
+
+  try {
+    process.env.PORT = '4567';
+    delete process.env.VERIFICATION_CODE_API_URL;
+
+    assert.equal(
+      buildDefaultVerificationApiUrl(process.env, 'target-user@icloud.com'),
+      'http://127.0.0.1:4567/api/icloud-verification-code/latest',
+    );
+
+    await openAi_email_code(page, 'target-user@icloud.com', {
+      timeoutMs: 100,
+    });
+  } finally {
+    if (previousPort === undefined) delete process.env.PORT;
+    else process.env.PORT = previousPort;
+    if (previousUrl === undefined) delete process.env.VERIFICATION_CODE_API_URL;
+    else process.env.VERIFICATION_CODE_API_URL = previousUrl;
+  }
+
+  const postCall = calls.find((call) => call[0] === 'request.post');
+  assert.equal(postCall[1], 'http://127.0.0.1:4567/api/icloud-verification-code/latest');
+  assert.deepEqual(postCall[2].data, { account: 'target-user@icloud.com' });
+});
+
+test('openAi_email_code honors configured external email code API for iCloud email', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
+  page.request.get = async (url, options) => {
+    calls.push(['request.get', url, options]);
+    return {
+      async text() {
+        return 'Apple verification code: 778899';
+      },
+    };
+  };
+
+  const result = await openAi_email_code(page, 'target-user@icloud.com', {
+    verificationApiUrl: 'https://example.invalid/icloud-code',
+    timeoutMs: 100,
+  });
+
+  assert.deepEqual(result, {
+    status: 'email-code-submitted',
+    email: 'target-user@icloud.com',
+    code: '778899',
+  });
+  assert.deepEqual(calls.filter((call) => ['request.get', 'request.post'].includes(call[0])), [
+    ['request.get', 'https://example.invalid/icloud-code', { timeout: 100 }],
+  ]);
+});
+
 test('openAi_email_code sends configured admin_auth cookie when fetching email code', async () => {
   const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
   const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
@@ -1246,6 +1303,67 @@ test('fetchPhoneVerificationCode polls SMS API until a valid code is available',
 
   assert.equal(code, '798824');
   assert.equal(calls.length, 3);
+  assert.deepEqual(waits, [1, 1]);
+});
+
+test('fetchPhoneVerificationCode waits at least one minute before treating SMS polling as failed', async () => {
+  const { fetchPhoneVerificationCode } = require('../src/auto/roxy_oauth_login.js');
+  const waits = [];
+  const calls = [];
+
+  await assert.rejects(
+    () => fetchPhoneVerificationCode({
+      smsApiUrl: 'https://cdc.smslease.link/adminapi/jsscript/smsInfo/ABC_sms?key=test',
+      timeoutMs: 100,
+      codePollIntervalMs: 10000,
+      codePollMaxAttempts: 2,
+      waitForTimeout: async (ms) => waits.push(ms),
+      fetch: async (url, options) => {
+        calls.push(['fetch', url, options.method]);
+        return {
+          async text() {
+            return 'no sms yet';
+          },
+        };
+      },
+    }),
+    (error) => {
+      assert.equal(error.code, 'OPENAI_PHONE_CODE_FETCH_FAILED');
+      assert.equal(error.attempts, 7);
+      return true;
+    }
+  );
+
+  assert.equal(calls.length, 7);
+  assert.deepEqual(waits, [10000, 10000, 10000, 10000, 10000, 10000]);
+});
+
+test('fetchPhoneVerificationCode ignores the pre-send phone code and waits for a new one', async () => {
+  const { fetchPhoneVerificationCode } = require('../src/auto/roxy_oauth_login.js');
+  const waits = [];
+  let attempts = 0;
+
+  const code = await fetchPhoneVerificationCode({
+    smsApiUrl: 'https://cdc.smslease.link/adminapi/jsscript/smsInfo/ABC_sms?key=test',
+    timeoutMs: 100,
+    codePollIntervalMs: 1,
+    codePollMaxAttempts: 3,
+    phoneCodeExcludeCode: '111111',
+    waitForTimeout: async (ms) => waits.push(ms),
+    fetch: async () => {
+      attempts += 1;
+      return {
+        async text() {
+          return attempts < 3
+            ? 'yes|Your OpenAI verification code is: 111111'
+            : 'yes|Your OpenAI verification code is: 222222';
+        },
+      };
+    },
+  });
+
+  assert.equal(code, '222222');
+  assert.equal(attempts, 3);
   assert.deepEqual(waits, [1, 1]);
 });
 

@@ -72,6 +72,48 @@ test('registration email verification uses POST latest API and does not log code
   assert.equal(logs.some((line) => String(line).includes('code=received')), true);
 });
 
+test('registration email verification defaults to iCloud code API for iCloud email', async () => {
+  const {
+    buildDefaultVerificationApiUrl,
+    fetchRegistrationEmailVerificationCodeOnce,
+  } = requireRegisterModuleWithStubs();
+  const calls = [];
+  const previousPort = process.env.PORT;
+  const previousUrl = process.env.VERIFICATION_CODE_API_URL;
+  const page = {
+    request: {
+      async post(url, options) {
+        calls.push(['post', url, options]);
+        return { async json() { return { ok: true, code: '654321' }; } };
+      },
+    },
+  };
+
+  try {
+    process.env.PORT = '4567';
+    delete process.env.VERIFICATION_CODE_API_URL;
+
+    assert.equal(
+      buildDefaultVerificationApiUrl(process.env, 'target-user@icloud.com'),
+      'http://127.0.0.1:4567/api/icloud-verification-code/latest',
+    );
+
+    const result = await fetchRegistrationEmailVerificationCodeOnce(page, 'target-user@icloud.com', {}, 1, 12);
+    assert.equal(result.code, '654321');
+  } finally {
+    if (previousPort === undefined) delete process.env.PORT;
+    else process.env.PORT = previousPort;
+    if (previousUrl === undefined) delete process.env.VERIFICATION_CODE_API_URL;
+    else process.env.VERIFICATION_CODE_API_URL = previousUrl;
+  }
+
+  assert.deepEqual(calls, [[
+    'post',
+    'http://127.0.0.1:4567/api/icloud-verification-code/latest',
+    { data: { account: 'target-user@icloud.com' }, timeout: 30000 },
+  ]]);
+});
+
 test('registration email verification prefers external GET API and does not log code', async () => {
   const { fetchRegistrationEmailVerificationCodeOnce } = requireRegisterModuleWithStubs();
   const calls = [];
@@ -162,4 +204,33 @@ test('registration success saves access token file named by email without loggin
   });
   assert.equal(logs.some((line) => line.includes('secret-access-token')), false);
   assert.equal(logs.some((line) => line.includes(result.path)), true);
+});
+
+test('enableChatGptTotpMfa runs MFA protocol in page context and returns secret without logging it', async () => {
+  const { enableChatGptTotpMfa } = requireRegisterModuleWithStubs();
+  const calls = [];
+  const logs = [];
+  const page = {
+    async evaluate(fn, args) {
+      calls.push(args);
+      assert.equal(typeof fn, 'function');
+      return {
+        ok: true,
+        enabled: true,
+        secret: 'WAITOC2YTXEEBUXP2266NLIGOLYSNYWE',
+        secretMasked: 'WAIT...NYWE',
+        factorId: 'factor_123',
+      };
+    },
+  };
+
+  const result = await enableChatGptTotpMfa(page, 'access-token', {
+    logger: { log: (message) => logs.push(String(message)), warn: (message) => logs.push(String(message)) },
+  });
+
+  assert.equal(result.secret, 'WAITOC2YTXEEBUXP2266NLIGOLYSNYWE');
+  assert.equal(result.enabled, true);
+  assert.deepEqual(calls, [{ accessToken: 'access-token' }]);
+  assert.equal(logs.some((line) => line.includes('WAITOC2YTXEEBUXP2266NLIGOLYSNYWE')), false);
+  assert.equal(logs.some((line) => line.includes('secret=WAIT...NYWE')), true);
 });

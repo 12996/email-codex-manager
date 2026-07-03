@@ -53,16 +53,23 @@ function normalizeServicePort(env = process.env) {
     return /^\d+$/.test(value) ? value : '3000';
 }
 
-function buildDefaultVerificationApiUrl(env = process.env) {
-    return `http://127.0.0.1:${normalizeServicePort(env)}/api/verification-code/latest`;
+function isIcloudEmail(email) {
+    return String(email || '').trim().toLowerCase().endsWith('@icloud.com');
+}
+
+function buildDefaultVerificationApiUrl(env = process.env, email = '') {
+    const pathName = isIcloudEmail(email)
+        ? '/api/icloud-verification-code/latest'
+        : '/api/verification-code/latest';
+    return `http://127.0.0.1:${normalizeServicePort(env)}${pathName}`;
 }
 
 const DEFAULT_VERIFICATION_API_URL = buildDefaultVerificationApiUrl();
 
-function resolveVerificationApiUrl(options = {}, env = process.env) {
+function resolveVerificationApiUrl(options = {}, env = process.env, email = '') {
     return options.verificationApiUrl
         || env.VERIFICATION_CODE_API_URL
-        || buildDefaultVerificationApiUrl(env);
+        || buildDefaultVerificationApiUrl(env, email);
 }
 
 function resolveRegistrationEmailCodeApiUrl(options = {}, env = process.env) {
@@ -128,6 +135,158 @@ function saveRegistrationAccessTokenFile(options = {}) {
     fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
     registerLog(options.logger || console, 'registration-token', 'action=saved', `path=${filePath}`);
     return { path: filePath, payload };
+}
+
+function maskSensitive(value) {
+    const text = String(value || '');
+    if (!text) return '';
+    if (text.length <= 10) return '[redacted]';
+    return `${text.slice(0, 4)}...${text.slice(-4)}`;
+}
+
+function shouldEnableRegistrationMfa(options = {}, env = process.env) {
+    if (Object.hasOwn(options, 'enableMfa')) return Boolean(options.enableMfa);
+    return String(env.ROXY_REGISTER_ENABLE_MFA || '1').trim() !== '0';
+}
+
+async function enableChatGptTotpMfa(page, accessToken, options = {}) {
+    if (!page || typeof page.evaluate !== 'function') {
+        throw new Error('启用 MFA 需要可用的 ChatGPT 页面上下文');
+    }
+    if (!accessToken) {
+        throw new Error('启用 MFA 需要有效的 Access Token');
+    }
+
+    registerLog(options.logger || console, 'mfa-enable', 'action=start');
+    const result = await page.evaluate(async ({ accessToken: token }) => {
+        const asJson = async (response) => {
+            const text = await response.text();
+            try {
+                return { text, json: JSON.parse(text) };
+            } catch (_) {
+                return { text, json: null };
+            }
+        };
+        const base32ToBytes = (secret) => {
+            const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
+            const clean = String(secret || '').toUpperCase().replace(/[\s=-]+/g, '');
+            let bits = '';
+            for (const char of clean) {
+                const value = alphabet.indexOf(char);
+                if (value < 0) throw new Error('invalid base32 secret');
+                bits += value.toString(2).padStart(5, '0');
+            }
+            const bytes = [];
+            for (let offset = 0; offset + 8 <= bits.length; offset += 8) {
+                bytes.push(parseInt(bits.slice(offset, offset + 8), 2));
+            }
+            return new Uint8Array(bytes);
+        };
+        const hotp = async (secret, counter, digits = 6) => {
+            const key = await crypto.subtle.importKey(
+                'raw',
+                base32ToBytes(secret),
+                { name: 'HMAC', hash: 'SHA-1' },
+                false,
+                ['sign']
+            );
+            const counterBuffer = new ArrayBuffer(8);
+            const view = new DataView(counterBuffer);
+            view.setUint32(0, Math.floor(counter / 0x100000000), false);
+            view.setUint32(4, counter >>> 0, false);
+            const hmac = new Uint8Array(await crypto.subtle.sign('HMAC', key, counterBuffer));
+            const offset = hmac[hmac.length - 1] & 0x0f;
+            const binary = ((hmac[offset] & 0x7f) << 24)
+                | ((hmac[offset + 1] & 0xff) << 16)
+                | ((hmac[offset + 2] & 0xff) << 8)
+                | (hmac[offset + 3] & 0xff);
+            return String(binary % (10 ** digits)).padStart(digits, '0');
+        };
+        const totp = async (secret, timestampMs = Date.now(), step = 30) => {
+            const counter = Math.floor(Math.floor(timestampMs / 1000) / step);
+            return hotp(secret, counter, 6);
+        };
+        const authedFetch = async (path, init = {}) => {
+            const response = await fetch(path, {
+                ...init,
+                credentials: 'include',
+                headers: {
+                    accept: '*/*',
+                    ...(init.body ? { 'content-type': 'application/json' } : {}),
+                    authorization: `Bearer ${token}`,
+                    ...init.headers,
+                },
+            });
+            const parsed = await asJson(response);
+            return { response, ...parsed };
+        };
+
+        const before = await authedFetch('/backend-api/accounts/mfa_info');
+        if (before.json?.mfa_enabled_v2) {
+            return {
+                ok: true,
+                skipped: true,
+                reason: 'mfa already enabled',
+                enabled: true,
+                after: before.json,
+            };
+        }
+
+        const enroll = await authedFetch('/backend-api/accounts/mfa/enroll', {
+            method: 'POST',
+            body: JSON.stringify({ factor_type: 'totp' }),
+        });
+        const secret = enroll.json?.secret;
+        const sessionId = enroll.json?.session_id;
+        if (!enroll.response.ok || !secret || !sessionId) {
+            return {
+                ok: false,
+                error: 'enroll_failed',
+                status: enroll.response.status,
+                response: enroll.json || enroll.text,
+            };
+        }
+
+        const code = await totp(secret);
+        const activate = await authedFetch('/backend-api/accounts/mfa/user/activate_enrollment', {
+            method: 'POST',
+            body: JSON.stringify({ code, factor_type: 'totp', session_id: sessionId }),
+        });
+        if (!activate.response.ok || activate.json?.success !== true) {
+            return {
+                ok: false,
+                error: 'activate_failed',
+                status: activate.response.status,
+                response: activate.json || activate.text,
+                secret,
+            };
+        }
+
+        const after = await authedFetch('/backend-api/accounts/mfa_info');
+        return {
+            ok: true,
+            enabled: Boolean(after.json?.mfa_enabled_v2),
+            secret,
+            sessionId,
+            factorId: enroll.json?.factor?.id || after.json?.native_default_factor_id || '',
+            after: after.json,
+        };
+    }, { accessToken });
+
+    if (!result?.ok) {
+        throw new Error(`启用 MFA 失败: ${result?.error || 'unknown_error'}`);
+    }
+    if (result.skipped) {
+        registerLog(options.logger || console, 'mfa-enable', 'action=skipped reason=already-enabled');
+        return result;
+    }
+    registerLog(
+        options.logger || console,
+        'mfa-enable',
+        'action=success',
+        `enabled=${Boolean(result.enabled)} secret=${maskSensitive(result.secret)} factor_id=${result.factorId || ''}`
+    );
+    return result;
 }
 
 /**
@@ -567,7 +726,7 @@ const OTP_RETRY_EXCEEDED_ERROR = `验证码重试超过 ${MAX_OTP_RETRIES} 次�
 const OTP_REFETCH_AFTER_RECOVERY = 'OTP_REFETCH_AFTER_RECOVERY';
 
 async function fetchRegistrationEmailVerificationCodeOnce(page, email, options = {}, attempt = 1, maxAttempts = 1) {
-    const verificationApiUrl = resolveVerificationApiUrl(options);
+    const verificationApiUrl = resolveVerificationApiUrl(options, process.env, email);
     const registrationEmailCodeApiUrl = resolveRegistrationEmailCodeApiUrl(options);
     const timeout = Number(options.timeoutMs || DEFAULT_VERIFICATION_TIMEOUT_MS);
     const request = options.request || page?.request || (typeof page?.context === 'function' ? page.context().request : null);
@@ -1892,6 +2051,13 @@ async function runRegistrationFlow() {
         }
 
         console.log(`🎟️  Access Token 已获取`);
+        let registrationMfa = null;
+        if (shouldEnableRegistrationMfa({}, process.env)) {
+            registrationMfa = await enableChatGptTotpMfa(page, sessionData.accessToken, { logger: console });
+        } else {
+            registerLog(console, 'mfa-enable', 'action=skipped reason=disabled-by-env');
+        }
+
         const registrationTokenFile = saveRegistrationAccessTokenFile({
             email,
             accessToken: sessionData.accessToken,
@@ -1920,6 +2086,7 @@ async function runRegistrationFlow() {
             email,
             accessToken: sessionData.accessToken,
             registrationTokenFile: registrationTokenFile.path,
+            registrationMfa,
             emailSource,
             inboxJwt: inboxJwt || '',
             inboxApiBase: useInbox ? inboxApiBase : '',
@@ -1968,6 +2135,11 @@ async function runRegistrationFlow() {
 if (require.main === module) {
     runRegistrationFlow()
         .then((result) => {
+            console.log(`ROXY_REGISTER_RESULT_JSON=${JSON.stringify({
+                email: result?.email || '',
+                registrationTokenFile: result?.registrationTokenFile || '',
+                registrationMfa: result?.registrationMfa || null
+            })}`);
             if (process.send) {
                 process.send({ type: 'result', result });
             }
@@ -1994,6 +2166,8 @@ module.exports = {
     buildDefaultVerificationApiUrl,
     fetchRegistrationEmailVerificationCodeOnce,
     fetchRegistrationEmailVerificationCode,
+    enableChatGptTotpMfa,
     saveRegistrationAccessTokenFile,
+    shouldEnableRegistrationMfa,
     runRegistrationFlow
 };

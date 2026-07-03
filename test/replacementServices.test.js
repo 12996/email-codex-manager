@@ -168,6 +168,36 @@ test('registerAccount injects per-account external email code API URL', async ()
   assert.equal(calls[0].options.env.REGISTRATION_EMAIL_CODE_API_URL, 'https://example.invalid/latest-code');
 });
 
+test('registerAccount injects per-account external email code API for iCloud account when configured', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    registerScriptPath: 'src/auto/roxy_register_openai.js',
+    baseEnv: {
+      REGISTRATION_EMAIL_CODE_API_URL: 'https://old.example/code',
+      VERIFICATION_CODE_API_URL: 'http://127.0.0.1:3100/api/verification-code/latest',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.registerAccount({
+    id: 12,
+    email: ' target-user@icloud.com ',
+    email_code_api: ' https://fucheng.dpdns.org/newApi/mevM17al ',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.env.ROXY_REGISTER_EMAIL, 'target-user@icloud.com');
+  assert.equal(calls[0].options.env.REGISTRATION_EMAIL_CODE_API_URL, 'https://fucheng.dpdns.org/newApi/mevM17al');
+});
+
 test('replaceAccount injects per-account external email code API URL for oauth', async () => {
   const calls = [];
   const services = createReplacementServices({
@@ -196,6 +226,133 @@ test('replaceAccount injects per-account external email code API URL for oauth',
   assert.deepEqual(calls[0].args, ['src/auto/roxy_oauth_login.js']);
   assert.equal(calls[0].options.env.ROXY_OAUTH_EMAIL, 'user@example.com');
   assert.equal(calls[0].options.env.VERIFICATION_CODE_API_URL, 'https://example.invalid/latest-code');
+});
+
+test('replaceAccount injects per-account external email code API for iCloud account when configured', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    scriptPath: 'src/auto/roxy_oauth_login.js',
+    baseEnv: {
+      VERIFICATION_CODE_API_URL: 'http://127.0.0.1:3100/api/verification-code/latest',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccount({
+    id: 18,
+    email: ' target-user@icloud.com ',
+    email_code_api: ' https://fucheng.dpdns.org/newApi/mevM17al ',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.env.ROXY_OAUTH_EMAIL, 'target-user@icloud.com');
+  assert.equal(calls[0].options.env.VERIFICATION_CODE_API_URL, 'https://fucheng.dpdns.org/newApi/mevM17al');
+});
+
+test('replaceAccountWith2FA runs roxy 2fa auth script with password and codex 2fa env', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    twoFaScriptPath: 'src/auto/roxy_2fa_auth_login.js',
+    baseEnv: {
+      ROXY_OAUTH_PASSWORD: 'old-password',
+      ROXY_OAUTH_TOTP_SECRET: 'OLDSECRET',
+      ROXY_OAUTH_2FA_CODE: '111111',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccountWith2FA({
+    id: 19,
+    email: ' user@example.com ',
+    phone: ' +13523282595 ',
+    sms_api: ' https://example.invalid/sms ',
+    email_code_api: ' https://example.invalid/latest-code ',
+    password: ' account-password ',
+    codex_2fa: ' JBSWY3DPEHPK3PXP ',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['src/auto/roxy_2fa_auth_login.js']);
+  assert.equal(calls[0].options.env.ROXY_OAUTH_EMAIL, 'user@example.com');
+  assert.equal(calls[0].options.env.ROXY_OAUTH_PHONE, '+13523282595');
+  assert.equal(calls[0].options.env.PHONE_VERIFICATION_SMS_API_URL, 'https://example.invalid/sms');
+  assert.equal(calls[0].options.env.VERIFICATION_CODE_API_URL, 'https://example.invalid/latest-code');
+  assert.equal(calls[0].options.env.ROXY_OAUTH_PASSWORD, 'account-password');
+  assert.equal(calls[0].options.env.ROXY_OAUTH_TOTP_SECRET, 'JBSWY3DPEHPK3PXP');
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_OAUTH_2FA_CODE'), false);
+});
+
+test('replaceAccountWith2FA injects per-account external email code API for iCloud account when configured', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    twoFaScriptPath: 'src/auto/roxy_2fa_auth_login.js',
+    baseEnv: {
+      VERIFICATION_CODE_API_URL: 'http://127.0.0.1:3100/api/verification-code/latest',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccountWith2FA({
+    id: 19,
+    email: ' target-user@icloud.com ',
+    email_code_api: ' https://fucheng.dpdns.org/newApi/mevM17al ',
+    password: ' account-password ',
+    codex_2fa: ' JBSWY3DPEHPK3PXP ',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.env.ROXY_OAUTH_EMAIL, 'target-user@icloud.com');
+  assert.equal(calls[0].options.env.VERIFICATION_CODE_API_URL, 'https://fucheng.dpdns.org/newApi/mevM17al');
+});
+
+test('replaceAccountWith2FA passes numeric codex_2fa as one-time 2fa code', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    twoFaScriptPath: 'src/auto/roxy_2fa_auth_login.js',
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccountWith2FA({
+    email: 'user@example.com',
+    password: 'account-password',
+    codex_2fa: '654321',
+  });
+
+  assert.equal(calls[0].options.env.ROXY_OAUTH_PASSWORD, 'account-password');
+  assert.equal(calls[0].options.env.ROXY_OAUTH_2FA_CODE, '654321');
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_OAUTH_TOTP_SECRET'), false);
 });
 
 test('replaceAccount creates automation run and writes child logs', async () => {
@@ -394,6 +551,29 @@ test('registerAccount runs roxy registration script without SMS env and writes r
   assert.match(log, /step=prepare-env action=prepared child process environment/);
   assert.match(log, /ROXY_REGISTER_EMAIL=set/);
   assert.doesNotMatch(log, /https:\/\/example\.invalid\/sms/);
+});
+
+test('registerAccount parses registration MFA result from child stdout', async () => {
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    registerScriptPath: 'src/auto/roxy_register_openai.js',
+    spawnImpl() {
+      const child = new EventEmitter();
+      child.pid = 7475;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'ROXY_REGISTER_RESULT_JSON={"registrationMfa":{"secret":"WAITOC2YTXEEBUXP2266NLIGOLYSNYWE","enabled":true}}\n');
+        child.emit('close', 0);
+      });
+      return child;
+    },
+  });
+
+  const result = await services.registerAccount({ id: 13, email: 'user@example.com' });
+
+  assert.equal(result.childResult.registrationMfa.secret, 'WAITOC2YTXEEBUXP2266NLIGOLYSNYWE');
+  assert.equal(result.childResult.registrationMfa.enabled, true);
 });
 
 test('registerAccount reports child process failure as REGISTER_FAILED', async () => {

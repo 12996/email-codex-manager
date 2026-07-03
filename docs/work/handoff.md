@@ -2,6 +2,68 @@
 
 状态：active
 
+## 2026-07-03 iCloud 邮箱验证码 API 优先级对齐
+
+- 来源工作日志：`docs/work/2026-07-03-icloud-email-code-api-priority.md`
+- change：`docs/changes/CHG-058-icloud-email-code-api-priority.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：iCloud 与 Gmail 的账号级邮箱验证码 API 优先级已对齐。补号账号行 `email_code_api` 有值时，注册、普通补号和 2FA 补号都会注入外部验证码 API；为空时才由自动化脚本按邮箱域名选择默认本地接口，`@icloud.com` 走 `/api/icloud-verification-code/latest`，其他邮箱走 `/api/verification-code/latest`。直接运行脚本时，显式 `verificationApiUrl` / `VERIFICATION_CODE_API_URL` 也会优先于默认本地接口。
+- 验证：`node --test test\replacementServices.test.js test\roxyOauthLogin.test.js test\roxyRegisterOpenai.test.js` 通过，98/98 pass；`node --check src\replacementServices.js`、`node --check src\auto\roxy_oauth_login.js`、`node --check src\auto\roxy_register_openai.js`、`git diff --check` 均通过。
+- 待办：重启服务后新子进程环境注入逻辑生效；用真实 iCloud 账号分别验证 `email_code_api` 有值和为空两条路径。
+- PRD 合并提醒：当前未合并的 `implemented` change 为 `CHG-049`、`CHG-050`、`CHG-051`、`CHG-052`、`CHG-053`、`CHG-054`、`CHG-055`、`CHG-056`、`CHG-057`、`CHG-058`，已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-02 iCloud 验证码 Gmail 收件 API
+
+- 来源工作日志：`docs/work/2026-07-02-icloud-verification-code-api.md`
+- change：`docs/changes/CHG-057-icloud-verification-code-api.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：新增 `POST /api/icloud-verification-code/latest`，用于从 Gmail 收件箱读取 iCloud 验证码。默认 Gmail 为 `ICLOUD_CODE_GMAIL_ACCOUNT`，未配置时使用 `rosannathornton1@gmail.com`；请求体可传 `gmailAccount` / `mailbox` / `gmail` 覆盖默认 Gmail，也可传 `account` / `icloudAccount` 指定目标 iCloud。接口会优先返回收件人元数据匹配目标 iCloud 的 6 位验证码，匹配不到时回退收件箱最新验证码并返回 `targetMatched: false`。本机调用免登录，远程调用仍需 `admin_auth`。注册、OAuth 补号和 2FA 补号遇到 `@icloud.com` 邮箱且未配置账号级 `email_code_api` 时默认走本地 iCloud 验证码 API。
+- 验证：`node --test test\verificationCodeApi.test.js` 通过，7/7 pass；`node --test test\roxyOauthLogin.test.js`、`node --test test\roxyRegisterOpenai.test.js`、`node --test test\replacementServices.test.js` 均通过；`node --check src\server.js`、`node --check src\config.js`、`git diff --check` 均通过。
+- 待办：重启当前 `node src/server.js` 服务后新接口生效；确认后台邮箱账号已配置 `rosannathornton1@gmail.com` 的 Gmail App Password；实机调用一次确认 Apple/iCloud 邮件头是否能让 `targetMatched` 为 `true`。
+- PRD 合并提醒：当前未合并的 `implemented` change 为 `CHG-049`、`CHG-050`、`CHG-051`、`CHG-052`、`CHG-053`、`CHG-054`、`CHG-055`、`CHG-056`、`CHG-057`，已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-02 注册后自动启用 2FA
+
+- 来源工作日志：`docs/work/2026-07-02-registration-auto-enable-2fa.md`
+- change：`docs/changes/CHG-056-registration-auto-enable-2fa.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：`src/auto/roxy_register_openai.js` 在注册成功并获取 `https://chatgpt.com/api/auth/session` 的 `accessToken` 后，默认执行 `enableChatGptTotpMfa()`，在同一 Roxy/ChatGPT 页面上下文中调用 MFA 协议：`mfa_info -> mfa/enroll -> 本地 TOTP -> activate_enrollment -> mfa_info`。成功后 CLI 输出 `ROXY_REGISTER_RESULT_JSON=...`；`src/replacementServices.js` 解析该结果；`src/server.js` 的注册接口把 `registrationMfa.secret` 写入补号账号 `codex_2fa`。可用 `ROXY_REGISTER_ENABLE_MFA=0` 关闭自动启用。
+- 验证：`node --test test\roxyRegisterOpenai.test.js test\replacementServices.test.js test\replacementAccountsApi.test.js` 通过，41/41 pass；`node --check src\auto\roxy_register_openai.js`、`node --check src\replacementServices.js`、`node --check src\server.js` 通过。
+- 待办：重启当前 `node src/server.js` 服务后新注册流程生效；建议再用真实 Roxy 注册账号端到端验证 `codex_2fa` 自动写入。
+- PRD 合并提醒：当前未合并的 `implemented` change 为 `CHG-049`、`CHG-050`、`CHG-051`、`CHG-052`、`CHG-053`、`CHG-054`、`CHG-055`、`CHG-056`，已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-02 本地 2FA 验证码 API
+
+- 来源工作日志：`docs/work/2026-07-02-local-2fa-code-api.md`
+- change：`docs/changes/CHG-055-local-2fa-code-api.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：新增 `src/totpService.js`，实现与 Google Authenticator/`2fa.fun` 默认参数一致的 TOTP：`sha1`、6 位、30 秒周期。`src/server.js` 新增 `POST /api/2fa-code`，请求体传 `{ "secret": "<base32>" }`，成功返回 `code`、`expiresIn`、`step`、`digits`、`algorithm`。本机 `127.0.0.1` 调用免后台登录态，远程调用仍要求 `admin_auth`。
+- 验证：`node --test test\totpService.test.js test\replacementAccountsApi.test.js` 通过，21/21 pass；`node --check src\totpService.js`、`node --check src\server.js` 通过。
+- 待办：需要重启当前 `node src/server.js` 服务后，运行中的项目实例才会暴露 `/api/2fa-code`；外部自动化建议使用 POST body 传 secret，不要放到 URL query。
+- PRD 合并提醒：当前未合并的 `implemented` change 为 `CHG-049`、`CHG-050`、`CHG-051`、`CHG-052`、`CHG-053`、`CHG-054`、`CHG-055`，已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-02 补号管理页新增 2FA 补号操作
+
+- 来源工作日志：`docs/work/2026-07-02-replacement-2fa-action.md`
+- change：`docs/changes/CHG-054-replacement-2fa-ui-action.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：补号管理页已新增“2FA补号”入口，前端调用 `POST /replacement-accounts/:id/replace-2fa`。后端新增 `replacementServices.replaceAccountWith2FA(account)`，默认通过子进程运行 `src/auto/roxy_2fa_auth_login.js`。传值沿用补号账号记录：`email -> ROXY_OAUTH_EMAIL`、`phone -> ROXY_OAUTH_PHONE`、`sms_api -> PHONE_VERIFICATION_SMS_API_URL`、`email_code_api -> VERIFICATION_CODE_API_URL`、`password -> ROXY_OAUTH_PASSWORD`、`codex_2fa -> ROXY_OAUTH_2FA_CODE` 或 `ROXY_OAUTH_TOTP_SECRET`；其中 6-8 位数字 `codex_2fa` 按一次性 2FA code 处理，否则按 TOTP secret 处理。
+- 验证：`node --test test\replacementServices.test.js`、`node --test test\replacementAccountsApi.test.js`、`node --test test\replacementAccountsWeb.test.js` 通过；`node --check src\replacementServices.js`、`node --check src\server.js`、`node --check web\app.js` 通过。
+- 待办：重启当前 `node src/server.js` 服务后，运行中的补号管理页才会出现“2FA补号”；可再选真实账号实机验证完整 2FA 补号链路。
+- PRD 合并提醒：当前未合并的 `implemented` change 为 `CHG-049`、`CHG-050`、`CHG-051`、`CHG-052`、`CHG-053`、`CHG-054`，已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-02 Roxy 2FA OAuth 登录自动化脚本
+
+- 来源工作日志：`docs/work/2026-07-02-roxy-2fa-oauth-login.md`
+- change：`docs/changes/CHG-053-roxy-2fa-oauth-login.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：新增独立 `src/auto/roxy_2fa_auth_login.js`，用于 OpenAI password + MFA OAuth 登录。新脚本会先处理 email 页并提交邮箱，进入 password 页后填写 `ROXY_OAUTH_PASSWORD` / options password 并 Continue；识别 `/mfa-challenge/` 或 `Verify your identity / Code` MFA 页后，使用显式 2FA code 或 TOTP secret 生成 code 并提交。MFA 后续 add-phone、phone-verification、phone-code、Codex consent、callback、token exchange 和失败截图继续复用原 `src/auto/roxy_oauth_login.js` 状态机。原脚本只新增 `buildAuthUrl` 与 `processOAuthLoginFlow` 注入钩子，旧 one-time-code 流程保持不变。新脚本默认 OAuth authorize URL 带 `prompt=login`，CLI 第一个参数仍可覆盖 target URL。
+- 验证：RED 阶段 `node --test test\roxy2FAAuthLogin.test.js` 失败于新模块缺失；二次 RED 失败于 email 页进入 password 后仍点击 one-time-code；实现后 `node --test test\roxy2FAAuthLogin.test.js` 通过 7/7，`node --test test\roxyOauthLogin.test.js` 通过 69/69，合并运行 `node --test test\roxy2FAAuthLogin.test.js test\roxyOauthLogin.test.js` 通过 76/76；`node --check src\auto\roxy_2fa_auth_login.js` 和 `node --check src\auto\roxy_oauth_login.js` 通过。
+- 待办：可用真实 Roxy 窗口执行 `node src\auto\roxy_2fa_auth_login.js` 做实机验证；运行前提供 `ROXY_OAUTH_PASSWORD` 和 `ROXY_OAUTH_2FA_CODE`，或提供 `ROXY_OAUTH_TOTP_SECRET`。
+- PRD 合并提醒：当前未合并的 `implemented` change 为 `CHG-049`、`CHG-050`、`CHG-051`、`CHG-052`、`CHG-053`，已达到 5 个，应安排 PRD 基线合并。
+
+## 2026-06-30 补号账号状态模型与行内编辑
+
+- 来源工作日志：`docs/work/2026-06-30-replacement-account-status-model.md`
+- change：`docs/changes/CHG-052-replacement-account-status-model-and-inline-edit.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：补号账号业务状态已扩展为 `unregistered`、`pending_activation`、`plus_active`、`cpa_mounted`、`for_sale`、`sold`、`banned`、`failed`，其中旧 `pending/active/replaced` 兼容映射为 `for_sale/plus_active/cpa_mounted`。新库表结构和新增账号默认 `for_sale`；补号成功写 `cpa_mounted`；连续失败 5 次后状态保持 `failed` 并写入熔断字段，不再写 `banned`。`GET /replacement-accounts?circuit_breaker=1` 支持筛选已熔断账号；CPA 自动监控会跳过 `banned` 和已熔断账号。补号管理页状态列已改为中文下拉行内编辑，并在熔断账号旁显示“已熔断”徽标；状态下拉已放大，并按状态显示不同颜色，切换状态时会立即换色。
+- 验证：`node --test test\replacementAccounts.test.js test\replacementAccountsApi.test.js test\replacementAccountsWeb.test.js test\cpaCredentialMonitor.test.js test\cpaRepairWorker.test.js` 通过，68/68 pass；补充 `node --test test\replacementAccountsWeb.test.js` 通过，12/12 pass；`node --check .\src\db.js`、`node --check .\src\replacementAccounts.js`、`node --check .\src\server.js`、`node --check .\src\cpaCredentialMonitor.js`、`node --check .\src\cpaRepairWorker.js`、`node --check .\web\app.js` 通过。
+- 待办：需要重启当前 `node src/server.js` 服务后，新状态模型和前端行内编辑才会在运行中的页面生效。当前未合并 PRD 的 `implemented` change 为 `CHG-049`、`CHG-050`、`CHG-051`、`CHG-052`，未达到 5 个提醒阈值。
+
 ## 2026-06-29 补号账号密码字段与列表压缩展示
 
 - 来源工作日志：`docs/work/2026-06-29-replacement-password-compact-fields.md`

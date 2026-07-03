@@ -1,14 +1,28 @@
 import { randomBytes, randomInt } from 'node:crypto';
 
-const SYSTEM_STATUSES = new Set(['pending', 'active', 'banned', 'replacing', 'replaced', 'failed']);
-const MANUAL_STATUSES = new Set(['pending', 'active', 'banned', 'replaced', 'failed']);
+const LEGACY_STATUS_MAP = new Map([
+  ['pending', 'for_sale'],
+  ['active', 'plus_active'],
+  ['replaced', 'cpa_mounted'],
+]);
+const MANUAL_STATUSES = new Set([
+  'unregistered',
+  'pending_activation',
+  'plus_active',
+  'cpa_mounted',
+  'for_sale',
+  'sold',
+  'banned',
+  'failed',
+]);
+const SYSTEM_STATUSES = new Set([...MANUAL_STATUSES, 'replacing']);
 const REPLACEMENT_FAILURE_BREAKER_THRESHOLD = 5;
 const REPLACEMENT_PASSWORD_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*_-';
 
 export function createReplacementAccountRepository(db) {
   return {
     createAccount(input) {
-      const data = normalizeAccountInput(input, { requireEmail: true });
+      const data = normalizeAccountInput(input, { requireEmail: true, defaultStatus: 'for_sale' });
       data.public_code_key ||= generatePublicCodeKey();
       data.password ||= generateReplacementPassword();
       validateStatus(data.status, { allowReplacing: false });
@@ -62,7 +76,7 @@ export function createReplacementAccountRepository(db) {
         SELECT * FROM replacement_accounts
         WHERE deleted_at IS NULL
         ORDER BY id DESC
-      `).all();
+      `).all().map(normalizeAccountRecord);
     },
 
     listAccountsPage(options = {}) {
@@ -78,32 +92,36 @@ export function createReplacementAccountRepository(db) {
         ${whereSql}
         ORDER BY id DESC
         LIMIT ? OFFSET ?
-      `).all(...params, pagination.pageSize, (pagination.page - 1) * pagination.pageSize);
+      `).all(...params, pagination.pageSize, (pagination.page - 1) * pagination.pageSize)
+        .map(normalizeAccountRecord);
 
       return { accounts, pagination };
     },
 
     getAccount(id) {
-      return db.prepare(`
+      return normalizeAccountRecord(db.prepare(`
         SELECT * FROM replacement_accounts
         WHERE id = ? AND deleted_at IS NULL
-      `).get(Number(id));
+      `).get(Number(id)));
     },
 
     getAccountByEmail(email) {
       const normalized = normalizeOptional(email);
       if (!normalized) return undefined;
-      return db.prepare(`
+      return normalizeAccountRecord(db.prepare(`
         SELECT * FROM replacement_accounts
         WHERE lower(trim(email)) = lower(trim(?))
           AND deleted_at IS NULL
         LIMIT 1
-      `).get(normalized);
+      `).get(normalized));
     },
 
     updateAccount(id, input) {
       const existing = assertAccountExists(this.getAccount(id));
-      const data = normalizeAccountInput(input, { requireEmail: true });
+      const data = normalizeAccountInput(input, {
+        requireEmail: true,
+        defaultStatus: normalizeStoredStatus(existing.status),
+      });
       if (Object.hasOwn(input || {}, 'public_code_key')) {
         data.public_code_key ||= generatePublicCodeKey();
       } else {
@@ -158,13 +176,13 @@ export function createReplacementAccountRepository(db) {
       if (!normalizedKey) {
         return undefined;
       }
-      return db.prepare(`
+      return normalizeAccountRecord(db.prepare(`
         SELECT * FROM replacement_accounts
         WHERE public_code_key = ?
           AND public_code_enabled = 1
           AND deleted_at IS NULL
         LIMIT 1
-      `).get(normalizedKey);
+      `).get(normalizedKey));
     },
 
     updatePublicCodeAccess(id, input) {
@@ -197,7 +215,7 @@ export function createReplacementAccountRepository(db) {
 
     updateStatus(id, input) {
       const existing = assertAccountExists(this.getAccount(id));
-      const status = normalizeRequired(input?.status, 'STATUS_INVALID', 'status is required');
+      const status = normalizeStatusValue(normalizeRequired(input?.status, 'STATUS_INVALID', 'status is required'));
       validateStatus(status, { allowReplacing: false });
       const now = new Date().toISOString();
 
@@ -277,7 +295,7 @@ export function createReplacementAccountRepository(db) {
       db.prepare(`
         UPDATE replacement_accounts
         SET
-          status = 'replaced',
+          status = 'cpa_mounted',
           status_updated_at = ?,
           replacement_count = replacement_count + 1,
           consecutive_replace_failures = 0,
@@ -295,8 +313,8 @@ export function createReplacementAccountRepository(db) {
       const existing = assertAccountExists(this.getAccount(id));
       const now = new Date().toISOString();
       const nextFailures = Number(existing.consecutive_replace_failures || 0) + 1;
-      const shouldBan = nextFailures >= REPLACEMENT_FAILURE_BREAKER_THRESHOLD;
-      const breakerReason = shouldBan
+      const shouldOpenCircuitBreaker = nextFailures >= REPLACEMENT_FAILURE_BREAKER_THRESHOLD;
+      const breakerReason = shouldOpenCircuitBreaker
         ? `连续补号失败 ${REPLACEMENT_FAILURE_BREAKER_THRESHOLD} 次，自动熔断`
         : null;
       db.prepare(`
@@ -312,12 +330,12 @@ export function createReplacementAccountRepository(db) {
           updated_at = ?
         WHERE id = ?
       `).run(
-        shouldBan ? 'banned' : 'failed',
+        'failed',
         now,
         breakerReason,
         breakerReason,
         nextFailures,
-        shouldBan ? now : null,
+        shouldOpenCircuitBreaker ? now : null,
         breakerReason,
         normalizeErrorMessage(errorMessage),
         now,
@@ -332,7 +350,6 @@ export function createReplacementAccountRepository(db) {
       db.prepare(`
         UPDATE replacement_accounts
         SET
-          status = 'pending',
           status_note = ?,
           status_updated_at = ?,
           consecutive_replace_failures = 0,
@@ -352,10 +369,11 @@ export function codedError(code, message) {
   return error;
 }
 
-function normalizeAccountInput(input, { requireEmail }) {
+function normalizeAccountInput(input, { requireEmail, defaultStatus }) {
   const email = requireEmail
     ? normalizeRequired(input?.email, 'EMAIL_REQUIRED', 'email is required')
     : normalizeOptional(input?.email);
+  const rawStatus = normalizeOptional(input?.status) || defaultStatus;
   return {
     email,
     phone: normalizeOptional(input?.phone),
@@ -365,7 +383,7 @@ function normalizeAccountInput(input, { requireEmail }) {
     password: normalizeOptional(input?.password),
     activation_method: normalizeOptional(input?.activation_method),
     activated_at: normalizeOptional(input?.activated_at),
-    status: normalizeOptional(input?.status) || 'pending',
+    status: normalizeStatusValue(rawStatus),
     status_note: normalizeOptional(input?.status_note),
     remark: normalizeOptional(input?.remark),
     public_code_enabled: normalizeBooleanFlag(input?.public_code_enabled),
@@ -382,6 +400,22 @@ function validateStatus(status, { allowReplacing }) {
   if (!allowed.has(status)) {
     throw codedError('STATUS_INVALID', 'status is invalid');
   }
+}
+
+function normalizeStatusValue(status) {
+  return LEGACY_STATUS_MAP.get(status) || status;
+}
+
+function normalizeStoredStatus(status) {
+  return normalizeStatusValue(normalizeOptional(status) || 'for_sale');
+}
+
+function normalizeAccountRecord(account) {
+  if (!account) return account;
+  return {
+    ...account,
+    status: normalizeStoredStatus(account.status),
+  };
 }
 
 function assertEmailAvailable(db, email, excludedId = null) {
@@ -445,8 +479,9 @@ function normalizeListQuery(options) {
   return {
     page: normalizePositiveInteger(options?.page, 1, Number.MAX_SAFE_INTEGER),
     pageSize: normalizePositiveInteger(options?.pageSize, 10, 100),
-    status: normalizeOptional(options?.status),
+    status: normalizeOptional(options?.status) ? normalizeStatusValue(normalizeOptional(options?.status)) : null,
     keyword: normalizeOptional(options?.keyword)?.toLowerCase() || null,
+    circuit_breaker: normalizeBooleanFlag(options?.circuit_breaker),
   };
 }
 
@@ -460,8 +495,12 @@ function buildReplacementAccountListWhere(query) {
   const filters = ['deleted_at IS NULL'];
   const params = [];
   if (query.status) {
-    filters.push('status = ?');
-    params.push(query.status);
+    const statusValues = storageStatusValues(query.status);
+    filters.push(`status IN (${statusValues.map(() => '?').join(', ')})`);
+    params.push(...statusValues);
+  }
+  if (query.circuit_breaker) {
+    filters.push('circuit_breaker_at IS NOT NULL');
   }
   if (query.keyword) {
     filters.push(`(
@@ -478,6 +517,14 @@ function buildReplacementAccountListWhere(query) {
     whereSql: `WHERE ${filters.join(' AND ')}`,
     params,
   };
+}
+
+function storageStatusValues(status) {
+  const values = [status];
+  for (const [legacyStatus, normalizedStatus] of LEGACY_STATUS_MAP) {
+    if (normalizedStatus === status) values.push(legacyStatus);
+  }
+  return values;
 }
 
 function buildPagination(total, query) {

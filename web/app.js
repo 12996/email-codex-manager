@@ -12,13 +12,27 @@ const state = {
 };
 
 const statusLabels = {
-  pending: 'pending',
-  active: 'active',
-  banned: 'banned',
-  replacing: 'replacing',
-  replaced: 'replaced',
-  failed: 'failed',
+  unregistered: '未注册',
+  pending_activation: '待开通',
+  plus_active: '开通 plus',
+  cpa_mounted: 'CPA 挂载',
+  for_sale: '待出售',
+  sold: '已售出',
+  banned: '账号封禁',
+  failed: '失败',
+  replacing: '处理中',
 };
+
+const statusOptions = [
+  'unregistered',
+  'pending_activation',
+  'plus_active',
+  'cpa_mounted',
+  'for_sale',
+  'sold',
+  'banned',
+  'failed',
+];
 
 const compactFieldPreviewLength = 6;
 const compactFields = [
@@ -106,7 +120,8 @@ function accountListQuery() {
   });
   const status = $('#statusFilter').value;
   const keyword = $('#searchInput').value.trim();
-  if (status) params.set('status', status);
+  if (status === 'circuit_breaker') params.set('circuit_breaker', '1');
+  else if (status) params.set('status', status);
   if (keyword) params.set('keyword', keyword);
   return params.toString();
 }
@@ -143,7 +158,7 @@ function accountRow(account) {
       <td>${renderWrappedField(account.remark)}</td>
       <td>${renderLimitedField(account, 'activation_method', account.activation_method)}</td>
       <td>${renderWrappedField(account.activated_at, { className: 'field-raw' })}</td>
-      <td><span class="status ${account.status}">${statusLabels[account.status] || account.status}</span></td>
+      <td>${renderStatusSelect(account)}</td>
       <td>${renderLimitedField(account, 'public_code_key', account.public_code_key, { className: 'field-raw' })}<div class="muted">${account.public_code_enabled ? '公开验证码已启用' : '公开验证码未启用'}</div></td>
       <td>${account.replacement_count || 0}</td>
       <td>
@@ -156,15 +171,31 @@ function accountRow(account) {
             <button type="button" data-action="json" data-id="${account.id}">▣ 获取 JSON</button>
             <button type="button" data-action="register" data-id="${account.id}">✚ 注册</button>
             <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
-            ${account.status === 'banned' ? `<button type="button" data-action="reset-circuit-breaker" data-id="${account.id}">解除熔断</button>` : ''}
+            <button type="button" data-action="replace-2fa" data-id="${account.id}">⟳ 2FA补号</button>
+            ${account.circuit_breaker_at ? `<button type="button" data-action="reset-circuit-breaker" data-id="${account.id}">解除熔断</button>` : ''}
             <button type="button" data-action="copy-public-code-url" data-id="${account.id}">⧉ 复制公开验证码 URL</button>
-            <button type="button" data-action="status" data-id="${account.id}">⊙ 状态设置</button>
             <button class="danger" type="button" data-action="delete" data-id="${account.id}">🗑 删除账号</button>
           </div>
         </div>
         <button type="button" data-action="detail" data-id="${account.id}">详情</button>
       </td>
     </tr>
+  `;
+}
+
+function renderStatusSelect(account) {
+  const status = statusOptions.includes(account.status) ? account.status : 'for_sale';
+  const options = statusOptions.map((value) => `
+    <option class="${escapeHtml(value)}" value="${value}" ${value === status ? 'selected' : ''}>${statusLabels[value]}</option>
+  `).join('');
+  const breakerBadge = account.circuit_breaker_at ? '<span class="breaker-badge">已熔断</span>' : '';
+  return `
+    <div class="status-cell">
+      <select class="status-select ${escapeHtml(status)}" data-id="${account.id}" aria-label="修改账号状态">
+        ${options}
+      </select>
+      ${breakerBadge}
+    </div>
   `;
 }
 
@@ -218,6 +249,9 @@ function bindRowEvents() {
       menu.hidden = !willOpen;
     });
   });
+  document.querySelectorAll('.status-select').forEach((select) => {
+    select.addEventListener('change', () => changeStatus(Number(select.dataset.id), select.value, select));
+  });
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -238,6 +272,7 @@ async function handleAction(action, id, dataset = {}) {
   if (action === 'json') return fetchJson(account);
   if (action === 'register') return registerAccount(account);
   if (action === 'replace') return replaceAccount(account);
+  if (action === 'replace-2fa') return replaceAccountWith2FA(account);
   if (action === 'reset-circuit-breaker') return resetCircuitBreaker(account);
   if (action === 'toggle-public-code') return togglePublicCode(account);
   if (action === 'copy-public-code-url') return copyPublicCodeUrl(account);
@@ -249,7 +284,7 @@ function openAccountDialog(account = null) {
   form.reset();
   $('#dialogTitle').textContent = account ? '编辑账号' : '新增账号';
   for (const field of ['id', 'email', 'phone', 'sms_api', 'email_code_api', 'codex_2fa', 'password', 'activation_method', 'activated_at', 'status', 'remark']) {
-    form.elements[field].value = account?.[field] || (field === 'status' ? 'pending' : '');
+    form.elements[field].value = account?.[field] || (field === 'status' ? 'for_sale' : '');
   }
   form.elements.public_code_enabled.checked = Boolean(Number(account?.public_code_enabled || 0));
   form.elements.public_code_key.value = account?.public_code_key || '';
@@ -326,7 +361,7 @@ async function togglePublicCode(account) {
 function openStatusDialog(account) {
   const form = $('#statusForm');
   form.elements.id.value = account.id;
-  form.elements.status.value = account.status === 'replacing' ? 'pending' : account.status;
+  form.elements.status.value = account.status === 'replacing' ? 'for_sale' : account.status;
   form.elements.status_note.value = account.status_note || '';
   $('#statusDialog').showModal();
 }
@@ -349,6 +384,31 @@ async function saveStatus(event) {
     await loadAccounts();
   } catch (error) {
     toast(error.message);
+  }
+}
+
+function applyStatusSelectClass(select, status) {
+  if (!select) return;
+  statusOptions.forEach((value) => select.classList.remove(value));
+  select.classList.add(statusOptions.includes(status) ? status : 'for_sale');
+}
+
+async function changeStatus(id, status, select = null) {
+  const account = state.accounts.find((item) => item.id === id);
+  const previousStatus = account?.status || 'for_sale';
+  applyStatusSelectClass(select, status);
+  if (account) account.status = status;
+  try {
+    await api(`/replacement-accounts/${id}/status`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+    addActivity('状态已更新', `ID ${id} -> ${statusLabels[status] || status}`);
+    await loadAccounts();
+  } catch (error) {
+    toast(error.message);
+    if (account) account.status = previousStatus;
+    renderAccounts();
   }
 }
 
@@ -393,12 +453,24 @@ async function replaceAccount(account) {
   }
 }
 
+async function replaceAccountWith2FA(account) {
+  try {
+    await api(`/replacement-accounts/${account.id}/replace-2fa`, { method: 'POST' });
+    addActivity('2FA补号成功', account.email);
+    await loadAccounts();
+  } catch (error) {
+    addActivity('2FA补号失败', account.email);
+    toast(error.message);
+    await loadAccounts();
+  }
+}
+
 async function resetCircuitBreaker(account) {
-  if (!confirm(`确认解除 ${account.email} 的补号熔断？账号将回到 pending 并清零连续失败次数。`)) return;
+  if (!confirm(`确认解除 ${account.email} 的补号熔断？将清零连续失败次数，账号状态保持不变。`)) return;
   try {
     await api(`/replacement-accounts/${account.id}/circuit-breaker/reset`, { method: 'PATCH' });
     addActivity('解除熔断', account.email);
-    toast('已解除熔断，账号状态已回到 pending');
+    toast('已解除熔断');
     await loadAccounts();
   } catch (error) {
     toast(error.message);
@@ -422,7 +494,7 @@ async function registerAccount(account) {
 async function batchReplace() {
   const candidates = selectedAccounts().length
     ? selectedAccounts()
-    : state.accounts.filter((account) => ['banned', 'failed', 'pending'].includes(account.status));
+    : state.accounts.filter((account) => ['banned', 'failed', 'for_sale', 'pending_activation', 'plus_active'].includes(account.status));
   if (!candidates.length) {
     toast('没有可补号账号');
     return;
@@ -479,7 +551,7 @@ function toggleAll(event) {
 function renderStats() {
   const counts = countByStatus(state.accounts);
   $('#statTotal').textContent = state.pagination.total;
-  $('#statActive').textContent = counts.active || 0;
+  $('#statActive').textContent = counts.plus_active || 0;
   $('#statBanned').textContent = counts.banned || 0;
   $('#statReplaced').textContent = state.accounts.reduce((sum, account) => sum + Number(account.replacement_count || 0), 0);
   $('#statFailed').textContent = counts.failed || 0;
@@ -489,17 +561,20 @@ function renderStats() {
 function renderStatusLegend(counts) {
   const total = state.accounts.length || 1;
   const colors = {
-    active: '#21bf73',
+    plus_active: '#21bf73',
     banned: '#f24e5c',
-    replaced: '#26aebd',
-    pending: '#2273f5',
+    cpa_mounted: '#26aebd',
+    for_sale: '#2273f5',
+    pending_activation: '#f2a23a',
+    unregistered: '#8b9bb4',
+    sold: '#7b55e7',
     failed: '#b8c1ce',
   };
-  const statuses = ['active', 'banned', 'replaced', 'pending', 'failed'];
+  const statuses = ['unregistered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned', 'failed'];
   $('#statusLegend').innerHTML = statuses.map((status) => {
     const count = counts[status] || 0;
     const percent = Math.round((count / total) * 1000) / 10;
-    return `<li><span><i style="background:${colors[status]}"></i> ${status}</span><strong>${count} (${percent}%)</strong></li>`;
+    return `<li><span><i style="background:${colors[status]}"></i> ${statusLabels[status]}</span><strong>${count} (${percent}%)</strong></li>`;
   }).join('');
 }
 

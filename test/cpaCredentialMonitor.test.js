@@ -21,7 +21,7 @@ test('runOnce triggers replacement for unhealthy matching account', async () => 
     replacementAccounts: {
       getAccountByEmail(email) {
         assert.equal(email, 'user@example.com');
-        return { id: 7, email, status: 'active' };
+        return { id: 7, email, status: 'plus_active' };
       },
     },
     repairQueue: {
@@ -139,4 +139,43 @@ test('runOnce skips auth-expired credential when replacement account is banned',
   assert.equal(result.unhealthy.length, 1);
   assert.equal(result.enqueued.length, 0);
   assert.deepEqual(result.skipped.map((item) => item.reason), ['account_banned']);
+});
+
+test('runOnce skips auth-expired credential when replacement account circuit breaker is active', async () => {
+  const monitor = createCpaCredentialMonitor({
+    cpaClient: {
+      async listAuthFiles() {
+        return [{
+          provider: 'codex',
+          email: 'broken@example.com',
+          status: 'error',
+          unavailable: true,
+          status_message: 'refresh token expired',
+        }];
+      },
+    },
+    replacementAccounts: {
+      getAccountByEmail(email) {
+        assert.equal(email, 'broken@example.com');
+        return {
+          id: 10,
+          email,
+          status: 'failed',
+          circuit_breaker_at: '2026-06-30T00:00:00.000Z',
+        };
+      },
+    },
+    repairQueue: {
+      enqueue() {
+        throw new Error('circuit-broken account should not be enqueued');
+      },
+    },
+  });
+
+  const result = await monitor.runOnce();
+
+  assert.equal(result.checked, 1);
+  assert.equal(result.unhealthy.length, 1);
+  assert.equal(result.enqueued.length, 0);
+  assert.deepEqual(result.skipped.map((item) => item.reason), ['account_circuit_breaker']);
 });

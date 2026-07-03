@@ -26,7 +26,7 @@ test('repair worker replaces account, uploads CPA JSON, and verifies health', as
     },
     replacementAccounts: {
       markReplacementStarted(id) { events.push(['started', id]); },
-      markReplacementSuccess(id) { events.push(['success', id]); return { id, status: 'replaced' }; },
+      markReplacementSuccess(id) { events.push(['success', id]); return { id, status: 'cpa_mounted' }; },
       markReplacementFailure() { throw new Error('not expected'); },
     },
     replacementServices: {
@@ -66,7 +66,7 @@ test('repair worker appends CPA upload steps to replacement run log', async () =
     },
     replacementAccounts: {
       markReplacementStarted() {},
-      markReplacementSuccess(id) { return { id, status: 'replaced' }; },
+      markReplacementSuccess(id) { return { id, status: 'cpa_mounted' }; },
       markReplacementFailure() { throw new Error('not expected'); },
     },
     replacementServices: {
@@ -104,7 +104,7 @@ test('repair worker appends CPA trigger reason to replacement run log', async ()
     },
     replacementAccounts: {
       markReplacementStarted() {},
-      markReplacementSuccess(id) { return { id, status: 'replaced' }; },
+      markReplacementSuccess(id) { return { id, status: 'cpa_mounted' }; },
       markReplacementFailure() { throw new Error('not expected'); },
     },
     replacementServices: {
@@ -166,7 +166,7 @@ test('repair worker treats email healthy when any matching CPA credential is hea
     },
     replacementAccounts: {
       markReplacementStarted(id) { events.push(['started', id]); },
-      markReplacementSuccess(id) { events.push(['success', id]); return { id, status: 'replaced' }; },
+      markReplacementSuccess(id) { events.push(['success', id]); return { id, status: 'cpa_mounted' }; },
       markReplacementFailure() { throw new Error('not expected'); },
     },
     replacementServices: {
@@ -207,7 +207,7 @@ test('repair worker creates notification when replacement failure triggers circu
         return {
           id,
           email: 'user@example.com',
-          status: 'banned',
+          status: 'failed',
           consecutive_replace_failures: 5,
           circuit_breaker_at: '2026-06-07T00:00:00.000Z',
           circuit_breaker_reason: '连续补号失败 5 次，自动熔断',
@@ -224,12 +224,12 @@ test('repair worker creates notification when replacement failure triggers circu
   const result = await worker.repair({ account: { id: 7, email: 'user@example.com' } });
 
   assert.equal(result.ok, false);
-  assert.equal(result.account.status, 'banned');
+  assert.equal(result.account.status, 'failed');
   assert.deepEqual(notifications, [{
     type: 'cpa_repair_circuit_breaker',
     severity: 'critical',
     title: '账号已触发补号熔断',
-    message: 'user@example.com 连续自动补号失败 5 次，已自动标记为 banned，不再进入 CPA 自动补号队列。',
+    message: 'user@example.com 连续自动补号失败 5 次，账号已自动熔断，不再进入 CPA 自动补号队列。',
     account_id: 7,
     email: 'user@example.com',
   }]);

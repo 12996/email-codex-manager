@@ -1,0 +1,11 @@
+{"type":"start","ts":"2026-07-03T07:48:28.559Z","startedAt":"2026-07-03T07:47:49.424Z","endpoint":"<redacted-cdp-endpoint>","mode":"passive-no-dom-injection"}
+{"ts":"2026-07-03T07:48:28.565Z","type":"page-state-at-start","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}
+{"ts":"2026-07-03T07:48:28.569Z","type":"heartbeat","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}
+{"ts":"2026-07-03T07:48:31.566Z","type":"heartbeat","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}
+{"ts":"2026-07-03T07:48:34.575Z","type":"heartbeat","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}
+{"ts":"2026-07-03T07:48:37.584Z","type":"heartbeat","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}
+{"ts":"2026-07-03T07:48:40.597Z","type":"heartbeat","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}
+{"ts":"2026-07-03T07:48:43.606Z","type":"heartbeat","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}
+{"ts":"2026-07-03T07:48:46.621Z","type":"heartbeat","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}
+{"ts":"2026-07-03T07:48:49.633Z","type":"heartbeat","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}
+{"ts":"2026-07-03T07:48:52.638Z","type":"heartbeat","url":"https://chatgpt.com/?__cf_chl_f_tk=%3Credacted%3E","title":"ChatGPT"}

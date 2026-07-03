@@ -239,11 +239,46 @@ thead th {
   font-size: 12px;
   padding: 3px 7px;
 }
+.status-cell { display: inline-flex; align-items: center; gap: 6px; }
 .status { border-radius: 7px; padding: 5px 9px; font-weight: 800; font-size: 12px; }
-.status.active, .status.replaced { background: #dff8ea; color: #16a35b; }
+.status-select {
+  border: 1px solid #dbe3ef;
+  border-radius: 10px;
+  color: #263858;
+  cursor: pointer;
+  font-weight: 800;
+  min-width: 128px;
+  padding: 10px 14px;
+}
+.status-select.unregistered { background: #eef4ff; border-color: #b9d2ff; color: #245fc8; }
+.status-select.pending_activation { background: #fff2df; border-color: #ffd4a3; color: #b45d00; }
+.status-select.plus_active { background: #dff8ea; border-color: #a7e5c4; color: #147c46; }
+.status-select.cpa_mounted { background: #e4fbf8; border-color: #9de4da; color: #0b7f73; }
+.status-select.for_sale { background: #e7f0ff; border-color: #b6d0ff; color: #1d66ed; }
+.status-select.sold { background: #f1ebff; border-color: #d6c6ff; color: #6a45d8; }
+.status-select.banned { background: #ffe6e9; border-color: #ffb9c1; color: #c81e33; }
+.status-select.failed { background: #f2f4f8; border-color: #cfd8e6; color: #53657f; }
+.status-select option.unregistered { background: #eef4ff; color: #245fc8; }
+.status-select option.pending_activation { background: #fff2df; color: #b45d00; }
+.status-select option.plus_active { background: #dff8ea; color: #147c46; }
+.status-select option.cpa_mounted { background: #e4fbf8; color: #0b7f73; }
+.status-select option.for_sale { background: #e7f0ff; color: #1d66ed; }
+.status-select option.sold { background: #f1ebff; color: #6a45d8; }
+.status-select option.banned { background: #ffe6e9; color: #c81e33; }
+.status-select option.failed { background: #f2f4f8; color: #53657f; }
+.status.plus_active, .status.cpa_mounted { background: #dff8ea; color: #16a35b; }
 .status.banned, .status.failed { background: #ffe6e9; color: #e52f42; }
-.status.pending { background: #e7f0ff; color: #1d66ed; }
-.status.replacing { background: #fff2df; color: #f47a00; }
+.status.for_sale, .status.unregistered { background: #e7f0ff; color: #1d66ed; }
+.status.pending_activation, .status.replacing { background: #fff2df; color: #f47a00; }
+.status.sold { background: #f1ebff; color: #7b55e7; }
+.breaker-badge {
+  background: #111827;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 4px 8px;
+}
 .dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: #2ac774; margin-right: 8px; }
 .dot.failed { background: #ff3a4a; } .dot.replacing { background: #2377ff; } .dot.empty { background: #c8d2df; }
 .actions { position: relative; display: inline-block; }

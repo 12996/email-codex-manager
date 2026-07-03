@@ -11,6 +11,7 @@ const DEFAULT_NAVIGATION_TIMEOUT_MS = 60000;
 const DEFAULT_IDLE_TIMEOUT_MS = 10000;
 const DEFAULT_CODE_POLL_INTERVAL_MS = 5000;
 const DEFAULT_CODE_POLL_MAX_ATTEMPTS = 12;
+const DEFAULT_PHONE_CODE_MIN_POLL_MS = 60000;
 const DEFAULT_TOKEN_PAGE_SETTLE_MS = 6000;
 const DEFAULT_TOKEN_PAGE_TIMEOUT_MS = 10000;
 const DEFAULT_TOKEN_PAGE_MAX_ATTEMPTS = 3;
@@ -26,23 +27,33 @@ function normalizeServicePort(env = process.env) {
     return /^\d+$/.test(value) ? value : '3000';
 }
 
-function buildDefaultVerificationApiUrl(env = process.env) {
-    return `http://127.0.0.1:${normalizeServicePort(env)}/api/verification-code/latest`;
+function isIcloudEmail(email) {
+    return String(email || '').trim().toLowerCase().endsWith('@icloud.com');
+}
+
+function buildDefaultVerificationApiUrl(env = process.env, email = '') {
+    const pathName = isIcloudEmail(email)
+        ? '/api/icloud-verification-code/latest'
+        : '/api/verification-code/latest';
+    return `http://127.0.0.1:${normalizeServicePort(env)}${pathName}`;
 }
 
 const DEFAULT_VERIFICATION_API_URL = buildDefaultVerificationApiUrl();
 
-function resolveVerificationApiUrl(options = {}, env = process.env) {
+function resolveVerificationApiUrl(options = {}, env = process.env, email = '') {
     return options.verificationApiUrl
         || env.VERIFICATION_CODE_API_URL
-        || buildDefaultVerificationApiUrl(env);
+        || buildDefaultVerificationApiUrl(env, email);
 }
 
 function shouldPostLocalVerificationApi(url) {
     try {
         const parsed = new URL(String(url));
         return ['127.0.0.1', 'localhost', '::1'].includes(parsed.hostname)
-            && parsed.pathname === '/api/verification-code/latest';
+            && [
+                '/api/verification-code/latest',
+                '/api/icloud-verification-code/latest'
+            ].includes(parsed.pathname);
     } catch {
         return false;
     }
@@ -221,7 +232,7 @@ function sleepMs(ms) {
 }
 
 async function waitBeforeNextCodePoll(options = {}, page = null) {
-    const intervalMs = normalizePositiveInteger(options.codePollIntervalMs, DEFAULT_CODE_POLL_INTERVAL_MS);
+    const intervalMs = resolveCodePollIntervalMs(options);
     if (typeof options.waitForTimeout === 'function') {
         await options.waitForTimeout(intervalMs);
         return;
@@ -231,6 +242,24 @@ async function waitBeforeNextCodePoll(options = {}, page = null) {
         return;
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
+}
+
+function resolveCodePollIntervalMs(options = {}) {
+    return normalizePositiveInteger(options.codePollIntervalMs, DEFAULT_CODE_POLL_INTERVAL_MS);
+}
+
+function resolvePhoneCodePollMaxAttempts(options = {}) {
+    const configuredAttempts = normalizePositiveInteger(options.codePollMaxAttempts, DEFAULT_CODE_POLL_MAX_ATTEMPTS);
+    const intervalMs = resolveCodePollIntervalMs(options);
+    const minPollMsNumber = Number(options.phoneCodeMinPollMs);
+    const minPollMs = Number.isFinite(minPollMsNumber) && minPollMsNumber >= 0
+        ? minPollMsNumber
+        : DEFAULT_PHONE_CODE_MIN_POLL_MS;
+    // 短信平台经常 30 秒后才返回验证码；即使调用方传小 attempts，也至少覆盖 1 分钟窗口。
+    const minAttempts = minPollMs > 0
+        ? Math.floor(minPollMs / intervalMs) + 1
+        : 1;
+    return Math.max(configuredAttempts, minAttempts);
 }
 
 function normalizePositiveInteger(value, fallback) {
@@ -521,7 +550,7 @@ async function fetchEmailVerificationCode(page, email, options) {
 
 async function fetchEmailVerificationCodeOnce(page, email, options, attempt = 1, maxAttempts = 1) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
-    const verificationApiUrl = resolveVerificationApiUrl(options);
+    const verificationApiUrl = resolveVerificationApiUrl(options, process.env, email);
     const useLocalPost = shouldPostLocalVerificationApi(verificationApiUrl);
 
     const apiRequest = options.request || page.request || (typeof page.context === 'function' ? page.context().request : null);
@@ -729,12 +758,13 @@ async function is_phone_code_page(page, options = {}) {
 
 async function fetchPhoneVerificationCode(options = {}) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
-    const maxAttempts = normalizePositiveInteger(options.codePollMaxAttempts, DEFAULT_CODE_POLL_MAX_ATTEMPTS);
+    const maxAttempts = resolvePhoneCodePollMaxAttempts(options);
     let result;
 
     for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
         result = await fetchPhoneVerificationCodeOnce(options, attempt, maxAttempts);
-        if (result.code) {
+        // 发送手机号前可能已经有旧验证码，轮询时必须跳过旧码等待新短信。
+        if (result.code && !isExcludedPhoneCode(result.code, options)) {
             logConfigured(options, 'openai-phone-code', '手机验证码获取完成', 'code=received');
             return result.code;
         }
@@ -747,6 +777,20 @@ async function fetchPhoneVerificationCode(options = {}) {
         smsApiUrl: result?.smsApiUrl || resolvePhoneVerificationSmsApiUrl(options),
         attempts: maxAttempts
     });
+}
+
+function getExcludedPhoneCode(options = {}) {
+    return String(
+        options.phoneCodeExcludeCode
+        || options.excludePhoneCode
+        || options.runtimeState?.phoneCodeExcludeCode
+        || ''
+    ).trim();
+}
+
+function isExcludedPhoneCode(code, options = {}) {
+    const excludedCode = getExcludedPhoneCode(options);
+    return Boolean(excludedCode && String(code || '').trim() === excludedCode);
 }
 
 function resolvePhoneVerificationSmsApiUrl(options = {}) {
@@ -796,11 +840,38 @@ async function openAi_phone_add(page, options = {}) {
             await phoneInput.press('ControlOrMeta+a');
         }
         await phoneInput.fill(phone);
+        // 点击发送前先记录短信 API 当前最新码，避免后续误用上一轮验证码。
+        await snapshotExistingPhoneCode(options);
         logConfigured(options, 'openai-phone-add', '点击 Continue');
         await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
         logConfigured(options, 'openai-phone-add', '手机号提交完成');
         return { status: 'phone-add-submitted', phone };
     });
+}
+
+async function snapshotExistingPhoneCode(options = {}) {
+    // 仅在状态机上下文中记录基线；直接传手动验证码时不需要排除旧码。
+    if (options.code || options.skipPhoneCodeBaselineSnapshot || getExcludedPhoneCode(options)) {
+        return;
+    }
+    const runtimeState = options.runtimeState;
+    if (!runtimeState || typeof runtimeState !== 'object') {
+        return;
+    }
+    const snapshotTimeoutMs = normalizePositiveInteger(
+        options.prePhoneCodeSnapshotTimeoutMs,
+        Math.min(options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS, 5000)
+    );
+    const snapshot = await fetchPhoneVerificationCodeOnce({
+        ...options,
+        timeoutMs: snapshotTimeoutMs,
+        silentPhoneCodeLog: true
+    }, 0, 0).catch(() => null);
+    if (snapshot?.code) {
+        // 只记录“需要排除”的事实，不在日志中输出验证码明文。
+        runtimeState.phoneCodeExcludeCode = snapshot.code;
+        logConfigured(options, 'openai-phone-add', '记录发送前已有手机验证码，后续等待新验证码', 'code=excluded');
+    }
 }
 
 async function fetchPhoneVerificationCodeOnce(options = {}, attempt = 1, maxAttempts = 1) {
@@ -809,7 +880,9 @@ async function fetchPhoneVerificationCodeOnce(options = {}, attempt = 1, maxAtte
     const fetchImpl = options.fetch || (typeof fetch === 'function' ? fetch : null);
     let text;
 
-    logConfigured(options, 'openai-phone-code', '请求手机验证码', `attempt=${attempt}/${maxAttempts} api=${smsApiUrl}`);
+    if (!options.silentPhoneCodeLog) {
+        logConfigured(options, 'openai-phone-code', '请求手机验证码', `attempt=${attempt}/${maxAttempts} api=${smsApiUrl}`);
+    }
     if (options.request && typeof options.request.get === 'function') {
         const response = await options.request.get(smsApiUrl, { timeout: timeoutMs });
         if (typeof response.text === 'function') {
@@ -838,7 +911,7 @@ async function fetchPhoneVerificationCodeOnce(options = {}, attempt = 1, maxAtte
 async function openAi_phone_code(page, options = {}) {
     return withFailureScreenshot(page, options, 'openAi_phone_code', async () => {
         const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
-        const maxAttempts = normalizePositiveInteger(options.codePollMaxAttempts, DEFAULT_CODE_POLL_MAX_ATTEMPTS);
+        const maxAttempts = resolvePhoneCodePollMaxAttempts(options);
         if (!await is_phone_code_page(page, options)) {
             throw createAutomationError('OPENAI_PHONE_CODE_PAGE_NOT_FOUND', '当前页面不是手机验证码输入页', {
                 ...(await collectPageDebug(page))
@@ -855,7 +928,8 @@ async function openAi_phone_code(page, options = {}) {
                 if (currentStage) return currentStage;
 
                 const result = await fetchPhoneVerificationCodeOnce(options, attempt, maxAttempts);
-                if (result.code) {
+                // 如果 API 仍返回发送前旧码，继续轮询，不填入页面。
+                if (result.code && !isExcludedPhoneCode(result.code, options)) {
                     logConfigured(options, 'openai-phone-code', '手机验证码获取完成', 'code=received');
                     code = result.code;
                     break;
@@ -1041,6 +1115,24 @@ function generatePKCE() {
     const verifier = crypto.randomBytes(32).toString('base64url');
     const challenge = crypto.createHash('sha256').update(verifier).digest('base64url');
     return { verifier, challenge };
+}
+
+function buildOAuthAuthorizeUrl({ challenge, state, promptLogin = false } = {}) {
+    const params = new URLSearchParams({
+        client_id: 'app_EMoamEEZ73f0CkXaXp7hrann',
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+        codex_cli_simplified_flow: 'true',
+        id_token_add_organizations: 'true',
+        redirect_uri: 'http://localhost:1455/auth/callback',
+        response_type: 'code',
+        scope: 'openid profile email offline_access',
+        state
+    });
+    if (promptLogin) {
+        params.set('prompt', 'login');
+    }
+    return `https://auth.openai.com/oauth/authorize?${params.toString()}`;
 }
 
 function shouldEnsureClosed(env) {
@@ -1699,6 +1791,9 @@ async function processOAuthLoginFlow(page, options = {}) {
     );
     const retryTargetUrl = options.targetUrl || options.authUrl || options.originalUrl || '';
     const email = String(options.email || Default_EMAIL || '').trim();
+    const runtimeState = options.runtimeState && typeof options.runtimeState === 'object'
+        ? options.runtimeState
+        : {};
     if (!email) {
         throw createAutomationError('OPENAI_LOGIN_EMAIL_REQUIRED', 'OpenAI 登录邮箱不能为空');
     }
@@ -1746,8 +1841,8 @@ async function processOAuthLoginFlow(page, options = {}) {
             };
         }
 
-        const detectOptions = { ...options, timeoutMs: stageDetectTimeoutMs, logger };
-        const actionOptions = { ...options, timeoutMs, logger };
+        const detectOptions = { ...options, timeoutMs: stageDetectTimeoutMs, logger, runtimeState };
+        const actionOptions = { ...options, timeoutMs, logger, runtimeState };
         if (await is_openai_login_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到 OpenAI 邮箱登录页');
             const emailResult = await openAi_login(page, email, actionOptions);
@@ -1898,7 +1993,8 @@ async function run(argv = process.argv.slice(2), deps = {}) {
         ? deps.randomState()
         : crypto.randomBytes(16).toString('hex');
 
-    const authUrl = `https://auth.openai.com/oauth/authorize?client_id=app_EMoamEEZ73f0CkXaXp7hrann&code_challenge=${challenge}&code_challenge_method=S256&codex_cli_simplified_flow=true&id_token_add_organizations=true&redirect_uri=http%3A%2F%2Flocalhost%3A1455%2Fauth%2Fcallback&response_type=code&scope=openid+profile+email+offline_access&state=${state}`;
+    const authUrlBuilder = deps.buildAuthUrl || buildOAuthAuthorizeUrl;
+    const authUrl = authUrlBuilder({ challenge, state, env, deps });
     const targetUrl = argv[0] || authUrl;
 
     log(logger, 'navigate', '导航目标 URL', targetUrl);
@@ -1912,7 +2008,8 @@ async function run(argv = process.argv.slice(2), deps = {}) {
     log(logger, 'inspect', '当前页面 URL/title', `url=${currentUrl} title=${title}`);
 
     const email = String(env.ROXY_OAUTH_EMAIL || Default_EMAIL || '').trim();
-    const oauthResult = await processOAuthLoginFlow(page, {
+    const flow = deps.processOAuthLoginFlow || processOAuthLoginFlow;
+    const oauthResult = await flow(page, {
         ...deps,
         email,
         verifier,
@@ -1972,6 +2069,7 @@ module.exports = {
     DEFAULT_PHONE_VERIFICATION_SMS_API_URL,
     DEFAULT_VERIFICATION_API_URL,
     EMAIL_SUBTITLE_SELECTOR,
+    buildOAuthAuthorizeUrl,
     buildDefaultVerificationApiUrl,
     buildCpaAuthFile,
     captureFailureScreenshot,

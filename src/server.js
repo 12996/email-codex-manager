@@ -23,6 +23,7 @@ import {
 } from './imapService.js';
 import { createReplacementAccountRepository } from './replacementAccounts.js';
 import { createReplacementServices } from './replacementServices.js';
+import { getTotpCodeInfo } from './totpService.js';
 import { accountsPage, editAccountPage, loginPage } from './views.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -40,6 +41,7 @@ export function createApp({
   mailService = { fetchMessages, testConnection },
   cpaCredentialMonitor = null,
   cpaRepairWorker = null,
+  icloudCodeDefaultGmailAccount = config.icloudCodeDefaultGmailAccount,
 } = {}) {
   const app = express();
   const requireAuth = createAuthMiddleware();
@@ -88,6 +90,45 @@ export function createApp({
     }
 
     await sendLatestVerificationCodeResponse(res, { account, accounts, mailService });
+  });
+
+  app.post('/api/icloud-verification-code/latest', requireAuthUnlessLocal, async (req, res) => {
+    const account = normalizeEmail(req.body?.account || req.body?.icloudAccount || '');
+    const gmailAccount = normalizeEmail(
+      req.body?.gmailAccount
+      || req.body?.mailbox
+      || req.body?.gmail
+      || icloudCodeDefaultGmailAccount
+    );
+    if (!gmailAccount) {
+      res.status(400).json({
+        ok: false,
+        error: 'GMAIL_ACCOUNT_REQUIRED',
+        message: 'gmailAccount is required',
+      });
+      return;
+    }
+
+    await sendLatestIcloudVerificationCodeResponse(res, {
+      account,
+      gmailAccount,
+      accounts,
+      mailService,
+    });
+  });
+
+  app.post('/api/2fa-code', requireAuthUnlessLocal, (req, res) => {
+    try {
+      const info = getTotpCodeInfo(req.body?.secret, {
+        timestampMs: req.body?.timestampMs,
+        step: req.body?.step,
+        digits: req.body?.digits,
+        algorithm: req.body?.algorithm,
+      });
+      res.json({ ok: true, ...info });
+    } catch (error) {
+      sendApiError(res, error);
+    }
   });
 
   app.get('/api/verification-code/public/latest', async (req, res) => {
@@ -223,6 +264,7 @@ export function createApp({
       pageSize: req.query?.pageSize,
       status: req.query?.status,
       keyword: req.query?.keyword,
+      circuit_breaker: req.query?.circuit_breaker,
     });
     res.json({ ok: true, ...page });
   });
@@ -358,6 +400,25 @@ export function createApp({
     }
   });
 
+  app.post('/replacement-accounts/:id/replace-2fa', requireAuth, async (req, res) => {
+    const account = replacementAccounts.getAccount(req.params.id);
+    if (!account) {
+      res.status(404).json(errorBody('ACCOUNT_NOT_FOUND', 'replacement account not found'));
+      return;
+    }
+
+    replacementAccounts.markReplacementStarted(account.id);
+    try {
+      const result = await replacementServices.replaceAccountWith2FA(account);
+      const updated = replacementAccounts.markReplacementSuccess(account.id);
+      res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
+    } catch (error) {
+      const updated = replacementAccounts.markReplacementFailure(account.id, error.message);
+      notifyCircuitBreaker(adminNotifications, updated);
+      sendApiError(res, error, { account: updated });
+    }
+  });
+
   app.post('/replacement-accounts/:id/register', requireAuth, async (req, res) => {
     const account = replacementAccounts.getAccount(req.params.id);
     if (!account) {
@@ -367,7 +428,11 @@ export function createApp({
 
     try {
       const result = await replacementServices.registerAccount(account);
-      const updated = replacementAccounts.getAccount(account.id) || account;
+      const mfaSecret = extractRegistrationMfaSecret(result);
+      const latest = replacementAccounts.getAccount(account.id) || account;
+      const updated = mfaSecret
+        ? replacementAccounts.updateAccount(account.id, { ...latest, codex_2fa: mfaSecret })
+        : latest;
       res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
     } catch (error) {
       const updated = replacementAccounts.getAccount(account.id) || account;
@@ -604,6 +669,95 @@ async function sendLatestVerificationCodeResponse(res, { account, accounts, mail
   }
 }
 
+async function sendLatestIcloudVerificationCodeResponse(res, { account, gmailAccount, accounts, mailService }) {
+  const mainAccountEmail = deriveMainGmailAccount(gmailAccount);
+  const mainAccount = accounts.getAccountByGmailEmail(mainAccountEmail);
+  if (!mainAccount) {
+    res.status(404).json({
+      ok: false,
+      account: account || null,
+      gmailAccount,
+      mainAccount: mainAccountEmail,
+      error: 'GMAIL_ACCOUNT_NOT_FOUND',
+      message: '数据库中没有配置用于接收 iCloud 验证码的 Gmail 账号',
+    });
+    return;
+  }
+
+  try {
+    const messages = await mailService.fetchMessages(mainAccount, {
+      readLocation: 'inbox',
+      limit: 30,
+      targetEmail: account || gmailAccount,
+    });
+    const result = findLatestVerificationCodeForTarget(messages, account);
+    if (!result) {
+      res.status(404).json({
+        ok: false,
+        account: account || null,
+        gmailAccount,
+        mainAccount: mainAccountEmail,
+        code: null,
+        error: 'CODE_NOT_FOUND',
+        message: '未找到最近的 6 位 iCloud 验证码邮件',
+      });
+      return;
+    }
+
+    res.json({
+      ok: true,
+      account: account || null,
+      gmailAccount,
+      mainAccount: mainAccountEmail,
+      code: result.code,
+      targetMatched: result.targetMatched,
+      from: result.message.from || '',
+      subject: result.message.subject || '',
+      date: result.message.date || '',
+    });
+  } catch (error) {
+    const status = error.code === 'AUTH_FAILED' ? 401 : 502;
+    res.status(status).json({
+      ok: false,
+      account: account || null,
+      gmailAccount,
+      mainAccount: mainAccountEmail,
+      error: error.code || 'IMAP_ERROR',
+      message: error.message || 'IMAP 请求失败',
+    });
+  }
+}
+
+function findLatestVerificationCodeForTarget(messages, targetEmail) {
+  const target = normalizeEmail(targetEmail);
+  if (target) {
+    const targeted = messages.filter((message) => messageMatchesRecipient(message, target));
+    const targetedResult = findLatestVerificationCode(targeted);
+    if (targetedResult) {
+      return { ...targetedResult, targetMatched: true };
+    }
+  }
+
+  const fallbackResult = findLatestVerificationCode(messages);
+  return fallbackResult ? { ...fallbackResult, targetMatched: false } : null;
+}
+
+function messageMatchesRecipient(message, targetEmail) {
+  const recipients = [
+    ...(message?.toAddresses || []),
+    ...(message?.ccAddresses || []),
+    ...(message?.deliveredToAddresses || []),
+    message?.to,
+    message?.cc,
+    message?.from,
+  ];
+  return recipients.some((value) => String(value || '').toLowerCase().includes(targetEmail));
+}
+
+function normalizeEmail(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
 function isLocalRequest(req) {
   const remoteAddress = String(req.ip || req.socket?.remoteAddress || '').toLowerCase();
   return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remoteAddress);
@@ -629,13 +783,13 @@ function sendApiError(res, error, extra = {}) {
 
 function notifyCircuitBreaker(adminNotifications, account) {
   if (!adminNotifications?.createNotification) return;
-  if (account?.status !== 'banned' || Number(account?.consecutive_replace_failures || 0) !== 5) return;
+  if (!account?.circuit_breaker_at || Number(account?.consecutive_replace_failures || 0) !== 5) return;
   const email = String(account.email || '').trim().toLowerCase();
   adminNotifications.createNotification({
     type: 'cpa_repair_circuit_breaker',
     severity: 'critical',
     title: '账号已触发补号熔断',
-    message: `${email} 连续自动补号失败 5 次，已自动标记为 banned，不再进入 CPA 自动补号队列。`,
+    message: `${email} 连续自动补号失败 5 次，账号已自动熔断，不再进入 CPA 自动补号队列。`,
     account_id: account.id,
     email,
   });
@@ -643,6 +797,15 @@ function notifyCircuitBreaker(adminNotifications, account) {
 
 function errorBody(error, message) {
   return { ok: false, error, message };
+}
+
+function extractRegistrationMfaSecret(result) {
+  const secret = String(
+    result?.childResult?.registrationMfa?.secret
+    || result?.registrationMfa?.secret
+    || ''
+  ).trim();
+  return /^[A-Z2-7]{16,}$/.test(secret) ? secret : '';
 }
 
 function inferErrorCode(error) {

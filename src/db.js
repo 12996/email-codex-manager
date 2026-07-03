@@ -39,7 +39,7 @@ function initializeSchema(db) {
       sms_last_error TEXT,
       activation_method TEXT,
       activated_at TEXT,
-      status TEXT NOT NULL DEFAULT 'pending',
+      status TEXT NOT NULL DEFAULT 'for_sale',
       status_updated_at TEXT,
       status_note TEXT,
       replacement_count INTEGER NOT NULL DEFAULT 0,
