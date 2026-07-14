@@ -32,6 +32,10 @@
 | `ROXY_BROWSER_SORT_NUM` | RoxyBrowser 浏览器窗口序号，即窗口列表里的 `sortNum` / `windowSortNum` / `SN` | Roxy 窗口定位三选一 | 空 |
 | `ROXY_BROWSER_WINDOW_NAME` | RoxyBrowser 浏览器窗口名称；名称重复时不建议使用 | Roxy 窗口定位三选一 | 空 |
 | `ROXY_CDP_ENDPOINT` | 已打开 Roxy 窗口的 CDP WebSocket 地址；配置后跳过开窗、清缓存、随机指纹等准备步骤 | 调试复用窗口时可选 | 空 |
+| `ROXY_REGISTER_BROWSER_*` / `ROXY_REGISTER_CDP_ENDPOINT` | 注册动作专用 Roxy 窗口或 CDP；支持 `BROWSER_DIR_ID`、`BROWSER_SORT_NUM`、`BROWSER_WINDOW_NAME` | 注册、登录、补号分窗口时可选 | 空 |
+| `ROXY_REPLACE_BROWSER_*` / `ROXY_REPLACE_CDP_ENDPOINT` | 普通补号动作专用 Roxy 窗口或 CDP | 注册、登录、补号分窗口时可选 | 空 |
+| `ROXY_REPLACE_2FA_BROWSER_*` / `ROXY_REPLACE_2FA_CDP_ENDPOINT` | 2FA 补号动作专用 Roxy 窗口或 CDP | 注册、登录、补号分窗口时可选 | 空 |
+| `ROXY_2FA_LOGIN_BROWSER_*` / `ROXY_2FA_LOGIN_CDP_ENDPOINT` | 2FA 登录动作专用 Roxy 窗口或 CDP | 注册、登录、补号分窗口时可选 | 空 |
 | `ROXY_KEEP_OPEN` | Roxy 调试/上线运行策略：`1` 保留窗口，`0` 流程结束关闭窗口 | 否 | `1` |
 | `ROXY_HEADLESS` | Roxy 是否无头运行；`auto` 表示按 `ROXY_KEEP_OPEN` 推导 | 否 | `auto` |
 | `CPA_URL` | CPA 管理接口基础地址 | 使用 CPA 上传/监控时必填 | `http://localhost:8317` |
@@ -104,6 +108,17 @@ ROXY_BROWSER_SORT_NUM=目标浏览器窗口SN
 ```
 
 `ROXY_API_BASE_URL` 和 `ROXY_API_PORT` 二选一即可；窗口定位参数 `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三选一即可。生产或多人环境建议优先使用 `ROXY_BROWSER_SORT_NUM` 或 `ROXY_BROWSER_DIR_ID`，避免窗口名称重复导致选错窗口。
+
+如果注册、登录、补号需要使用不同 Roxy 窗口，可使用动作级变量覆盖全局窗口定位：
+
+```env
+ROXY_REGISTER_BROWSER_SORT_NUM=617-8
+ROXY_2FA_LOGIN_BROWSER_SORT_NUM=617-9
+ROXY_REPLACE_BROWSER_SORT_NUM=617-10
+ROXY_REPLACE_2FA_BROWSER_SORT_NUM=617-11
+```
+
+动作级窗口变量优先于全局 `ROXY_BROWSER_DIR_ID` / `ROXY_BROWSER_SORT_NUM` / `ROXY_BROWSER_WINDOW_NAME`。当动作级窗口变量存在且未配置动作级 `*_CDP_ENDPOINT` 时，子进程会清除全局 `ROXY_CDP_ENDPOINT`，避免所有动作误复用同一个已打开窗口。
 
 ## RoxyBrowser 参数获取
 

@@ -168,6 +168,34 @@ test('registerAccount injects per-account external email code API URL', async ()
   assert.equal(calls[0].options.env.REGISTRATION_EMAIL_CODE_API_URL, 'https://example.invalid/latest-code');
 });
 
+test('registerAccount injects replacement account password for OpenAI registration', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    registerScriptPath: 'src/auto/roxy_register_openai.js',
+    baseEnv: {
+      ROXY_REGISTER_PASSWORD: 'old-password',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.registerAccount({
+    id: 12,
+    email: ' user@example.com ',
+    password: ' AccountPass12! ',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].options.env.ROXY_REGISTER_PASSWORD, 'AccountPass12!');
+});
+
 test('registerAccount injects per-account external email code API for iCloud account when configured', async () => {
   const calls = [];
   const services = createReplacementServices({
@@ -353,6 +381,123 @@ test('replaceAccountWith2FA passes numeric codex_2fa as one-time 2fa code', asyn
   assert.equal(calls[0].options.env.ROXY_OAUTH_PASSWORD, 'account-password');
   assert.equal(calls[0].options.env.ROXY_OAUTH_2FA_CODE, '654321');
   assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_OAUTH_TOTP_SECRET'), false);
+});
+
+test('loginAccountWith2FA runs roxy 2fa login script with password and codex 2fa env', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    twoFaLoginScriptPath: 'src/auto/roxy_2fa_login.js',
+    baseEnv: {
+      ROXY_2FA_EMAIL: 'old@example.com',
+      ROXY_OAUTH_EMAIL: 'old-oauth@example.com',
+      ROXY_OAUTH_PASSWORD: 'old-password',
+      ROXY_OAUTH_TOTP_SECRET: 'OLDSECRET',
+      ROXY_OAUTH_2FA_CODE: '111111',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.loginAccountWith2FA({
+    id: 20,
+    email: ' user@example.com ',
+    password: ' account-password ',
+    codex_2fa: ' JBSWY3DPEHPK3PXP ',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.deepEqual(calls[0].args, ['src/auto/roxy_2fa_login.js']);
+  assert.equal(calls[0].options.env.ROXY_2FA_EMAIL, 'user@example.com');
+  assert.equal(calls[0].options.env.ROXY_OAUTH_EMAIL, 'user@example.com');
+  assert.equal(calls[0].options.env.ROXY_OAUTH_PASSWORD, 'account-password');
+  assert.equal(calls[0].options.env.ROXY_OAUTH_TOTP_SECRET, 'JBSWY3DPEHPK3PXP');
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_OAUTH_2FA_CODE'), false);
+});
+
+test('loginAccountWith2FA passes numeric codex_2fa as one-time 2fa code', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    twoFaLoginScriptPath: 'src/auto/roxy_2fa_login.js',
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.loginAccountWith2FA({
+    email: 'user@example.com',
+    password: 'account-password',
+    codex_2fa: '654321',
+  });
+
+  assert.equal(calls[0].options.env.ROXY_OAUTH_2FA_CODE, '654321');
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_OAUTH_TOTP_SECRET'), false);
+});
+
+test('automation actions can use separate Roxy browser targets from action-specific env', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    nodePath: 'node-bin',
+    scriptPath: 'src/auto/roxy_oauth_login.js',
+    twoFaScriptPath: 'src/auto/roxy_2fa_auth_login.js',
+    twoFaLoginScriptPath: 'src/auto/roxy_2fa_login.js',
+    registerScriptPath: 'src/auto/roxy_register_openai.js',
+    baseEnv: {
+      ROXY_BROWSER_DIR_ID: 'global-dir',
+      ROXY_BROWSER_SORT_NUM: 'global-sort',
+      ROXY_BROWSER_WINDOW_NAME: 'global-window',
+      ROXY_CDP_ENDPOINT: 'ws://global-cdp',
+      ROXY_REPLACE_BROWSER_WINDOW_NAME: 'replace-window',
+      ROXY_REPLACE_2FA_BROWSER_SORT_NUM: '11',
+      ROXY_2FA_LOGIN_BROWSER_DIR_ID: 'login-dir',
+      ROXY_REGISTER_BROWSER_SORT_NUM: '8',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccount({ email: 'replace@example.com' });
+  await services.replaceAccountWith2FA({ email: 'replace-2fa@example.com' });
+  await services.loginAccountWith2FA({ email: 'login@example.com' });
+  await services.registerAccount({ email: 'register@example.com' });
+
+  assert.equal(calls[0].options.env.ROXY_BROWSER_WINDOW_NAME, 'replace-window');
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_BROWSER_DIR_ID'), false);
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_BROWSER_SORT_NUM'), false);
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_CDP_ENDPOINT'), false);
+
+  assert.equal(calls[1].options.env.ROXY_BROWSER_SORT_NUM, '11');
+  assert.equal(Object.hasOwn(calls[1].options.env, 'ROXY_BROWSER_DIR_ID'), false);
+  assert.equal(Object.hasOwn(calls[1].options.env, 'ROXY_BROWSER_WINDOW_NAME'), false);
+  assert.equal(Object.hasOwn(calls[1].options.env, 'ROXY_CDP_ENDPOINT'), false);
+
+  assert.equal(calls[2].options.env.ROXY_BROWSER_DIR_ID, 'login-dir');
+  assert.equal(Object.hasOwn(calls[2].options.env, 'ROXY_BROWSER_SORT_NUM'), false);
+  assert.equal(Object.hasOwn(calls[2].options.env, 'ROXY_BROWSER_WINDOW_NAME'), false);
+  assert.equal(Object.hasOwn(calls[2].options.env, 'ROXY_CDP_ENDPOINT'), false);
+
+  assert.equal(calls[3].options.env.ROXY_BROWSER_SORT_NUM, '8');
+  assert.equal(Object.hasOwn(calls[3].options.env, 'ROXY_BROWSER_DIR_ID'), false);
+  assert.equal(Object.hasOwn(calls[3].options.env, 'ROXY_BROWSER_WINDOW_NAME'), false);
+  assert.equal(Object.hasOwn(calls[3].options.env, 'ROXY_CDP_ENDPOINT'), false);
 });
 
 test('replaceAccount creates automation run and writes child logs', async () => {

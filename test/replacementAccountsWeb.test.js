@@ -62,6 +62,7 @@ test('GET /replacement-ui requires login and serves the replacement account fron
     assert.equal(authenticated.status, 200);
     assert.match(html, /补号列表/);
     assert.match(html, /一键补号/);
+    assert.match(html, /一键验活/);
     assert.match(html, /新增账号/);
     assert.match(html, /web\/styles.css/);
     assert.match(html, /web\/app.js/);
@@ -106,18 +107,25 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
     '/fetch-json',
     '/replace',
     '/replace-2fa',
+    '/login-2fa',
+    '/healthcheck-banned',
     '/status',
   ]) {
     assert.match(appJs, new RegExp(endpoint.replaceAll('/', '\\/')));
   }
 
   assert.match(html, /一键补号/);
+  assert.match(html, /一键验活/);
   assert.match(html, /新增账号/);
   assert.match(html, /name="password"/);
   assert.match(appJs, /获取验证码/);
   assert.match(appJs, /获取 JSON/);
   assert.match(appJs, /执行补号/);
   assert.match(appJs, /2FA补号/);
+  assert.match(appJs, /2FA登录/);
+  assert.match(appJs, /一键验活/);
+  assert.match(appJs, /healthcheckBannedAccounts/);
+  assert.match(appJs, /\/replacement-accounts\/healthcheck-banned/);
   assert.match(appJs, /状态已更新/);
   assert.match(appJs, /删除账号/);
 });
@@ -155,6 +163,7 @@ test('replacement frontend exposes new Chinese status filters and inline status 
 
   for (const [value, label] of [
     ['unregistered', '未注册'],
+    ['registered', '已注册'],
     ['pending_activation', '待开通'],
     ['plus_active', '开通 plus'],
     ['cpa_mounted', 'CPA 挂载'],
@@ -168,6 +177,7 @@ test('replacement frontend exposes new Chinese status filters and inline status 
   }
 
   assert.match(appJs, /const statusLabels = \{/);
+  assert.match(appJs, /registered:\s*'已注册'/);
   assert.match(appJs, /plus_active:\s*'开通 plus'/);
   assert.match(appJs, /cpa_mounted:\s*'CPA 挂载'/);
   assert.match(appJs, /renderStatusSelect\(account\)/);
@@ -187,12 +197,33 @@ test('replacement status inline control is large and color-coded by status', () 
   assert.match(css, /\.status-select\s*{[^}]*min-width:\s*128px/s);
   assert.match(css, /\.status-select\s*{[^}]*padding:\s*10px 14px/s);
   assert.match(css, /\.status-select\.for_sale\s*{[^}]*background:\s*#e7f0ff/s);
+  assert.match(css, /\.status-select\.registered\s*{[^}]*background:\s*#e8efff/s);
   assert.match(css, /\.status-select\.plus_active\s*{[^}]*background:\s*#dff8ea/s);
   assert.match(css, /\.status-select\.cpa_mounted\s*{[^}]*background:\s*#e4fbf8/s);
   assert.match(css, /\.status-select\.banned\s*{[^}]*background:\s*#ffe6e9/s);
   assert.match(css, /\.status-select\.sold\s*{[^}]*background:\s*#f1ebff/s);
   assert.match(css, /\.status-select option\.for_sale\s*{[^}]*background:\s*#e7f0ff/s);
+  assert.match(css, /\.status-select option\.registered\s*{[^}]*background:\s*#e8efff/s);
   assert.match(css, /\.status-select option\.banned\s*{[^}]*background:\s*#ffe6e9/s);
+});
+
+test('replacement frontend exposes dynamic activation method editing and management', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+  const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');
+  const css = readFileSync(join(process.cwd(), 'web', 'styles.css'), 'utf8');
+
+  assert.match(html, /id="manageActivationMethodsButton"/);
+  assert.match(html, /id="activationMethodDialog"/);
+  assert.match(html, /name="activation_method"/);
+  assert.match(html, /name="name"/);
+  assert.match(appJs, /replacement-activation-methods/);
+  assert.match(appJs, /activationMethods/);
+  assert.match(appJs, /renderActivationMethodSelect\(account\)/);
+  assert.match(appJs, /changeActivationMethod/);
+  assert.match(appJs, /\/replacement-accounts\/\$\{id\}\/activation-method/);
+  assert.match(appJs, /历史值/);
+  assert.match(css, /\.activation-method-select\s*{[^}]*min-width:\s*128px/s);
+  assert.match(css, /\.activation-method-select\s*{[^}]*padding:\s*10px 14px/s);
 });
 
 test('replacement account table fully displays required runtime fields', () => {

@@ -795,6 +795,52 @@ function isExcludedPhoneCode(code, options = {}) {
     return Boolean(excludedCode && String(code || '').trim() === excludedCode);
 }
 
+function sanitizePhoneCodeResponsePreview(text) {
+    return String(text || '')
+        .replace(/\b\d{6}\b/g, '[redacted-code]')
+        .replace(/[A-Fa-f0-9]{24,}/g, '[redacted-token]')
+        .slice(0, 300);
+}
+
+function isAccessRestrictedPhoneCodeResponse(text) {
+    const normalized = String(text || '').toLowerCase();
+    return normalized.includes('access restricted')
+        || normalized.includes('访问受限');
+}
+
+function extractPhoneVerificationCode(text) {
+    const withoutStyles = String(text || '')
+        .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/#[0-9a-f]{6}\b/gi, ' ');
+    const match = withoutStyles.match(/\b\d{6}\b/);
+    return match ? match[0] : '';
+}
+
+async function fetchPhoneCodeTextViaBrowserPage(page, smsApiUrl, timeoutMs) {
+    if (!page || typeof page.context !== 'function') {
+        return null;
+    }
+    const context = page.context();
+    if (!context || typeof context.newPage !== 'function') {
+        return null;
+    }
+    const smsPage = await context.newPage();
+    try {
+        await smsPage.goto(smsApiUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+        if (typeof smsPage.locator === 'function') {
+            return await smsPage.locator('body').textContent({ timeout: timeoutMs }).catch(() => '');
+        }
+        if (typeof smsPage.textContent === 'function') {
+            return await smsPage.textContent('body', { timeout: timeoutMs }).catch(() => '');
+        }
+        return '';
+    } finally {
+        if (typeof smsPage.close === 'function') {
+            await smsPage.close().catch(() => {});
+        }
+    }
+}
+
 function resolvePhoneVerificationSmsApiUrl(options = {}) {
     return options.smsApiUrl
         || process.env.PHONE_VERIFICATION_SMS_API_URL
@@ -843,7 +889,7 @@ async function openAi_phone_add(page, options = {}) {
         }
         await phoneInput.fill(phone);
         // 点击发送前先记录短信 API 当前最新码，避免后续误用上一轮验证码。
-        await snapshotExistingPhoneCode(options);
+        await snapshotExistingPhoneCode({ ...options, page });
         logConfigured(options, 'openai-phone-add', '点击 Continue');
         await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
         logConfigured(options, 'openai-phone-add', '手机号提交完成');
@@ -903,9 +949,21 @@ async function fetchPhoneVerificationCodeOnce(options = {}, attempt = 1, maxAtte
         throw createAutomationError('OPENAI_PHONE_CODE_FETCH_FAILED', '当前运行环境不支持通过短信 API 获取手机验证码');
     }
 
-    const match = String(text || '').match(/\b\d{6}\b/);
+    if (isAccessRestrictedPhoneCodeResponse(text)) {
+        const browserText = await fetchPhoneCodeTextViaBrowserPage(options.page, smsApiUrl, timeoutMs);
+        if (browserText && !isAccessRestrictedPhoneCodeResponse(browserText)) {
+            text = browserText;
+        } else {
+            throw createAutomationError('OPENAI_PHONE_CODE_ACCESS_RESTRICTED', '短信验证码 API 返回访问受限页面，自动化进程无法读取验证码', {
+                smsApiUrl,
+                responsePreview: sanitizePhoneCodeResponsePreview(browserText || text)
+            });
+        }
+    }
+
+    const code = extractPhoneVerificationCode(text);
     return {
-        code: match ? match[0] : '',
+        code,
         smsApiUrl
     };
 }
@@ -929,7 +987,7 @@ async function openAi_phone_code(page, options = {}) {
                 const currentStage = await detectPostPhoneCodeStage(page, options);
                 if (currentStage) return currentStage;
 
-                const result = await fetchPhoneVerificationCodeOnce(options, attempt, maxAttempts);
+                const result = await fetchPhoneVerificationCodeOnce({ ...options, page }, attempt, maxAttempts);
                 // 如果 API 仍返回发送前旧码，继续轮询，不填入页面。
                 if (result.code && !isExcludedPhoneCode(result.code, options)) {
                     logConfigured(options, 'openai-phone-code', '手机验证码获取完成', 'code=received');
@@ -1013,10 +1071,21 @@ async function detectPostPhoneCodeStage(page, options = {}) {
 async function is_codex_login_page(page, options = {}) {
     const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
     const bodyText = (await getBodyText(page, timeoutMs)).toLowerCase();
+    const title = typeof page.title === 'function' ? String(await page.title().catch(() => '') || '').toLowerCase() : '';
+    const url = typeof page.url === 'function' ? String(page.url() || '') : '';
+    if (url.includes('/log-in/password')
+        || bodyText.includes('enter your password')
+        || bodyText.includes('forgot password?')) {
+        return false;
+    }
     const continueButton = page.getByRole('button', { name: 'Continue', exact: true });
     const hasContinue = await isVisible(continueButton, timeoutMs);
-    const hasCodexKeywords = bodyText.includes('codex')
-        && (bodyText.includes('chatgpt') || bodyText.includes('chat history') || bodyText.includes('sign in to'));
+    const combinedText = `${title} ${bodyText}`;
+    const hasCodexKeywords = (
+        combinedText.includes('sign in to codex')
+        || combinedText.includes('continue to codex')
+        || combinedText.includes('authorize codex')
+    ) && combinedText.includes('chatgpt');
     return hasContinue && hasCodexKeywords;
 }
 

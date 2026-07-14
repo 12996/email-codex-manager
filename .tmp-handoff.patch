@@ -1,0 +1,13 @@
+diff --git a/docs/work/handoff.md b/docs/work/handoff.md
+--- a/docs/work/handoff.md
++++ b/docs/work/handoff.md
+@@ -3,0 +4,9 @@
++
++## 2026-07-14 补号账号开通方式下拉与页面维护
++
++- 来源工作日志：`docs/work/2026-07-14-replacement-activation-method.md`
++- change：`docs/changes/CHG-077-replacement-activation-method-catalog.md`，状态 `implemented`，尚未合并到 PRD。
++- 当前进展：已新增 `replacement_activation_methods` 目录表和 6 个初始方式（越南直卡、`upi`、`ideal`、波兰、瑞士、`pix 直卡`）；补号列表开通方式已改为行内下拉，调用 `PATCH /replacement-accounts/:id/activation-method` 保存；“管理开通方式”弹窗可通过 `POST /replacement-activation-methods` 新增方式；历史目录外值以“历史值”保留。API 文档、设计文档和实施计划已同步。
++- 验证：专项测试通过 74/74；全部 JavaScript 测试通过 330/330；`node --check` 和 `git diff --check` 通过；重启 `13100` 服务后认证接口返回 6 个初始方式，`/replacement-ui` 页面模板包含新控件。`npm test` 仅因额外脚本 `test/test-verification-code.mjs` 连接未启动的 `localhost:3100` 而出现 `ECONNREFUSED`。
++- 下一步：代码实现和文档已完成；如需视觉/点击级验收，打开可用浏览器访问 `http://localhost:13100/replacement-ui`，验证下拉修改、新增方式、刷新持久化和状态下拉回归。当前 in-app browser 不可用，已完成认证 HTTP 级运行态验证。
++- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。

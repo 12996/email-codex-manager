@@ -1,5 +1,6 @@
 const state = {
   accounts: [],
+  activationMethods: [],
   filtered: [],
   selectedIds: new Set(),
   activity: [],
@@ -13,6 +14,7 @@ const state = {
 
 const statusLabels = {
   unregistered: '未注册',
+  registered: '已注册',
   pending_activation: '待开通',
   plus_active: '开通 plus',
   cpa_mounted: 'CPA 挂载',
@@ -25,6 +27,7 @@ const statusLabels = {
 
 const statusOptions = [
   'unregistered',
+  'registered',
   'pending_activation',
   'plus_active',
   'cpa_mounted',
@@ -52,7 +55,7 @@ const $ = (selector) => document.querySelector(selector);
 
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
-  loadAccounts();
+  loadInitialData();
 });
 
 function bindEvents() {
@@ -75,10 +78,13 @@ function bindEvents() {
     state.pagination.page += 1;
     loadAccounts();
   });
+  $('#healthcheckBannedButton').addEventListener('click', healthcheckBannedAccounts);
   $('#batchReplaceButton').addEventListener('click', batchReplace);
+  $('#manageActivationMethodsButton').addEventListener('click', openActivationMethodDialog);
   $('#newAccountButton').addEventListener('click', () => openAccountDialog());
   $('#newAccountTopButton').addEventListener('click', () => openAccountDialog());
   $('#accountForm').addEventListener('submit', saveAccount);
+  $('#activationMethodForm').addEventListener('submit', saveActivationMethod);
   $('#statusForm').addEventListener('submit', saveStatus);
   $('#clearActivity').addEventListener('click', () => {
     state.activity = [];
@@ -91,6 +97,25 @@ function bindEvents() {
     button.addEventListener('click', () => runQuickAction(button.dataset.quick));
   });
   document.addEventListener('click', closeOpenMenus);
+}
+
+async function loadInitialData() {
+  await loadActivationMethods();
+  await loadAccounts();
+}
+
+async function loadActivationMethods() {
+  try {
+    const body = await api('/replacement-activation-methods');
+    state.activationMethods = body.methods || [];
+    renderActivationMethodOptions();
+    renderActivationMethodList();
+  } catch (error) {
+    state.activationMethods = [];
+    renderActivationMethodOptions();
+    renderActivationMethodList();
+    toast(error.message);
+  }
 }
 
 async function loadAccounts() {
@@ -156,7 +181,7 @@ function accountRow(account) {
       <td>${renderLimitedField(account, 'codex_2fa', account.codex_2fa, { className: 'field-raw' })}</td>
       <td>${renderLimitedField(account, 'password', account.password, { className: 'field-raw' })}</td>
       <td>${renderWrappedField(account.remark)}</td>
-      <td>${renderLimitedField(account, 'activation_method', account.activation_method)}</td>
+      <td>${renderActivationMethodSelect(account)}</td>
       <td>${renderWrappedField(account.activated_at, { className: 'field-raw' })}</td>
       <td>${renderStatusSelect(account)}</td>
       <td>${renderLimitedField(account, 'public_code_key', account.public_code_key, { className: 'field-raw' })}<div class="muted">${account.public_code_enabled ? '公开验证码已启用' : '公开验证码未启用'}</div></td>
@@ -172,6 +197,7 @@ function accountRow(account) {
             <button type="button" data-action="register" data-id="${account.id}">✚ 注册</button>
             <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
             <button type="button" data-action="replace-2fa" data-id="${account.id}">⟳ 2FA补号</button>
+            <button type="button" data-action="login-2fa" data-id="${account.id}">🔑 2FA登录</button>
             ${account.circuit_breaker_at ? `<button type="button" data-action="reset-circuit-breaker" data-id="${account.id}">解除熔断</button>` : ''}
             <button type="button" data-action="copy-public-code-url" data-id="${account.id}">⧉ 复制公开验证码 URL</button>
             <button class="danger" type="button" data-action="delete" data-id="${account.id}">🗑 删除账号</button>
@@ -184,7 +210,7 @@ function accountRow(account) {
 }
 
 function renderStatusSelect(account) {
-  const status = statusOptions.includes(account.status) ? account.status : 'for_sale';
+  const status = statusOptions.includes(account.status) ? account.status : 'unregistered';
   const options = statusOptions.map((value) => `
     <option class="${escapeHtml(value)}" value="${value}" ${value === status ? 'selected' : ''}>${statusLabels[value]}</option>
   `).join('');
@@ -196,6 +222,26 @@ function renderStatusSelect(account) {
       </select>
       ${breakerBadge}
     </div>
+  `;
+}
+
+function renderActivationMethodSelect(account) {
+  const current = String(account.activation_method || '').trim();
+  const matchedMethod = state.activationMethods.find((method) => method.name.toLowerCase() === current.toLowerCase());
+  const selectedValue = matchedMethod?.name || current;
+  const options = [
+    '<option value="">未设置</option>',
+    ...(current && !matchedMethod
+      ? [`<option value="${escapeHtml(current)}" selected>${escapeHtml(current)}（历史值）</option>`]
+      : []),
+    ...state.activationMethods.map((method) => `
+      <option value="${escapeHtml(method.name)}" ${method.name === selectedValue ? 'selected' : ''}>${escapeHtml(method.name)}</option>
+    `),
+  ].join('');
+  return `
+    <select class="activation-method-select" data-id="${account.id}" aria-label="修改开通方式">
+      ${options}
+    </select>
   `;
 }
 
@@ -252,6 +298,9 @@ function bindRowEvents() {
   document.querySelectorAll('.status-select').forEach((select) => {
     select.addEventListener('change', () => changeStatus(Number(select.dataset.id), select.value, select));
   });
+  document.querySelectorAll('.activation-method-select').forEach((select) => {
+    select.addEventListener('change', () => changeActivationMethod(Number(select.dataset.id), select.value, select));
+  });
   document.querySelectorAll('[data-action]').forEach((button) => {
     button.addEventListener('click', (event) => {
       event.stopPropagation();
@@ -273,6 +322,7 @@ async function handleAction(action, id, dataset = {}) {
   if (action === 'register') return registerAccount(account);
   if (action === 'replace') return replaceAccount(account);
   if (action === 'replace-2fa') return replaceAccountWith2FA(account);
+  if (action === 'login-2fa') return loginAccountWith2FA(account);
   if (action === 'reset-circuit-breaker') return resetCircuitBreaker(account);
   if (action === 'toggle-public-code') return togglePublicCode(account);
   if (action === 'copy-public-code-url') return copyPublicCodeUrl(account);
@@ -283,12 +333,61 @@ function openAccountDialog(account = null) {
   const form = $('#accountForm');
   form.reset();
   $('#dialogTitle').textContent = account ? '编辑账号' : '新增账号';
+  renderActivationMethodOptions(account?.activation_method || '');
   for (const field of ['id', 'email', 'phone', 'sms_api', 'email_code_api', 'codex_2fa', 'password', 'activation_method', 'activated_at', 'status', 'remark']) {
-    form.elements[field].value = account?.[field] || (field === 'status' ? 'for_sale' : '');
+    form.elements[field].value = account?.[field] || (field === 'status' ? 'unregistered' : '');
   }
   form.elements.public_code_enabled.checked = Boolean(Number(account?.public_code_enabled || 0));
   form.elements.public_code_key.value = account?.public_code_key || '';
   $('#accountDialog').showModal();
+}
+
+function renderActivationMethodOptions(selectedValue = '') {
+  const select = document.querySelector('#accountForm select[name="activation_method"]');
+  if (!select) return;
+  const current = String(selectedValue || '').trim();
+  const matchedMethod = state.activationMethods.find((method) => method.name.toLowerCase() === current.toLowerCase());
+  const options = [
+    '<option value="">未设置</option>',
+    ...(current && !matchedMethod
+      ? [`<option value="${escapeHtml(current)}">${escapeHtml(current)}（历史值）</option>`]
+      : []),
+    ...state.activationMethods.map((method) => `<option value="${escapeHtml(method.name)}">${escapeHtml(method.name)}</option>`),
+  ];
+  select.innerHTML = options.join('');
+  select.value = matchedMethod?.name || current;
+}
+
+function openActivationMethodDialog() {
+  renderActivationMethodList();
+  $('#activationMethodDialog').showModal();
+}
+
+function renderActivationMethodList() {
+  const list = $('#activationMethodList');
+  if (!list) return;
+  list.innerHTML = state.activationMethods.length
+    ? state.activationMethods.map((method) => `<li>${escapeHtml(method.name)}</li>`).join('')
+    : '<li class="muted">暂无开通方式</li>';
+}
+
+async function saveActivationMethod(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const name = form.elements.name.value.trim();
+  try {
+    await api('/replacement-activation-methods', {
+      method: 'POST',
+      body: JSON.stringify({ name }),
+    });
+    form.reset();
+    await loadActivationMethods();
+    renderAccounts();
+    addActivity('新增开通方式', name);
+    toast('开通方式已新增');
+  } catch (error) {
+    toast(error.message);
+  }
 }
 
 async function saveAccount(event) {
@@ -361,7 +460,7 @@ async function togglePublicCode(account) {
 function openStatusDialog(account) {
   const form = $('#statusForm');
   form.elements.id.value = account.id;
-  form.elements.status.value = account.status === 'replacing' ? 'for_sale' : account.status;
+  form.elements.status.value = account.status === 'replacing' ? 'registered' : account.status;
   form.elements.status_note.value = account.status_note || '';
   $('#statusDialog').showModal();
 }
@@ -390,12 +489,12 @@ async function saveStatus(event) {
 function applyStatusSelectClass(select, status) {
   if (!select) return;
   statusOptions.forEach((value) => select.classList.remove(value));
-  select.classList.add(statusOptions.includes(status) ? status : 'for_sale');
+  select.classList.add(statusOptions.includes(status) ? status : 'unregistered');
 }
 
 async function changeStatus(id, status, select = null) {
   const account = state.accounts.find((item) => item.id === id);
-  const previousStatus = account?.status || 'for_sale';
+  const previousStatus = account?.status || 'unregistered';
   applyStatusSelectClass(select, status);
   if (account) account.status = status;
   try {
@@ -408,6 +507,25 @@ async function changeStatus(id, status, select = null) {
   } catch (error) {
     toast(error.message);
     if (account) account.status = previousStatus;
+    renderAccounts();
+  }
+}
+
+async function changeActivationMethod(id, activationMethod, select = null) {
+  const account = state.accounts.find((item) => item.id === id);
+  const previousMethod = account?.activation_method || '';
+  if (account) account.activation_method = activationMethod || null;
+  try {
+    await api(`/replacement-accounts/${id}/activation-method`, {
+      method: 'PATCH',
+      body: JSON.stringify({ activation_method: activationMethod }),
+    });
+    addActivity('开通方式已更新', `ID ${id} -> ${activationMethod || '未设置'}`);
+    await loadAccounts();
+  } catch (error) {
+    toast(error.message);
+    if (account) account.activation_method = previousMethod || null;
+    if (select) select.value = previousMethod;
     renderAccounts();
   }
 }
@@ -465,6 +583,19 @@ async function replaceAccountWith2FA(account) {
   }
 }
 
+async function loginAccountWith2FA(account) {
+  try {
+    await api(`/replacement-accounts/${account.id}/login-2fa`, { method: 'POST' });
+    addActivity('2FA登录成功', account.email);
+    toast('已完成 2FA 登录，凭证文件已生成');
+    await loadAccounts();
+  } catch (error) {
+    addActivity('2FA登录失败', account.email);
+    toast(error.message);
+    await loadAccounts();
+  }
+}
+
 async function resetCircuitBreaker(account) {
   if (!confirm(`确认解除 ${account.email} 的补号熔断？将清零连续失败次数，账号状态保持不变。`)) return;
   try {
@@ -491,10 +622,26 @@ async function registerAccount(account) {
   }
 }
 
+async function healthcheckBannedAccounts() {
+  if (!confirm('确认对 plus_active、cpa_mounted、for_sale、sold 状态账号执行一键验活？每个账号只检查最近 5 封邮件。')) return;
+  try {
+    const body = await api('/replacement-accounts/healthcheck-banned', { method: 'POST' });
+    const result = body.result || {};
+    const detail = `检测 ${result.checked || 0} 个，新封禁 ${result.banned || 0} 个，未命中 ${result.clean || 0} 个，失败 ${result.failed || 0} 个`;
+    addActivity('一键验活', detail);
+    toast(detail);
+    await loadAccounts();
+  } catch (error) {
+    addActivity('一键验活失败', error.message);
+    toast(error.message);
+    await loadAccounts();
+  }
+}
+
 async function batchReplace() {
   const candidates = selectedAccounts().length
     ? selectedAccounts()
-    : state.accounts.filter((account) => ['banned', 'failed', 'for_sale', 'pending_activation', 'plus_active'].includes(account.status));
+    : state.accounts.filter((account) => ['banned', 'failed', 'for_sale', 'registered', 'pending_activation', 'plus_active'].includes(account.status));
   if (!candidates.length) {
     toast('没有可补号账号');
     return;
@@ -565,12 +712,13 @@ function renderStatusLegend(counts) {
     banned: '#f24e5c',
     cpa_mounted: '#26aebd',
     for_sale: '#2273f5',
+    registered: '#4d7cff',
     pending_activation: '#f2a23a',
     unregistered: '#8b9bb4',
     sold: '#7b55e7',
     failed: '#b8c1ce',
   };
-  const statuses = ['unregistered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned', 'failed'];
+  const statuses = ['unregistered', 'registered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned', 'failed'];
   $('#statusLegend').innerHTML = statuses.map((status) => {
     const count = counts[status] || 0;
     const percent = Math.round((count / total) * 1000) / 10;

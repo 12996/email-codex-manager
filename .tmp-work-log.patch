@@ -1,0 +1,5 @@
+diff --git a/docs/work/work-log.md b/docs/work/work-log.md
+--- a/docs/work/work-log.md
++++ b/docs/work/work-log.md
+@@ -72,0 +73,1 @@
++| 2026-07-14 | 补号账号开通方式下拉与页面维护 | done | `2026-07-14-replacement-activation-method.md` |

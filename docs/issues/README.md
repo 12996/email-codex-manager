@@ -14,3 +14,5 @@
 | issue-006 | 邮箱邮件详情弹窗 DOM 缺失 | resolved | `issue-006-email-mail-detail-dialog-missing.md` |
 | issue-007 | Windows 保留 3000 端口导致服务启动失败 | resolved | `issue-007-windows-port-3000-eacces.md` |
 | issue-008 | Roxy OAuth 密码页 / 邮箱验证码页误判 | resolved | `issue-008-roxy-openai-password-email-code-misclassification.md` |
+| issue-009 | Roxy 2FA 补号密码页被 Codex 页脚误判 | resolved | `issue-009-roxy-codex-footer-password-misclassification.md` |
+| issue-010 | 短信 API 直连访问受限导致 2FA 补号拿不到手机验证码 | resolved | `issue-010-sms-api-direct-request-region-restricted.md` |

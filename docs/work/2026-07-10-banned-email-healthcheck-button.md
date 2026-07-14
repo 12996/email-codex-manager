@@ -1,0 +1,27 @@
+# 2026-07-10-banned-email-healthcheck-button.md
+
+- 状态：done
+- 目标：补号管理页新增“一键验活”按钮，批量检测注册过 Plus 的账号是否收到 ChatGPT 封禁邮件，并自动标记为 `banned`。
+- 修改文件：
+  - `src/accountHealthcheckService.js`
+  - `src/replacementAccounts.js`
+  - `src/server.js`
+  - `web/index.html`
+  - `web/app.js`
+  - `test/accountHealthcheckService.test.js`
+  - `test/replacementAccountsApi.test.js`
+  - `test/replacementAccountsWeb.test.js`
+  - `docs/changes/CHG-076-banned-email-healthcheck-button.md`
+  - `docs/changes/CHANGE_REGISTRY.md`
+  - `docs/project/api.md`
+- 验证结果：
+  - `node --test test\accountHealthcheckService.test.js` 通过，3/3。
+  - `node --test test\replacementAccountsApi.test.js` 通过，22/22。
+  - `node --test test\replacementAccountsWeb.test.js` 通过，12/12。
+- 未完成 / 风险：
+  - 未做半天一次自动定时；本次按用户确认只做手动按钮。
+  - 真实 IMAP 验活依赖邮箱账号管理中已配置对应 Gmail App Password；iCloud 账号依赖 `ICLOUD_CODE_GMAIL_ACCOUNT`。
+- 下一步：
+  - 用真实账号在后台点击“一键验活”，确认汇总结果与数据库状态变更。
+  - 当前未合并 `implemented` change 已超过 5 个，建议后续执行 PRD 基线合并。
+- 日终交接：完成后更新 `handoff.md`

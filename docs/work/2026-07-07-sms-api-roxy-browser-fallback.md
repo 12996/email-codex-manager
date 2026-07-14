@@ -1,0 +1,35 @@
+# 2026-07-07 短信 API Roxy 浏览器兜底
+
+- 状态：done
+- 目标：解释并修复“用户侧能 GET 到手机号验证码，但 2FA 补号自动化拿不到”的问题。
+- 修改文件：
+  - `src/auto/roxy_oauth_login.js`
+  - `test/roxyOauthLogin.test.js`
+  - `docs/issues/issue-010-sms-api-direct-request-region-restricted.md`
+  - `docs/changes/CHG-075-sms-api-roxy-browser-fallback.md`
+  - `docs/changes/CHANGE_REGISTRY.md`
+  - `docs/issues/README.md`
+  - `docs/work/work-log.md`
+  - `docs/work/handoff.md`
+- 过程：
+  - 查看最新 run `433` 日志：2FA 补号已进入手机验证码页，并连续 13 次请求短信 API。
+  - 直连同一短信 URL：Node 默认请求、Chrome UA 请求、API Accept 请求均返回 `访问受限 / Access Restricted` HTML。
+  - Roxy 真实浏览器新标签导航同一 URL：返回短信 JSON，包含 `isReceived=yes` 和 OpenAI 6 位验证码。
+  - 确认根因是子进程直连出口被短信平台地区限制，Roxy 浏览器出口可访问。
+- 修复：
+  - 检测 `Access Restricted` / `访问受限` 后，当前有 Roxy Playwright `page` 时新开临时页导航短信 API 读取响应。
+  - 手机验证码解析跳过 `<style>` 和 CSS 色值，避免把访问受限 HTML 中的颜色值当验证码。
+  - `openAi_phone_add()` 和 `openAi_phone_code()` 传入当前 `page`，让旧码快照和新码轮询都可走 Roxy browser fallback。
+- 验证结果：
+  - RED：新增浏览器兜底测试，先失败于 `OPENAI_PHONE_CODE_ACCESS_RESTRICTED`。
+  - GREEN：`node --test test\roxyOauthLogin.test.js` 通过，78/78。
+  - GREEN：`node --test test\roxy2FAAuthLogin.test.js` 通过，11/11。
+  - GREEN：`node --check src\auto\roxy_oauth_login.js` 通过。
+  - GREEN：`git diff --check` 通过。
+  - 实机：连接当前 Roxy CDP，仅调用短信读取函数，成功通过 Roxy browser fallback 读取到 6 位验证码，未提交 OpenAI 表单。
+- 未完成 / 风险：
+  - 当前 OpenAI 页面仍停在手机验证码页，原 run 已失败。需要重新触发 `2FA补号` 或手动填码继续。
+  - 未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+- 下一步：
+  - 用 account `78` 重新触发 `2FA补号`，确认手机验证码阶段日志出现 `手机验证码获取完成` 并继续到 Codex/callback。
+- 日终交接：已更新 `handoff.md`。

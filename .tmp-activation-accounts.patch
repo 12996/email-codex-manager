@@ -1,0 +1,16 @@
+diff --git a/src/replacementAccounts.js b/src/replacementAccounts.js
+--- a/src/replacementAccounts.js
++++ b/src/replacementAccounts.js
+@@ -240,0 +241,12 @@ export function createReplacementAccountRepository(db) {
++    updateActivationMethod(id, input) {
++      const existing = assertAccountExists(this.getAccount(id));
++      const now = new Date().toISOString();
++
++      db.prepare(`
++        UPDATE replacement_accounts
++        SET activation_method = ?, updated_at = ?
++        WHERE id = ?
++      `).run(normalizeOptional(input?.activation_method), now, existing.id);
++
++      return this.getAccount(existing.id);
++    },

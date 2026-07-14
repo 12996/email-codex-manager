@@ -1,0 +1,5 @@
+diff --git a/docs/changes/CHANGE_REGISTRY.md b/docs/changes/CHANGE_REGISTRY.md
+--- a/docs/changes/CHANGE_REGISTRY.md
++++ b/docs/changes/CHANGE_REGISTRY.md
+@@ -68,0 +69,1 @@
++| CHG-077 | 补号账号开通方式目录与行内下拉 | implemented | 2026-07-14 | PRD-003 | `src/db.js`, `src/replacementActivationMethods.js`, `src/replacementAccounts.js`, `src/server.js`, `web/`, `test/`, `docs/project/api.md` | `CHG-077-replacement-activation-method-catalog.md` |

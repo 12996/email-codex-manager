@@ -12,12 +12,25 @@ export function createCpaRepairWorker({
   readFileImpl = readFileSync,
 } = {}) {
   return {
-    async repair({ account, credential, reasons } = {}) {
+    async repair({ account, credential, reasons, mode } = {}) {
       replacementAccounts.markReplacementStarted(account.id);
       let runLogPath = '';
       const triggerDetails = formatCpaTriggerDetails({ credential, reasons });
       try {
-        const replacementResult = await replacementServices.replaceAccount(account, { cpaTriggerDetails: triggerDetails });
+        const replacementMethod = mode === '2fa'
+          ? replacementServices?.replaceAccountWith2FA
+          : replacementServices?.replaceAccount;
+        if (typeof replacementMethod !== 'function') {
+          const methodName = mode === '2fa' ? 'replaceAccountWith2FA' : 'replaceAccount';
+          throw new Error(`replacementServices.${methodName} is not configured`);
+        }
+
+        // 补号自动化只生成本地 CPA JSON；上传与健康复查统一留在 worker 串行执行。
+        const replacementResult = await replacementMethod.call(
+          replacementServices,
+          account,
+          { cpaTriggerDetails: triggerDetails },
+        );
         runLogPath = replacementResult?.run?.log_path || '';
         if (!replacementResult?.cpaTriggerLogged) {
           appendRepairLog(runLogPath, 'cpa-trigger', '记录 CPA 自动补号触发原因', triggerDetails);
@@ -32,7 +45,7 @@ export function createCpaRepairWorker({
         await assertCredentialHealthy(cpaClient, account.email);
         const updated = replacementAccounts.markReplacementSuccess(account.id);
         appendRepairLog(runLogPath, 'cpa-success', 'CPA repair 完成', `account_id=${account.id}`);
-        return { ok: true, account: updated };
+        return { ok: true, account: updated, ...(replacementResult?.run ? { run: replacementResult.run } : {}) };
       } catch (error) {
         const updated = replacementAccounts.markReplacementFailure(account.id, error.message);
         notifyCircuitBreaker(adminNotifications, updated);

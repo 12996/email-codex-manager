@@ -816,6 +816,7 @@ web/automation-logs.js
 
 补号管理页账号列表支持服务端分页、状态筛选和关键词搜索；前端分页控件支持每页 10/20/50 条、上一页和下一页。
 补号管理页主表会压缩显示除邮箱、备注和开通时间外的长字段：默认只展示前 6 位并提供“复制”按钮复制完整原始值；邮箱、备注和开通时间完整显示，并按约 12 个字符宽度换行，避免被压成几字符一行或把操作列挤出可视区域。主表不显示“状态更新时间”“最后操作”“更新时间”三列，这些信息仍可通过详情查看。
+补号管理页提供“一键验活”按钮，会批量检查 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 状态账号最近 5 封邮件中的 ChatGPT deactivation 通知；命中后自动将账号状态改为 `banned`。
 
 补号管理页支持直接配置公开验证码接口：
 
@@ -827,6 +828,77 @@ web/automation-logs.js
 ```text
 <当前站点>/api/verification-code/public/latest?key=<public_code_key>
 ```
+
+### 开通方式目录与行内修改
+
+补号管理页的“开通方式”列使用行内下拉框。方式目录存储在 SQLite 的
+`replacement_activation_methods` 表中，后台登录后可以通过页面“管理开通方式”新增方式；当前只允许新增，不提供删除，避免历史账号出现无效方式。
+
+初始方式：
+
+```text
+越南直卡
+upi
+ideal
+波兰
+瑞士
+pix 直卡
+```
+
+#### GET `/replacement-activation-methods`
+
+返回按创建顺序排列的开通方式。
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "methods": [
+    {
+      "id": 1,
+      "name": "越南直卡",
+      "created_at": "2026-07-14T00:00:00.000Z",
+      "updated_at": "2026-07-14T00:00:00.000Z"
+    }
+  ]
+}
+```
+
+#### POST `/replacement-activation-methods`
+
+新增开通方式。请求体：
+
+```json
+{
+  "name": "银行卡直卡"
+}
+```
+
+后端会去除首尾空格，并按大小写不敏感规则去重。
+
+错误：
+
+| 错误码 | HTTP 状态 | 说明 |
+|---|---:|---|
+| `ACTIVATION_METHOD_REQUIRED` | 400 | 名称为空 |
+| `ACTIVATION_METHOD_DUPLICATE` | 409 | 名称已存在 |
+
+#### PATCH `/replacement-accounts/:id/activation-method`
+
+只更新账号的 `activation_method` 字段，不覆盖账号其他字段。
+
+请求体：
+
+```json
+{
+  "activation_method": "upi"
+}
+```
+
+空字符串表示清空开通方式；非空值必须已经存在于方式目录中。账号列表下拉框修改和账号详情页的直接修改均使用此接口。
+
+如果历史账号的方式不在当前目录中，前端会保留并显示为“历史值”，不会自动覆盖或删除。
 
 ### 字段说明
 
@@ -842,7 +914,7 @@ SQLite 表：`replacement_accounts`
 | `codex_2fa` | Codex/OpenAI 账号 2FA 密钥；前端展示列名为 `2fa-codex` |
 | `password` | 补号账号密码；创建时为空则由系统随机生成 12-16 位字符 |
 | `sms_last_error` | 最近一次 SMS 获取失败原因 |
-| `activation_method` | 开通方式 |
+| `activation_method` | 开通方式；值来自 `replacement_activation_methods.name`，允许为空，历史值保留 |
 | `activated_at` | 开通时间；创建补号账号时为空则由系统写入当前时间 |
 | `status` | 账号状态 |
 | `status_updated_at` | 最近状态更新时间 |
@@ -871,10 +943,11 @@ SQLite 表：`replacement_accounts`
 | 状态 | 中文含义 | 说明 |
 |---|---|---|
 | `unregistered` | 未注册 | 账号尚未完成注册 |
+| `registered` | 已注册 | OpenAI 注册已完成，尚未进入 Plus/CPA 后续阶段 |
 | `pending_activation` | 待开通 | 等待开通 Plus |
 | `plus_active` | 开通 plus | Plus 已开通 |
 | `cpa_mounted` | CPA 挂载 | CPA 凭证已挂载或上传成功 |
-| `for_sale` | 待出售 | 可出售库存；新增默认状态；旧 `pending` 兼容映射到该状态 |
+| `for_sale` | 待出售 | 可出售库存；旧 `pending` 兼容映射到该状态 |
 | `sold` | 已售出 | 已出售账号 |
 | `banned` | 账号封禁 | 账号本身被封禁；不等同熔断 |
 | `replacing` | 处理中 | 系统自动状态，不允许手动设置 |
@@ -968,7 +1041,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
   "password": "",
   "activation_method": "manual",
   "activated_at": "2026-06-01T00:00:00.000Z",
-  "status": "for_sale",
+  "status": "unregistered",
   "status_note": "optional",
   "remark": "optional"
 }
@@ -1008,7 +1081,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 
 ### PATCH `/replacement-accounts/:id/status`
 
-手动修改状态。允许状态：`unregistered`、`pending_activation`、`plus_active`、`cpa_mounted`、`for_sale`、`sold`、`banned`、`failed`。`replacing` 是系统自动状态，不允许手动设置。
+手动修改状态。允许状态：`unregistered`、`registered`、`pending_activation`、`plus_active`、`cpa_mounted`、`for_sale`、`sold`、`banned`、`failed`。`replacing` 是系统自动状态，不允许手动设置。
 
 请求体：
 
@@ -1089,6 +1162,48 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 ```
 
 停用后同一 `public_code_key` 不再允许访问 `GET /api/verification-code/public/latest?key=...`。
+
+### POST `/replacement-accounts/healthcheck-banned`
+
+手动批量验活补号账号封禁状态。该接口复用后台登录态。
+
+后端行为：
+
+1. 筛选未软删除且状态为 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 的补号账号。
+2. 每个账号读取对应收件箱最近 5 封邮件。
+3. Gmail 和 Gmail plus alias 账号读取主 Gmail 收件箱；iCloud 账号读取 `ICLOUD_CODE_GMAIL_ACCOUNT` 对应 Gmail 收件箱。
+4. 邮件正文、摘要或主题同时包含目标账号邮箱、`Your account has been deactivated`，以及 `violated our Terms and Usage Policies` 或 `This means your account can no longer be used` 时，判定账号已封禁。
+5. 命中后写入 `status = banned`，并将 `status_note` 写为“一键验活检测到 ChatGPT deactivation 邮件”。
+6. 单个账号 IMAP 失败或收件箱未配置只计入失败结果，不影响其他账号，不会改变该账号状态。
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "checked": 2,
+    "banned": 1,
+    "clean": 1,
+    "failed": 0,
+    "bannedAccounts": [
+      {
+        "id": 1,
+        "email": "user@example.com",
+        "subject": "Important update about your ChatGPT account",
+        "date": "2026-07-10T01:00:00.000Z"
+      }
+    ],
+    "cleanAccounts": [
+      {
+        "id": 2,
+        "email": "clean@example.com"
+      }
+    ],
+    "failedAccounts": []
+  }
+}
+```
 
 ### POST `/replacement-accounts/:id/fetch-sms-code`
 
@@ -1255,8 +1370,8 @@ src/auto/roxy_oauth_login.js
 | Roxy API 地址 | `.env` / 运行配置 | `ROXY_API_BASE_URL` 或 `ROXY_API_PORT`，由子进程继承，不来自补号表。 |
 | Roxy API Token | `.env` / 运行配置 | `ROXY_API_TOKEN`，不来自补号表。 |
 | Roxy 工作区 | `.env` / 运行配置 | `ROXY_WORKSPACE_ID`，不来自补号表。 |
-| Roxy 窗口定位 | `.env` / 运行配置 | `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者至少配置一种；不来自补号表。 |
-| 复用 CDP | `.env` / 运行配置 | `ROXY_CDP_ENDPOINT`；配置后脚本跳过 Roxy 准备流程并直接连接现有浏览器。 |
+| Roxy 窗口定位 | `.env` / 运行配置 | 默认使用 `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者之一；也可按动作覆盖：注册用 `ROXY_REGISTER_BROWSER_*`，普通补号用 `ROXY_REPLACE_BROWSER_*`，2FA 补号用 `ROXY_REPLACE_2FA_BROWSER_*`，2FA 登录用 `ROXY_2FA_LOGIN_BROWSER_*`。 |
+| 复用 CDP | `.env` / 运行配置 | 默认使用 `ROXY_CDP_ENDPOINT`；动作级可用 `ROXY_REGISTER_CDP_ENDPOINT`、`ROXY_REPLACE_CDP_ENDPOINT`、`ROXY_REPLACE_2FA_CDP_ENDPOINT`、`ROXY_2FA_LOGIN_CDP_ENDPOINT`。配置动作级窗口但未配置动作级 CDP 时，会清除全局 `ROXY_CDP_ENDPOINT`。 |
 | 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`；补号账号未配置 `email_code_api` 时留空并按邮箱域名自动选择本地接口：iCloud 使用 `http://127.0.0.1:${PORT}/api/icloud-verification-code/latest`，其他邮箱使用 `/api/verification-code/latest`。 |
 | 后台 Cookie | `.env` / 运行配置 | `ADMIN_AUTH_COOKIE`；非本机调用邮箱验证码接口时使用。 |
 | 浏览器关闭/有头无头策略 | `.env` / 运行配置 | `ROXY_KEEP_OPEN`、`ROXY_HEADLESS`、`ROXY_ENSURE_CLOSED`。`ROXY_HEADLESS=auto` 时，`ROXY_KEEP_OPEN=1` 默认有头并保留窗口，`ROXY_KEEP_OPEN=0` 默认无头并关闭窗口。 |
@@ -1333,7 +1448,7 @@ src/auto/roxy_oauth_login.js
 src/auto/roxy_2fa_auth_login.js
 ```
 
-后端通过 `replacementServices.replaceAccountWith2FA(account)` 启动独立 Node 子进程。前端补号管理页的行操作和快捷操作名称均为“2FA补号”。
+生产注入 `cpaRepairWorker` 时，后端通过 `cpaRepairWorker.repair({ mode: '2fa' })` 统一串接 2FA 自动化、本地 CPA JSON 读取、CPA 上传和上传后健康复查。未注入 worker 的测试/本地模式会 fallback 为直接调用 `replacementServices.replaceAccountWith2FA(account)`。前端补号管理页的行操作和快捷操作名称均为“2FA补号”。
 
 请求体：
 
@@ -1344,11 +1459,12 @@ src/auto/roxy_2fa_auth_login.js
 后端行为：
 
 1. 根据路径参数 `id` 读取 `replacement_accounts` 中未软删除账号。
-2. 将账号状态置为 `replacing`。
-3. 调用 `replacementServices.replaceAccountWith2FA(account)`。
-4. 默认适配器启动子进程调用 `src/auto/roxy_2fa_auth_login.js`。
-5. 自动化成功后，后端将账号标记为 `cpa_mounted` 并增加成功次数。
-6. 自动化失败后，后端将账号标记为 `failed` 并记录错误。
+2. 生产注入 CPA repair worker 时，将账号状态置为 `replacing`，调用 `replacementServices.replaceAccountWith2FA(account, { cpaTriggerDetails })`。
+3. 默认适配器启动子进程调用 `src/auto/roxy_2fa_auth_login.js`。
+4. 自动化成功后，worker 读取 `src/auto/product_files/cpa/<email>.json` 并上传为 `codex-<email>-plus.json`。
+5. 上传后复查 CPA auth file；同邮箱任一凭证健康即通过。
+6. 上传和复查均成功后，后端将账号标记为 `cpa_mounted` 并增加成功次数。
+7. 自动化、上传或复查失败后，后端将账号标记为 `failed` 并记录错误。
 
 2FA 补号脚本额外使用的数据来源：
 
@@ -1632,11 +1748,12 @@ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS=30
 
 | 用户操作 | 接口 | 后端影响 |
 |---|---|---|
-| 新增账号 | `POST /replacement-accounts` | 创建补号账号，默认 `for_sale` |
+| 新增账号 | `POST /replacement-accounts` | 创建补号账号，默认 `unregistered` |
 | 修改账号 | `PUT /replacement-accounts/:id` | 修改基础信息 |
 | 删除账号 | `DELETE /replacement-accounts/:id` | 软删除 |
 | 修改状态 | `PATCH /replacement-accounts/:id/status` | 更新状态和备注 |
 | 启用/停用公开验证码 | `PATCH /replacement-accounts/:id/public-code` | 只更新 `public_code_enabled` 和必要的 `public_code_key` |
+| 一键验活 | `POST /replacement-accounts/healthcheck-banned` | 检测封禁邮件并自动标记 `banned` |
 | 获取验证码 | `POST /replacement-accounts/:id/fetch-sms-code` | 实时返回验证码，不入库 |
 | 获取 JSON | `POST /replacement-accounts/:id/fetch-json` | 保存 JSON 原文 |
 | 注册 OpenAI | `POST /replacement-accounts/:id/register` | 启动注册自动化子进程，邮箱验证码走 POST 内部接口 |
@@ -1647,7 +1764,7 @@ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS=30
 
 ## 数据库字段
 
-当前 SQLite 表：`email_accounts`、`replacement_accounts`、`replacement_automation_runs`
+当前 SQLite 表：`email_accounts`、`replacement_accounts`、`replacement_activation_methods`、`replacement_automation_runs`
 
 ```sql
 CREATE TABLE email_accounts (

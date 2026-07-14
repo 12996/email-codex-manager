@@ -7,6 +7,7 @@ const LEGACY_STATUS_MAP = new Map([
 ]);
 const MANUAL_STATUSES = new Set([
   'unregistered',
+  'registered',
   'pending_activation',
   'plus_active',
   'cpa_mounted',
@@ -22,7 +23,7 @@ const REPLACEMENT_PASSWORD_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqr
 export function createReplacementAccountRepository(db) {
   return {
     createAccount(input) {
-      const data = normalizeAccountInput(input, { requireEmail: true, defaultStatus: 'for_sale' });
+      const data = normalizeAccountInput(input, { requireEmail: true, defaultStatus: 'unregistered' });
       data.public_code_key ||= generatePublicCodeKey();
       data.password ||= generateReplacementPassword();
       validateStatus(data.status, { allowReplacing: false });
@@ -96,6 +97,17 @@ export function createReplacementAccountRepository(db) {
         .map(normalizeAccountRecord);
 
       return { accounts, pagination };
+    },
+
+    listBannedHealthcheckCandidates() {
+      return db.prepare(`
+        SELECT * FROM replacement_accounts
+        WHERE deleted_at IS NULL
+          AND status IN ('plus_active', 'cpa_mounted', 'for_sale', 'sold', 'active', 'replaced', 'pending')
+        ORDER BY id DESC
+      `).all()
+        .map(normalizeAccountRecord)
+        .filter((account) => ['plus_active', 'cpa_mounted', 'for_sale', 'sold'].includes(account.status));
     },
 
     getAccount(id) {
@@ -238,6 +250,39 @@ export function createReplacementAccountRepository(db) {
       return this.getAccount(existing.id);
     },
 
+    updateActivationMethod(id, input) {
+      const existing = assertAccountExists(this.getAccount(id));
+      const now = new Date().toISOString();
+
+      db.prepare(`
+        UPDATE replacement_accounts
+        SET activation_method = ?, updated_at = ?
+        WHERE id = ?
+      `).run(normalizeOptional(input?.activation_method), now, existing.id);
+
+      return this.getAccount(existing.id);
+    },
+
+    markBannedByHealthcheck(id, statusNote) {
+      const existing = assertAccountExists(this.getAccount(id));
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE replacement_accounts
+        SET
+          status = 'banned',
+          status_note = ?,
+          status_updated_at = ?,
+          updated_at = ?
+        WHERE id = ?
+      `).run(
+        normalizeOptional(statusNote) || '一键验活检测到 ChatGPT deactivation 邮件',
+        now,
+        now,
+        existing.id,
+      );
+      return this.getAccount(existing.id);
+    },
+
     recordSmsFailure(id, errorMessage) {
       const existing = assertAccountExists(this.getAccount(id));
       const now = new Date().toISOString();
@@ -306,6 +351,23 @@ export function createReplacementAccountRepository(db) {
           updated_at = ?
         WHERE id = ?
       `).run(now, now, now, existing.id);
+      return this.getAccount(existing.id);
+    },
+
+    markRegistrationSuccess(id, input = {}) {
+      const existing = assertAccountExists(this.getAccount(id));
+      const now = new Date().toISOString();
+      const codex2fa = normalizeCodex2fa(input) || existing.codex_2fa;
+      db.prepare(`
+        UPDATE replacement_accounts
+        SET
+          status = 'registered',
+          codex_2fa = ?,
+          status_updated_at = ?,
+          last_error = NULL,
+          updated_at = ?
+        WHERE id = ?
+      `).run(codex2fa, now, now, existing.id);
       return this.getAccount(existing.id);
     },
 
@@ -407,7 +469,7 @@ function normalizeStatusValue(status) {
 }
 
 function normalizeStoredStatus(status) {
-  return normalizeStatusValue(normalizeOptional(status) || 'for_sale');
+  return normalizeStatusValue(normalizeOptional(status) || 'unregistered');
 }
 
 function normalizeAccountRecord(account) {

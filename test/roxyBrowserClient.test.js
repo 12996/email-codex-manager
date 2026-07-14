@@ -78,6 +78,39 @@ test('RoxyBrowserClient 在 Roxy API 返回失败时抛出包含接口路径的�
   );
 });
 
+test('RoxyBrowserClient updateBrowserConfig 调用 Roxy profile 修改接口', async () => {
+  const calls = [];
+  const client = new RoxyBrowserClient({
+    apiBaseUrl: 'http://127.0.0.1:9999',
+    workspaceId: 1,
+    dirId: 'dir-1',
+    request: async (method, path, body) => {
+      calls.push([method, path, body]);
+      return { code: 0, msg: '成功' };
+    },
+  });
+
+  await client.updateBrowserConfig({
+    fingerInfo: {
+      openWidth: '1600',
+      openHeight: '900',
+    },
+  });
+
+  assert.deepEqual(calls, [[
+    'POST',
+    '/browser/mdf',
+    {
+      workspaceId: 1,
+      dirId: 'dir-1',
+      fingerInfo: {
+        openWidth: '1600',
+        openHeight: '900',
+      },
+    },
+  ]]);
+});
+
 test('RoxyBrowserClient 在 Roxy API 连接失败时抛出包含地址和底层原因的错误', async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async () => {

@@ -221,6 +221,72 @@ test('replacement account CRUD API creates, lists, reads, updates, and soft dele
 
     const emptyList = await jsonRequest(server, 'GET', '/replacement-accounts');
     assert.deepEqual(emptyList.body.accounts, []);
+
+    const defaultStatus = await jsonRequest(server, 'POST', '/replacement-accounts', {
+      email: 'default-status@example.com',
+    });
+    assert.equal(defaultStatus.response.status, 201);
+    assert.equal(defaultStatus.body.account.status, 'unregistered');
+  } finally {
+    await server.close();
+  }
+});
+
+test('replacement activation method API lists seeded methods and creates a custom method', async () => {
+  const { app } = createTestContext();
+  const server = await startTestServer(app);
+
+  try {
+    const listed = await jsonRequest(server, 'GET', '/replacement-activation-methods');
+    assert.equal(listed.response.status, 200);
+    assert.deepEqual(listed.body.methods.map((method) => method.name), [
+      '越南直卡',
+      'upi',
+      'ideal',
+      '波兰',
+      '瑞士',
+      'pix 直卡',
+    ]);
+
+    const created = await jsonRequest(server, 'POST', '/replacement-activation-methods', { name: ' 新方式 ' });
+    assert.equal(created.response.status, 201);
+    assert.equal(created.body.method.name, '新方式');
+
+    const duplicate = await jsonRequest(server, 'POST', '/replacement-activation-methods', { name: '新方式' });
+    assert.equal(duplicate.response.status, 409);
+    assert.equal(duplicate.body.error, 'ACTIVATION_METHOD_DUPLICATE');
+
+    const empty = await jsonRequest(server, 'POST', '/replacement-activation-methods', { name: ' ' });
+    assert.equal(empty.response.status, 400);
+    assert.equal(empty.body.error, 'ACTIVATION_METHOD_REQUIRED');
+  } finally {
+    await server.close();
+  }
+});
+
+test('replacement account activation method API updates and validates the selected method', async () => {
+  const { app, replacementAccounts } = createTestContext();
+  const account = replacementAccounts.createAccount({ email: 'activation-method-api@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const updated = await jsonRequest(server, 'PATCH', `/replacement-accounts/${account.id}/activation-method`, {
+      activation_method: ' upi ',
+    });
+    assert.equal(updated.response.status, 200);
+    assert.equal(updated.body.account.activation_method, 'upi');
+
+    const cleared = await jsonRequest(server, 'PATCH', `/replacement-accounts/${account.id}/activation-method`, {
+      activation_method: '',
+    });
+    assert.equal(cleared.response.status, 200);
+    assert.equal(cleared.body.account.activation_method, null);
+
+    const invalid = await jsonRequest(server, 'PATCH', `/replacement-accounts/${account.id}/activation-method`, {
+      activation_method: 'not configured',
+    });
+    assert.equal(invalid.response.status, 400);
+    assert.equal(invalid.body.error, 'ACTIVATION_METHOD_INVALID');
   } finally {
     await server.close();
   }
@@ -286,6 +352,54 @@ test('replacement account API filters accounts with circuit breaker enabled', as
   }
 });
 
+test('POST /replacement-accounts/healthcheck-banned marks matching Plus-related accounts as banned', async () => {
+  const { app, replacementAccounts } = createTestContext(successfulServices(), {
+    accounts: {
+      listAccounts() {
+        return [];
+      },
+      getAccountByGmailEmail(email) {
+        return email === 'receiver@gmail.com'
+          ? { id: 99, gmail_email: 'receiver@gmail.com', gmail_app_password: 'abcdefghijklmnop' }
+          : null;
+      },
+    },
+    mailService: {
+      async fetchMessages(account, options) {
+        assert.equal(account.gmail_email, 'receiver@gmail.com');
+        assert.equal(options.limit, 5);
+        return [{
+          subject: 'Important update about your ChatGPT account',
+          bodyText: `We’re writing with an important update about your ChatGPT account associated with ${options.targetEmail}.
+Your account has been deactivated because recent activity violated our Terms and Usage Policies.
+This means your account can no longer be used.`,
+        }];
+      },
+    },
+  });
+  const created = replacementAccounts.createAccount({
+    email: 'receiver+sold@gmail.com',
+    status: 'sold',
+  });
+  replacementAccounts.createAccount({
+    email: 'receiver+registered@gmail.com',
+    status: 'registered',
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', '/replacement-accounts/healthcheck-banned');
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.result.checked, 1);
+    assert.equal(response.body.result.banned, 1);
+    assert.equal(replacementAccounts.getAccount(created.id).status, 'banned');
+  } finally {
+    await server.close();
+  }
+});
+
 test('replacement account action APIs update status and call injected services', async () => {
   const { app, replacementAccounts } = createTestContext();
   const created = replacementAccounts.createAccount({
@@ -330,7 +444,7 @@ test('replacement account action APIs update status and call injected services',
   }
 });
 
-test('POST /replacement-accounts/:id/replace-2fa starts 2fa replacement automation', async () => {
+test('POST /replacement-accounts/:id/replace-2fa falls back to direct 2FA automation without CPA worker', async () => {
   const events = [];
   const services = {
     async fetchSmsCode() {
@@ -370,6 +484,138 @@ test('POST /replacement-accounts/:id/replace-2fa starts 2fa replacement automati
     assert.equal(response.body.account.replacement_count, 1);
     assert.equal(response.body.run.id, 707);
     assert.deepEqual(events, [['replace-2fa', created.id, 'user@example.com', 'account-password', 'JBSWY3DPEHPK3PXP']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/replace-2fa uses CPA repair worker when configured', async () => {
+  const events = [];
+  const services = {
+    ...successfulServices(),
+    async replaceAccount() {
+      events.push('replace');
+      return { ok: true };
+    },
+    async replaceAccountWith2FA() {
+      events.push('direct-replace-2fa');
+      return { ok: true };
+    },
+  };
+  const cpaRepairWorker = {
+    async repair({ account, source, mode }) {
+      events.push(['cpa-repair', account.id, account.email, source, mode]);
+      return {
+        ok: true,
+        account: {
+          ...account,
+          status: 'cpa_mounted',
+          replacement_count: Number(account.replacement_count || 0) + 1,
+        },
+        run: { id: 909 },
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services, { cpaRepairWorker });
+  const created = replacementAccounts.createAccount({
+    email: 'user@example.com',
+    password: 'account-password',
+    codex_2fa: 'JBSWY3DPEHPK3PXP',
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace-2fa`);
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.account.status, 'cpa_mounted');
+    assert.equal(response.body.run.id, 909);
+    assert.deepEqual(events, [['cpa-repair', created.id, 'user@example.com', 'manual', '2fa']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/replace-2fa returns worker failure with account', async () => {
+  const events = [];
+  const cpaRepairWorker = {
+    async repair({ account, source, mode }) {
+      events.push(['cpa-repair', account.id, source, mode]);
+      return {
+        ok: false,
+        account: {
+          ...account,
+          status: 'failed',
+          last_error: 'CPA upload failed',
+        },
+        error: 'CPA upload failed',
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(successfulServices(), { cpaRepairWorker });
+  const created = replacementAccounts.createAccount({ email: 'user@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace-2fa`);
+
+    assert.equal(response.response.status, 502);
+    assert.equal(response.body.error, 'REPLACE_FAILED');
+    assert.equal(response.body.account.status, 'failed');
+    assert.equal(response.body.account.last_error, 'CPA upload failed');
+    assert.deepEqual(events, [['cpa-repair', created.id, 'manual', '2fa']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/login-2fa starts 2fa login automation without replacement state changes', async () => {
+  const events = [];
+  const services = {
+    async fetchSmsCode() {
+      return '123456';
+    },
+    async fetchJson() {
+      return '{}';
+    },
+    async replaceAccount() {
+      events.push('replace');
+      return { ok: true };
+    },
+    async replaceAccountWith2FA() {
+      events.push('replace-2fa');
+      return { ok: true };
+    },
+    async loginAccountWith2FA(account) {
+      events.push(['login-2fa', account.id, account.email, account.password, account.codex_2fa]);
+      return { ok: true, run: { id: 808 } };
+    },
+    async registerAccount() {
+      return { ok: true };
+    },
+    stopReplacementRun() {
+      return { ok: true };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({
+    email: 'user@example.com',
+    password: 'account-password',
+    codex_2fa: 'JBSWY3DPEHPK3PXP',
+    status: 'plus_active',
+  });
+
+  const server = await startTestServer(app);
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/login-2fa`);
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.account.status, 'plus_active');
+    assert.equal(response.body.account.replacement_count, 0);
+    assert.equal(response.body.run.id, 808);
+    assert.deepEqual(events, [['login-2fa', created.id, 'user@example.com', 'account-password', 'JBSWY3DPEHPK3PXP']]);
   } finally {
     await server.close();
   }
@@ -443,7 +689,9 @@ test('POST /replacement-accounts/:id/register starts registration automation', a
     assert.equal(response.body.ok, true);
     assert.equal(response.body.account.id, created.id);
     assert.equal(response.body.account.codex_2fa, 'WAITOC2YTXEEBUXP2266NLIGOLYSNYWE');
+    assert.equal(response.body.account.status, 'registered');
     assert.equal(replacementAccounts.getAccount(created.id).codex_2fa, 'WAITOC2YTXEEBUXP2266NLIGOLYSNYWE');
+    assert.equal(replacementAccounts.getAccount(created.id).status, 'registered');
     assert.deepEqual(response.body.run, { id: 88, status: 'running' });
     assert.deepEqual(events, [['register', created.id, 'user@example.com']]);
   } finally {

@@ -46,6 +46,7 @@
         <select id="statusFilter" aria-label="状态筛选">
           <option value="">全部状态</option>
           <option value="unregistered">未注册</option>
+          <option value="registered">已注册</option>
           <option value="pending_activation">待开通</option>
           <option value="plus_active">开通 plus</option>
           <option value="cpa_mounted">CPA 挂载</option>
@@ -58,7 +59,9 @@
         <input id="searchInput" type="search" placeholder="搜索邮箱/手机号/备注">
         <button id="filterButton" class="ghost" type="button">筛选</button>
         <span class="spacer"></span>
+        <button id="healthcheckBannedButton" class="ghost strong" type="button">☑ 一键验活</button>
         <button id="batchReplaceButton" class="ghost strong" type="button">↻ 一键补号</button>
+        <button id="manageActivationMethodsButton" class="ghost strong" type="button">⚙ 管理开通方式</button>
         <button id="newAccountButton" class="ghost strong" type="button">⚙ 新增账号</button>
       </div>
 
@@ -132,13 +135,18 @@
       <label>邮箱验证码 API <input name="email_code_api" placeholder="https://example.invalid/email-code"></label>
       <label>2fa-codex <input name="codex_2fa" placeholder="Codex 2FA 密钥"></label>
       <label>密码 <input name="password" placeholder="留空自动生成 12-16 位密码"></label>
-      <label>开通方式 <input name="activation_method" placeholder="manual / auto"></label>
+      <label>开通方式
+        <select name="activation_method">
+          <option value="">未设置</option>
+        </select>
+      </label>
       <label>开通时间 <input name="activated_at" placeholder="2026-06-01T00:00:00.000Z"></label>
       <label><input name="public_code_enabled" type="checkbox" value="1"> 允许公开验证码接口</label>
       <label>公开验证码 Key <input name="public_code_key" placeholder="留空自动生成"></label>
       <label>状态
         <select name="status">
           <option value="unregistered">未注册</option>
+          <option value="registered">已注册</option>
           <option value="pending_activation">待开通</option>
           <option value="plus_active">开通 plus</option>
           <option value="cpa_mounted">CPA 挂载</option>
@@ -156,6 +164,19 @@
     </form>
   </dialog>
 
+  <dialog id="activationMethodDialog">
+    <form id="activationMethodForm" method="dialog">
+      <h2>管理开通方式</h2>
+      <p class="muted">这里只允许新增，不删除已有方式，避免影响历史账号。</p>
+      <ul id="activationMethodList" class="activation-method-list"></ul>
+      <label>新增方式 <input name="name" required maxlength="80" placeholder="例如：银行卡直卡"></label>
+      <menu>
+        <button value="cancel" type="button" data-close>取消</button>
+        <button class="primary" type="submit">新增方式</button>
+      </menu>
+    </form>
+  </dialog>
+
   <dialog id="statusDialog">
     <form id="statusForm" method="dialog">
       <h2>状态设置</h2>
@@ -163,6 +184,7 @@
       <label>状态
         <select name="status">
           <option value="unregistered">未注册</option>
+          <option value="registered">已注册</option>
           <option value="pending_activation">待开通</option>
           <option value="plus_active">开通 plus</option>
           <option value="cpa_mounted">CPA 挂载</option>

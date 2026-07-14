@@ -14,6 +14,7 @@ import { startCpaCredentialMonitor } from './cpaCredentialMonitorRunner.js';
 import { createCpaRepairQueue } from './cpaRepairQueue.js';
 import { createCpaRepairWorker } from './cpaRepairWorker.js';
 import { createDatabase } from './db.js';
+import { runBannedEmailHealthcheck } from './accountHealthcheckService.js';
 import { createReplacementAutomationRunRepository } from './replacementAutomationRuns.js';
 import {
   deriveMainGmailAccount,
@@ -22,6 +23,10 @@ import {
   testConnection,
 } from './imapService.js';
 import { createReplacementAccountRepository } from './replacementAccounts.js';
+import {
+  activationMethodError,
+  createReplacementActivationMethodRepository,
+} from './replacementActivationMethods.js';
 import { createReplacementServices } from './replacementServices.js';
 import { getTotpCodeInfo } from './totpService.js';
 import { accountsPage, editAccountPage, loginPage } from './views.js';
@@ -34,6 +39,7 @@ export function createApp({
   accounts = createAccountRepository(db),
   adminNotifications = createAdminNotificationRepository(db),
   replacementAccounts = createReplacementAccountRepository(db),
+  replacementActivationMethods = createReplacementActivationMethodRepository(db),
   replacementAutomationRuns = createReplacementAutomationRunRepository(db, {
     maxRuns: config.replacementAutomationLogMaxRuns,
   }),
@@ -269,6 +275,19 @@ export function createApp({
     res.json({ ok: true, ...page });
   });
 
+  app.get('/replacement-activation-methods', requireAuth, (req, res) => {
+    res.json({ ok: true, methods: replacementActivationMethods.listMethods() });
+  });
+
+  app.post('/replacement-activation-methods', requireAuth, (req, res) => {
+    try {
+      const method = replacementActivationMethods.createMethod(req.body);
+      res.status(201).json({ ok: true, method });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
   app.get('/replacement-accounts/:id', requireAuth, (req, res) => {
     const account = replacementAccounts.getAccount(req.params.id);
     if (!account) {
@@ -305,9 +324,38 @@ export function createApp({
     }
   });
 
+  app.post('/replacement-accounts/healthcheck-banned', requireAuth, async (req, res) => {
+    try {
+      const result = await runBannedEmailHealthcheck({
+        accounts,
+        replacementAccounts,
+        mailService,
+        icloudCodeDefaultGmailAccount,
+      });
+      res.json({ ok: true, result });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
   app.patch('/replacement-accounts/:id/status', requireAuth, (req, res) => {
     try {
       const account = replacementAccounts.updateStatus(req.params.id, req.body);
+      res.json({ ok: true, account });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
+  app.patch('/replacement-accounts/:id/activation-method', requireAuth, (req, res) => {
+    try {
+      const activationMethod = String(req.body?.activation_method || '').trim();
+      if (activationMethod && !replacementActivationMethods.hasMethod(activationMethod)) {
+        throw activationMethodError('ACTIVATION_METHOD_INVALID', 'activation method is not configured');
+      }
+      const account = replacementAccounts.updateActivationMethod(req.params.id, {
+        activation_method: activationMethod,
+      });
       res.json({ ok: true, account });
     } catch (error) {
       sendApiError(res, error);
@@ -407,6 +455,22 @@ export function createApp({
       return;
     }
 
+    if (cpaRepairWorker?.repair) {
+      try {
+        const result = await cpaRepairWorker.repair({ account, source: 'manual', mode: '2fa' });
+        if (result?.ok === false) {
+          const updated = result.account || replacementAccounts.getAccount(account.id);
+          sendApiError(res, Object.assign(new Error(result.error || 'CPA repair failed'), { code: 'REPLACE_FAILED' }), { account: updated });
+          return;
+        }
+        res.json({ ok: true, account: result.account || replacementAccounts.getAccount(account.id), ...(result?.run ? { run: result.run } : {}) });
+      } catch (error) {
+        const updated = replacementAccounts.getAccount(account.id);
+        sendApiError(res, error, { account: updated });
+      }
+      return;
+    }
+
     replacementAccounts.markReplacementStarted(account.id);
     try {
       const result = await replacementServices.replaceAccountWith2FA(account);
@@ -415,6 +479,23 @@ export function createApp({
     } catch (error) {
       const updated = replacementAccounts.markReplacementFailure(account.id, error.message);
       notifyCircuitBreaker(adminNotifications, updated);
+      sendApiError(res, error, { account: updated });
+    }
+  });
+
+  app.post('/replacement-accounts/:id/login-2fa', requireAuth, async (req, res) => {
+    const account = replacementAccounts.getAccount(req.params.id);
+    if (!account) {
+      res.status(404).json(errorBody('ACCOUNT_NOT_FOUND', 'replacement account not found'));
+      return;
+    }
+
+    try {
+      const result = await replacementServices.loginAccountWith2FA(account);
+      const updated = replacementAccounts.getAccount(account.id) || account;
+      res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
+    } catch (error) {
+      const updated = replacementAccounts.getAccount(account.id) || account;
       sendApiError(res, error, { account: updated });
     }
   });
@@ -429,10 +510,7 @@ export function createApp({
     try {
       const result = await replacementServices.registerAccount(account);
       const mfaSecret = extractRegistrationMfaSecret(result);
-      const latest = replacementAccounts.getAccount(account.id) || account;
-      const updated = mfaSecret
-        ? replacementAccounts.updateAccount(account.id, { ...latest, codex_2fa: mfaSecret })
-        : latest;
+      const updated = replacementAccounts.markRegistrationSuccess(account.id, { codex_2fa: mfaSecret });
       res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
     } catch (error) {
       const updated = replacementAccounts.getAccount(account.id) || account;
@@ -811,6 +889,9 @@ function extractRegistrationMfaSecret(result) {
 function inferErrorCode(error) {
   if (String(error.message || '').includes('EMAIL_DUPLICATE')) return 'EMAIL_DUPLICATE';
   if (String(error.message || '').includes('EMAIL_REQUIRED')) return 'EMAIL_REQUIRED';
+  if (String(error.message || '').includes('ACTIVATION_METHOD_REQUIRED')) return 'ACTIVATION_METHOD_REQUIRED';
+  if (String(error.message || '').includes('ACTIVATION_METHOD_DUPLICATE')) return 'ACTIVATION_METHOD_DUPLICATE';
+  if (String(error.message || '').includes('ACTIVATION_METHOD_INVALID')) return 'ACTIVATION_METHOD_INVALID';
   if (String(error.message || '').includes('ACCOUNT_NOT_FOUND')) return 'ACCOUNT_NOT_FOUND';
   if (String(error.message || '').includes('STATUS_INVALID')) return 'STATUS_INVALID';
   return 'VALIDATION_ERROR';
@@ -818,6 +899,7 @@ function inferErrorCode(error) {
 
 function statusForApiError(code) {
   if (code === 'EMAIL_DUPLICATE') return 409;
+  if (code === 'ACTIVATION_METHOD_DUPLICATE') return 409;
   if (code === 'ACCOUNT_NOT_FOUND') return 404;
   if (code === 'NOTIFICATION_NOT_FOUND') return 404;
   if (

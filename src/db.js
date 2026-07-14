@@ -2,6 +2,8 @@ import Database from 'better-sqlite3';
 import { dirname } from 'node:path';
 import { mkdirSync } from 'node:fs';
 
+import { DEFAULT_ACTIVATION_METHODS } from './replacementActivationMethods.js';
+
 export function createDatabase(databasePath) {
   mkdirSync(dirname(databasePath), { recursive: true });
   const db = new Database(databasePath);
@@ -39,7 +41,7 @@ function initializeSchema(db) {
       sms_last_error TEXT,
       activation_method TEXT,
       activated_at TEXT,
-      status TEXT NOT NULL DEFAULT 'for_sale',
+      status TEXT NOT NULL DEFAULT 'unregistered',
       status_updated_at TEXT,
       status_note TEXT,
       replacement_count INTEGER NOT NULL DEFAULT 0,
@@ -76,6 +78,30 @@ function initializeSchema(db) {
     ON replacement_accounts (public_code_key)
     WHERE public_code_key IS NOT NULL AND public_code_key != '';
   `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS replacement_activation_methods (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_replacement_activation_methods_name_unique
+    ON replacement_activation_methods (lower(trim(name)));
+  `);
+
+  const seedMethod = db.prepare(`
+    INSERT OR IGNORE INTO replacement_activation_methods (name, created_at, updated_at)
+    VALUES (?, ?, ?)
+  `);
+  const seedMethods = db.transaction((methods) => {
+    const now = new Date().toISOString();
+    for (const method of methods) {
+      seedMethod.run(method, now, now);
+    }
+  });
+  seedMethods(DEFAULT_ACTIVATION_METHODS);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS replacement_automation_runs (

@@ -23,6 +23,7 @@ const axios = optionalRequire('axios', {
 });
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { getImapAuthHeaders } = optionalRequire('./imap-auth', { getImapAuthHeaders: async () => ({}) });
 const { fetchLatestOpenAiOtpOnce } = optionalRequire('./pool-email-imap', { fetchLatestOpenAiOtpOnce: async () => '' });
 const inboxEmail = optionalRequire('./inbox-email', {});
@@ -629,6 +630,22 @@ async function humanType(page, selector, text) {
     }
 }
 
+async function humanFillInput(page, selector, text, options = {}) {
+    const timeout = Number(options.timeoutMs || 30000);
+    const locator = page.locator(selector).first();
+    await locator.waitFor({ state: 'visible', timeout });
+    await locator.click({ timeout });
+    await locator.fill('', { timeout: Math.min(timeout, 10000) });
+    for (const char of String(text || '')) {
+        await locator.type(char, { delay: Math.random() * 100 + 50, timeout });
+    }
+    const actualLength = await locator.evaluate((el) => String(el.value || '').length).catch(() => null);
+    if (actualLength !== null && actualLength !== String(text || '').length) {
+        await locator.fill(String(text || ''), { timeout: Math.min(timeout, 10000) });
+    }
+    return await locator.evaluate((el) => String(el.value || '').length).catch(() => null);
+}
+
 async function humanClick(page, selector) {
     const element = await page.waitForSelector(selector, { visible: true });
     await element.hover();
@@ -721,6 +738,44 @@ async function prepareChatGptEmailEntry(page, options = {}) {
     throw new Error(`注册入口加载失败：未找到 ChatGPT 邮箱输入入口，URL=${visibleUrlForLog(page.url())}`);
 }
 
+async function prepareDirectAuthEmailEntry(page, options = {}) {
+    const timeoutMs = Number(options.timeoutMs || 60000);
+    const logger = options.logger || console;
+    registerLog(logger, 'navigation', 'action=direct-auth-fallback-start', `url=${visibleUrlForLog(page.url())}`);
+
+    await page.goto('https://auth.openai.com/log-in', {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs
+    });
+    await page.waitForSelector('body', { visible: true, timeout: timeoutMs }).catch(() => {});
+
+    if (await hasChatGptEmailInput(page, Math.min(5000, timeoutMs))) {
+        registerLog(logger, 'navigation', 'action=direct-auth-email-ready', `source=auth-log-in url=${visibleUrlForLog(page.url())}`);
+        return { status: 'email-input-ready', source: 'auth-log-in' };
+    }
+
+    const loginLink = page.getByRole?.('link', { name: /^log in$/i })?.first();
+    if (loginLink && await loginLink.isVisible().catch(() => false)) {
+        registerLog(logger, 'navigation', 'action=direct-auth-click-login', `url=${visibleUrlForLog(page.url())}`);
+        await loginLink.click({ timeout: 10000 }).catch(async () => loginLink.click({ force: true, timeout: 10000 }));
+        if (await hasChatGptEmailInput(page, timeoutMs)) {
+            registerLog(logger, 'navigation', 'action=direct-auth-email-ready', `source=session-ended-login url=${visibleUrlForLog(page.url())}`);
+            return { status: 'email-input-ready', source: 'session-ended-login' };
+        }
+    }
+
+    await page.goto('https://chatgpt.com/auth/login_with?callback_path=/', {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs
+    }).catch(() => {});
+    if (await hasChatGptEmailInput(page, timeoutMs)) {
+        registerLog(logger, 'navigation', 'action=direct-auth-email-ready', `source=chatgpt-login-with url=${visibleUrlForLog(page.url())}`);
+        return { status: 'email-input-ready', source: 'chatgpt-login-with' };
+    }
+
+    throw new Error(`直连 OpenAI 登录页仍未找到邮箱输入框，URL=${visibleUrlForLog(page.url())}`);
+}
+
 async function clearAndType(page, selector, text) {
     const input = page.locator(selector).first();
     await input.waitFor({ state: 'visible', timeout: 30000 });
@@ -765,9 +820,64 @@ const OTP_INPUT_SELECTORS = [
     'input[type="text"]'
 ];
 
+const PASSWORD_INPUT_SELECTORS = [
+    'input[name="new-password"]',
+    'input[type="password"]',
+    'input[name="password"]',
+    'input[autocomplete="current-password"]'
+];
+
 const MAX_OTP_RETRIES = 5;
 const OTP_RETRY_EXCEEDED_ERROR = `验证码重试超过 ${MAX_OTP_RETRIES} 次，需要重新上号`;
 const OTP_REFETCH_AFTER_RECOVERY = 'OTP_REFETCH_AFTER_RECOVERY';
+
+async function isUsableOtpInput(locator, selector) {
+    const visible = await locator.isVisible().catch(() => false);
+    if (!visible) return false;
+
+    if (typeof locator.evaluate !== 'function') return true;
+
+    const meta = await locator.evaluate((node) => {
+        const el = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ? node : null;
+        if (!el) return null;
+        return {
+            disabled: Boolean(el.disabled),
+            readOnly: Boolean(el.readOnly),
+            type: String(el.getAttribute('type') || el.type || '').toLowerCase(),
+            name: String(el.getAttribute('name') || ''),
+            id: String(el.getAttribute('id') || ''),
+            placeholder: String(el.getAttribute('placeholder') || ''),
+            autocomplete: String(el.getAttribute('autocomplete') || ''),
+            inputMode: String(el.getAttribute('inputmode') || ''),
+            ariaLabel: String(el.getAttribute('aria-label') || ''),
+            ariaDescription: String(el.getAttribute('aria-description') || ''),
+            maxLength: Number(el.maxLength || 0)
+        };
+    }).catch(() => null);
+
+    if (!meta) return true;
+    if (meta.disabled || meta.readOnly) return false;
+    if (['hidden', 'email', 'password', 'search'].includes(meta.type)) return false;
+
+    const selectorText = String(selector || '').toLowerCase();
+    if (selectorText.includes('one-time-code') || selectorText.includes('inputmode="numeric"') || selectorText.includes("inputmode='numeric'")) {
+        return true;
+    }
+    if (meta.type === 'tel' || /numeric|decimal/i.test(meta.inputMode)) return true;
+
+    const marker = [
+        meta.name,
+        meta.id,
+        meta.placeholder,
+        meta.autocomplete,
+        meta.ariaLabel,
+        meta.ariaDescription
+    ].join(' ').toLowerCase();
+    if (/otp|code|verification|verify|security|验证码|代码/.test(marker)) return true;
+    if ((meta.type === 'text' || !meta.type) && meta.maxLength > 0 && meta.maxLength <= 8) return true;
+
+    return false;
+}
 
 async function fetchRegistrationEmailVerificationCodeOnce(page, email, options = {}, attempt = 1, maxAttempts = 1) {
     const verificationApiUrl = resolveVerificationApiUrl(options, process.env, email);
@@ -850,9 +960,16 @@ async function findVisibleOtpSelector(page, timeout = 30000) {
 
     while (Date.now() < deadline) {
         for (const selector of OTP_INPUT_SELECTORS) {
-            const locator = page.locator(selector).first();
-            if (await locator.isVisible().catch(() => false)) {
-                return selector;
+            const locator = page.locator(selector);
+            const matchedCount = typeof locator.count === 'function'
+                ? await locator.count().catch(() => 1)
+                : 1;
+            const count = Math.min(Math.max(0, Number(matchedCount) || 0), 10);
+            for (let index = 0; index < count; index += 1) {
+                const candidate = index === 0 || typeof locator.nth !== 'function' ? locator.first() : locator.nth(index);
+                if (await isUsableOtpInput(candidate, selector)) {
+                    return index === 0 ? selector : `:nth-match(${selector}, ${index + 1})`;
+                }
             }
         }
         await page.waitForTimeout(500);
@@ -860,6 +977,34 @@ async function findVisibleOtpSelector(page, timeout = 30000) {
 
     const bodyText = String(await page.textContent('body', { timeout: 3000 }).catch(() => '') || '').slice(0, 500);
     throw new Error(`未找到可见的验证码输入框，页面片段: ${bodyText}`);
+}
+
+async function findVisiblePasswordSelector(page, timeout = 30000) {
+    const deadline = Date.now() + timeout;
+
+    while (Date.now() < deadline) {
+        for (const selector of PASSWORD_INPUT_SELECTORS) {
+            const candidate = page.locator(selector).first();
+            const visible = await candidate.isVisible().catch(() => false);
+            if (!visible) continue;
+            const enabled = typeof candidate.isEnabled === 'function'
+                ? await candidate.isEnabled().catch(() => false)
+                : true;
+            if (!enabled) continue;
+            const usable = await candidate.evaluate((node) => {
+                const el = node instanceof HTMLInputElement ? node : null;
+                if (!el) return false;
+                const disabledContainer = el.closest?.('[aria-disabled="true"], [inert], fieldset[disabled]');
+                return !el.disabled && !el.readOnly && !disabledContainer;
+            }).catch(() => true);
+            if (usable) {
+                return selector;
+            }
+        }
+        await page.waitForTimeout(500);
+    }
+
+    return '';
 }
 
 async function isOtpIncorrect(page) {
@@ -883,6 +1028,47 @@ async function isOtpIncorrect(page) {
     }
 }
 
+async function waitForOtpSubmitResult(page, options = {}) {
+    const timeoutMs = Math.max(1000, Number(options.timeoutMs || 25000));
+    const intervalMs = Math.max(100, Number(options.intervalMs || 500));
+    const deadline = Date.now() + timeoutMs;
+    let lastState = 'unknown';
+    let lastUrl = '';
+
+    while (Date.now() < deadline) {
+        lastUrl = String(page.url?.() || '');
+
+        if (await isOtpIncorrect(page)) {
+            return { status: 'incorrect', state: 'otp', url: lastUrl };
+        }
+
+        if (lastUrl.includes('chatgpt.com') || lastUrl.includes('/about-you')) {
+            return { status: 'success', state: lastUrl.includes('/about-you') ? 'profile' : 'chatgpt-session', url: lastUrl };
+        }
+
+        const pageState = await classifyRegistrationPage(page, {
+            passwordSubmitted: true,
+            timeoutMs: 500
+        }).catch(() => ({ state: 'unknown', evidence: {} }));
+        lastState = pageState.state || 'unknown';
+        lastUrl = String(pageState.evidence?.url || lastUrl);
+
+        if (lastState === 'user-exists') {
+            throw new Error(USER_ALREADY_EXISTS_ERROR);
+        }
+        if (lastState === 'profile' || lastState === 'chatgpt-session') {
+            return { status: 'success', state: lastState, url: lastUrl };
+        }
+        if (lastState === 'password-error') {
+            throw new Error(`OpenAI 密码错误：补号账号数据库 password 未通过登录页校验，URL=${visibleUrlForLog(lastUrl)}`);
+        }
+
+        await page.waitForTimeout(intervalMs);
+    }
+
+    return { status: 'pending', state: lastState, url: lastUrl };
+}
+
 function resolveRegistrationPassword(env = process.env) {
     const password = String(env.ROXY_REGISTER_PASSWORD || env.ROXY_OAUTH_PASSWORD || '').trim();
     if (!password) {
@@ -891,9 +1077,100 @@ function resolveRegistrationPassword(env = process.env) {
     return password;
 }
 
+function secretDebugFingerprint(value) {
+    const text = String(value || '');
+    return `len=${text.length} sha256=${crypto.createHash('sha256').update(text).digest('hex').slice(0, 12)}`;
+}
+
 function isEmailVerificationUrl(value = '') {
     return String(value || '').includes('auth.openai.com/email-verification')
         || String(value || '').includes('/email-verification');
+}
+
+async function getRegistrationPageEvidence(page) {
+    const url = String(page.url?.() || '');
+    const title = String(await page.title?.().catch(() => '') || '');
+    let bodyText = '';
+    try {
+        const bodyLocator = typeof page.locator === 'function' ? page.locator('body') : null;
+        if (bodyLocator && typeof bodyLocator.textContent === 'function') {
+            bodyText = String(await bodyLocator.textContent({ timeout: 1000 }).catch(() => '') || '');
+        }
+    } catch (_) { }
+    if (!bodyText && typeof page.textContent === 'function') {
+        bodyText = String(await page.textContent('body', { timeout: 1000 }).catch(() => '') || '');
+    }
+    return {
+        url,
+        title,
+        bodySnippet: bodyText.replace(/\s+/g, ' ').trim().slice(0, 500)
+    };
+}
+
+async function classifyRegistrationPage(page, options = {}) {
+    const passwordSubmitted = Boolean(options.passwordSubmitted);
+    const timeoutMs = Math.max(100, Number(options.timeoutMs || 1000));
+    const evidence = await getRegistrationPageEvidence(page);
+    const bodyLower = `${evidence.title}\n${evidence.bodySnippet}`.toLowerCase();
+
+    if (bodyLower.includes('operation timed out') || bodyLower.includes('糟糕')) {
+        return { state: 'timeout', evidence };
+    }
+
+    if (bodyLower.includes('err_connection_closed')
+        || bodyLower.includes('无法访问此网站')
+        || bodyLower.includes('意外终止了连接')
+        || bodyLower.includes('this site can’t be reached')
+        || bodyLower.includes('this site cannot be reached')) {
+        return { state: 'connection-closed', evidence };
+    }
+
+    if (/already exists|already have an account|user_already_exists|该邮箱已被注册|已存在/.test(bodyLower)) {
+        return { state: 'user-exists', evidence };
+    }
+
+    if (/incorrect email address or password|incorrect password|wrong password|invalid password|邮箱地址或密码不正确|密码错误|密码不正确/.test(bodyLower)) {
+        return { state: 'password-error', evidence };
+    }
+
+    if (await page.locator('text=Verify you are human').first().isVisible().catch(() => false)
+        || /verify you are human|验证你是真人|人机/.test(bodyLower)) {
+        return { state: 'captcha', evidence };
+    }
+
+    const passwordSelector = await findVisiblePasswordSelector(page, timeoutMs).catch(() => '');
+    if (passwordSelector && !isEmailVerificationUrl(evidence.url)) {
+        const state = evidence.url.includes('/log-in/password') || /enter your password/i.test(evidence.bodySnippet)
+            ? 'password-login'
+            : 'password-create';
+        return { state, passwordSelector, evidence };
+    }
+
+    const otpSelector = await findVisibleOtpSelector(page, timeoutMs).catch(() => '');
+    if (otpSelector) {
+        if (!passwordSubmitted) {
+            return { state: 'email-verification-before-password', otpSelector, evidence };
+        }
+        return { state: 'otp', otpSelector, evidence };
+    }
+
+    if (!passwordSubmitted && isEmailVerificationUrl(evidence.url)) {
+        return { state: 'email-verification-before-password', evidence };
+    }
+
+    if (await page.locator('input[type="email"], input[name="email"]').first().isVisible().catch(() => false)) {
+        return { state: 'email-entry', evidence };
+    }
+
+    if (evidence.url.includes('chatgpt.com')) {
+        return { state: 'chatgpt-session', evidence };
+    }
+
+    if (/about you|tell us about yourself|date of birth|生日|姓名/.test(bodyLower)) {
+        return { state: 'profile', evidence };
+    }
+
+    return { state: 'unknown', evidence };
 }
 
 async function detectNextRegistrationStep(page, options = {}) {
@@ -910,25 +1187,20 @@ async function detectNextRegistrationStep(page, options = {}) {
             continue;
         }
 
-        if (await page.locator('input[name="new-password"]').first().isVisible().catch(() => false)) {
+        const pageState = await classifyRegistrationPage(page, { passwordSubmitted, timeoutMs: 500 });
+        if (pageState.state === 'password-login' || pageState.state === 'password-create') {
             return 'password';
         }
-
-        // OpenAI 可能在设置密码前就落到 email-verification，甚至显示 OTP 框。
-        // 业务要求：密码未提交前一律先推进到 create-account/password，不能填第一次邮件码。
-        if (!passwordSubmitted && isEmailVerificationUrl(page.url())) {
+        if (pageState.state === 'email-verification-before-password') {
             return 'email-verification-before-password';
         }
-
-        if (await page.locator('text=Verify you are human').first().isVisible().catch(() => false)) {
+        if (pageState.state === 'captcha') {
             return 'captcha';
         }
-
-        const otpVisible = await findVisibleOtpSelector(page, 1200).then(() => true).catch(() => false);
-        if (!passwordSubmitted && otpVisible) {
-            return 'email-verification-before-password';
+        if (pageState.state === 'password-error') {
+            return 'password-error';
         }
-        if (otpVisible) {
+        if (pageState.state === 'otp') {
             return 'otp';
         }
     } while (Date.now() < deadline);
@@ -968,32 +1240,152 @@ async function advanceEmailVerificationToPassword(page, options = {}) {
             logger.warn?.('⚠️ [Email Verification] 点击主按钮后未确认跳转，继续等待 password 输入框...');
         }
     }
+    const timeoutMs = Number(options.timeoutMs || 45000);
     await Promise.race([
-        page.waitForSelector('input[name="new-password"]', { visible: true, timeout: Number(options.timeoutMs || 45000) }).catch(() => null),
-        page.waitForURL((u) => String(u || '').includes('/create-account/password'), { timeout: Number(options.timeoutMs || 45000) }).catch(() => null)
+        findVisiblePasswordSelector(page, timeoutMs).catch(() => ''),
+        page.waitForURL((u) => /\/(create-account|log-in)\/password/.test(String(u || '')), { timeout: timeoutMs }).catch(() => null)
     ]);
-    if (!await page.locator('input[name="new-password"]').first().isVisible().catch(() => false)) {
+    if (!await findVisiblePasswordSelector(page, 1000)) {
         logger.warn?.('⚠️ [Email Verification] 未自动进入创建密码页，尝试直接访问 create-account/password...');
         await page.goto('https://auth.openai.com/create-account/password', {
             waitUntil: 'domcontentloaded',
-            timeout: Number(options.timeoutMs || 45000)
+            timeout: timeoutMs
         }).catch(() => {});
-        await page.waitForSelector('input[name="new-password"]', { visible: true, timeout: Number(options.timeoutMs || 45000) }).catch(() => null);
+        await findVisiblePasswordSelector(page, timeoutMs).catch(() => '');
     }
-    if (!await page.locator('input[name="new-password"]').first().isVisible().catch(() => false)) {
+    if (!await findVisiblePasswordSelector(page, 1000)) {
         throw new Error(`email-verification 未能推进到创建密码页，URL=${visibleUrlForLog(page.url())}`);
     }
     return true;
 }
 
-async function waitForOtpInputReady(page, recoverOperationTimeout, recoverConnectionClosed, timeout = 45000) {
-    const deadline = Date.now() + timeout;
+async function isCreatePasswordPageReady(page, options = {}) {
+    const timeoutMs = Math.max(0, Number(options.timeoutMs || 500));
+    const passwordSelector = await findVisiblePasswordSelector(page, timeoutMs).catch(() => '');
+    if (!passwordSelector) {
+        return false;
+    }
+
+    const url = String(page.url?.() || '');
+    if (isEmailVerificationUrl(url)) {
+        return false;
+    }
+
+    const otpSelector = await findVisibleOtpSelector(page, 100).catch(() => '');
+    if (otpSelector) {
+        return false;
+    }
+
+    if (url.includes('/create-account/password') || url.includes('/log-in/password')) {
+        return true;
+    }
+
+    const bodyText = await page.locator('body').textContent({ timeout: 500 }).catch(() => '');
+    return /create (a )?password|create your password|enter your password|创建密码|设置密码|输入密码/i.test(String(bodyText || ''));
+}
+
+async function submitRegistrationPassword(page, registrationPassword, options = {}) {
+    const logger = options.logger || console;
+    const reason = options.reason ? ` reason=${options.reason}` : '';
+    logger.log?.(`🔒 [Password] 正在填写数据库密码${reason} ${secretDebugFingerprint(registrationPassword)}...`);
+    await sleep(Math.random() * 1500 + 1000);
+    const passwordSelector = await findVisiblePasswordSelector(page, Number(options.timeoutMs || 5000));
+    if (!passwordSelector || !await isCreatePasswordPageReady(page, { timeoutMs: Number(options.timeoutMs || 5000) })) {
+        const otpSelector = await findVisibleOtpSelector(page, 1000).catch(() => '');
+        if (otpSelector) {
+            logger.warn?.(`⚠️ [Password] 密码页已自动进入邮箱验证码页，跳过重复填写密码：URL=${visibleUrlForLog(page.url())}`);
+            return true;
+        }
+        throw new Error(`密码页未就绪，跳过密码填写：URL=${visibleUrlForLog(page.url())}`);
+    }
+    const filledLength = await humanFillInput(page, passwordSelector, registrationPassword, options);
+    logger.log?.(`🔒 [Password] 密码输入框已写入 len=${filledLength ?? 'unknown'} expectedLen=${String(registrationPassword || '').length}`);
+    await sleep(Math.random() * 1000 + 500);
+    await humanClick(page, 'button[type="submit"]');
+    logger.log?.('✅ [密码] 密码设置完成，正在进入验证码阶段...');
+    return true;
+}
+
+async function waitForOtpInputReady(page, recoverOperationTimeout, recoverConnectionClosed, timeout = 45000, options = {}) {
+    const waitWindowMs = Math.max(1000, Number(timeout || 45000));
+    let deadline = Date.now() + waitWindowMs;
     let lastStateLog = 0;
+    let passwordStateFirstSeenAt = 0;
+    const handlePasswordPage = typeof options.handlePasswordPage === 'function' ? options.handlePasswordPage : null;
+    const refetchAfterPassword = options.refetchAfterPassword !== false;
+    const recoverPasswordPage = options.recoverPasswordPage !== false;
+    const delayedPasswordRecoveryMs = Math.max(0, Number(options.delayedPasswordRecoveryMs || 8000));
+    const resetOtpWaitWindow = (reason) => {
+        deadline = Date.now() + waitWindowMs;
+        lastStateLog = 0;
+        passwordStateFirstSeenAt = 0;
+        console.log(`🔑 [OTP] 已重置验证码页等待窗口 reason=${reason} timeoutMs=${waitWindowMs}`);
+    };
 
     while (Date.now() < deadline) {
-        const otpSelector = await findVisibleOtpSelector(page, 2000).catch(() => '');
-        if (otpSelector) {
-            return otpSelector;
+        const pageState = await classifyRegistrationPage(page, { passwordSubmitted: true, timeoutMs: 500 }).catch(() => ({ state: 'unknown' }));
+        if (pageState.state === 'otp') {
+            return pageState.otpSelector || await findVisibleOtpSelector(page, 2000);
+        }
+
+        if (pageState.state === 'password-error') {
+            throw new Error(`OpenAI 密码错误：补号账号数据库 password 未通过登录页校验，URL=${visibleUrlForLog(pageState.evidence?.url || page.url())}`);
+        }
+
+        if (pageState.state === 'password-login' || pageState.state === 'password-create') {
+            if (!passwordStateFirstSeenAt) {
+                passwordStateFirstSeenAt = Date.now();
+            }
+            const passwordStateAgeMs = Date.now() - passwordStateFirstSeenAt;
+            const shouldRecoverPasswordPage = handlePasswordPage
+                && (recoverPasswordPage || passwordStateAgeMs >= delayedPasswordRecoveryMs);
+            if (!shouldRecoverPasswordPage) {
+                await page.waitForTimeout(1000);
+                continue;
+            }
+
+            await page.waitForTimeout(1200);
+            const settledState = await classifyRegistrationPage(page, { passwordSubmitted: true, timeoutMs: 500 }).catch(() => ({ state: 'unknown' }));
+            if (settledState.state === 'otp') {
+                return settledState.otpSelector || await findVisibleOtpSelector(page, 2000);
+            }
+            if (settledState.state === 'password-error') {
+                throw new Error(`OpenAI 密码错误：补号账号数据库 password 未通过登录页校验，URL=${visibleUrlForLog(settledState.evidence?.url || page.url())}`);
+            }
+            if (!(settledState.state === 'password-login' || settledState.state === 'password-create')) {
+                await page.waitForTimeout(1000);
+                continue;
+            }
+            const handled = await handlePasswordPage('password-page-during-otp-wait');
+            if (handled && refetchAfterPassword) {
+                throw new Error(OTP_REFETCH_AFTER_RECOVERY);
+            }
+            if (handled) {
+                resetOtpWaitWindow('password-page-during-otp-wait');
+            }
+            await page.waitForTimeout(1500);
+            continue;
+        }
+
+        if (pageState.state === 'connection-closed' && await recoverConnectionClosed()) {
+            await page.waitForTimeout(1500);
+            continue;
+        }
+
+        if (pageState.state === 'timeout' && await recoverOperationTimeout()) {
+            if (handlePasswordPage && await isCreatePasswordPageReady(page, { timeoutMs: 1000 })) {
+                const handled = await handlePasswordPage('timeout-recovery-returned-password-page');
+                if (handled && refetchAfterPassword) {
+                    console.warn('🔑 [OTP] 超时恢复后已重新提交密码，准备重新获取新验证码...');
+                    throw new Error(OTP_REFETCH_AFTER_RECOVERY);
+                }
+                if (handled) {
+                    resetOtpWaitWindow('timeout-recovery-returned-password-page');
+                }
+            }
+            console.warn('🔑 [OTP] 等待验证码输入框时页面进入超时恢复，准备重新确认页面状态...');
+            await page.waitForTimeout(1500);
+            continue;
         }
 
         if (await recoverConnectionClosed()) {
@@ -1002,7 +1394,7 @@ async function waitForOtpInputReady(page, recoverOperationTimeout, recoverConnec
         }
 
         if (await recoverOperationTimeout()) {
-            console.warn('🔑 [OTP] 拿到验证码后页面又恢复了，当前验证码作废，准备重新获取新验证码...');
+            console.warn('🔑 [OTP] 页面恢复后状态变化，准备重新获取新验证码...');
             throw new Error(OTP_REFETCH_AFTER_RECOVERY);
         }
 
@@ -1011,9 +1403,10 @@ async function waitForOtpInputReady(page, recoverOperationTimeout, recoverConnec
             lastStateLog = now;
             const emailVisible = await page.locator('input[type="email"]').first().isVisible().catch(() => false);
             if (emailVisible) {
-                console.warn('🔑 [OTP] 已拿到验证码，但页面仍停留在邮箱页，继续等待验证码输入框或恢复流程...');
+                console.warn('🔑 [OTP] 页面仍停留在邮箱页，继续等待验证码输入框或恢复流程...');
             } else {
-                console.log('🔑 [OTP] 已拿到验证码，正在等待验证码输入框出现...');
+                const stateText = pageState?.state ? ` state=${pageState.state}` : '';
+                console.log(`🔑 [OTP] 正在等待验证码输入框出现${stateText}...`);
             }
         }
 
@@ -1492,20 +1885,6 @@ async function submitOtpWithRetry(page, email, maxAttempts = MAX_OTP_RETRIES, op
             onBeforePoll: async () => (beforeAttempt ? beforeAttempt(attempt) : false)
         };
 
-        const code = customFetchCode
-            ? await customFetchCode(lastCode, pollOpts)
-            : await fetchRegistrationEmailVerificationCode(page, normalizedEmail, {
-                maxRetries: pollOpts.maxRetries,
-                codePollMaxAttempts: pollOpts.maxRetries,
-                codePollIntervalMs: Number(process.env.VERIFICATION_CODE_POLL_INTERVAL_MS || 5000),
-                verificationApiUrl: resolveVerificationApiUrl(),
-                timeoutMs: Number(process.env.REGISTRATION_CODE_REQUEST_TIMEOUT_MS || DEFAULT_VERIFICATION_TIMEOUT_MS),
-                logger: console
-            }, lastCode);
-        lastCode = code;
-        if (beforeAttempt) {
-            await beforeAttempt(attempt);
-        }
         let otpSelector = '';
         try {
             otpSelector = waitForOtpInput
@@ -1520,6 +1899,21 @@ async function submitOtpWithRetry(page, email, maxAttempts = MAX_OTP_RETRIES, op
                 throw new Error(OTP_RETRY_EXCEEDED_ERROR);
             }
             throw error;
+        }
+
+        const code = customFetchCode
+            ? await customFetchCode(lastCode, pollOpts)
+            : await fetchRegistrationEmailVerificationCode(page, normalizedEmail, {
+                maxRetries: pollOpts.maxRetries,
+                codePollMaxAttempts: pollOpts.maxRetries,
+                codePollIntervalMs: Number(process.env.VERIFICATION_CODE_POLL_INTERVAL_MS || 5000),
+                verificationApiUrl: resolveVerificationApiUrl(),
+                timeoutMs: Number(process.env.REGISTRATION_CODE_REQUEST_TIMEOUT_MS || DEFAULT_VERIFICATION_TIMEOUT_MS),
+                logger: console
+            }, lastCode);
+        lastCode = code;
+        if (beforeAttempt) {
+            await beforeAttempt(attempt);
         }
 
         console.log(`🔑 [OTP] 第 ${attempt} 次提交验证码: [redacted-code]`);
@@ -1550,19 +1944,22 @@ async function submitOtpWithRetry(page, email, maxAttempts = MAX_OTP_RETRIES, op
         if (!otpClickResult.ok) {
             console.warn('⚠️  [OTP] 多次点击 Continue 仍未跳转，将进入下一阶段判定');
         }
-        await page.waitForTimeout(2000);
-
-        if (await isUserAlreadyExistsPage(page)) {
-            throw new Error(USER_ALREADY_EXISTS_ERROR);
-        }
-
-        if (!(await isOtpIncorrect(page))) {
+        const submitResult = await waitForOtpSubmitResult(page, {
+            timeoutMs: Number(process.env.REGISTRATION_OTP_SUBMIT_WAIT_MS || 25000),
+            intervalMs: 500
+        });
+        if (submitResult.status === 'success') {
             return code;
         }
 
-        if (attempt < maxAttempts) {
-            console.warn(`🔑 [OTP] 验证码被判定为错误，等待新验证码后重试 (${attempt}/${maxAttempts})...`);
+        if (submitResult.status === 'incorrect') {
+            if (attempt < maxAttempts) {
+                console.warn(`🔑 [OTP] 验证码被判定为错误，等待新验证码后重试 (${attempt}/${maxAttempts})...`);
+            }
+            continue;
         }
+
+        throw new Error(`邮箱验证码提交后未进入下一阶段：state=${submitResult.state || 'unknown'} URL=${visibleUrlForLog(submitResult.url || page.url())}`);
     }
 
     throw new Error(OTP_RETRY_EXCEEDED_ERROR);
@@ -1950,24 +2347,43 @@ async function runRegistrationFlow() {
         await recoverOperationTimeout();
         let nextStep = await waitForNextRegistrationStep(20000);
 
+        if (nextStep === 'unknown') {
+            const currentState = await classifyRegistrationPage(page, {
+                passwordSubmitted: registrationPasswordSubmitted,
+                timeoutMs: 1000
+            }).catch(() => ({ state: 'unknown' }));
+            if (currentState.state === 'email-entry' && String(currentState.evidence?.url || page.url()).includes('chatgpt.com')) {
+                console.warn('⚠️  [入口] ChatGPT 邮箱提交后仍停留在邮箱弹窗，疑似 signin/openai 返回 403；切换到 auth.openai.com 直连登录页重试...');
+                await prepareDirectAuthEmailEntry(page, { timeoutMs: 90000, logger: console });
+                await sleep(Math.random() * 1500 + 1000);
+                await ensureInputValue(page, CHATGPT_EMAIL_INPUT_SELECTOR, email, '邮箱输入框');
+                await sleep(Math.random() * 1000 + 800);
+                await humanClick(page, 'button[type="submit"]');
+                await recoverOperationTimeout();
+                nextStep = await waitForNextRegistrationStep(45000);
+            }
+        }
+
         if (nextStep === 'email-verification-before-password') {
             await advanceEmailVerificationToPassword(page, { logger: console });
             nextStep = await waitForNextRegistrationStep(45000);
         }
 
         if (nextStep === 'password') {
-            console.log("🔒 [Step 4.5] 检测到创建密码页面，正在填写数据库密码...");
-            await sleep(Math.random() * 1500 + 1000);
-            await humanType(page, 'input[name="new-password"]', registrationPassword);
-            await sleep(Math.random() * 1000 + 500);
-            await humanClick(page, 'button[type="submit"]');
+            console.log("🔒 [Step 4.5] 检测到密码页面，正在填写数据库密码...");
+            await submitRegistrationPassword(page, registrationPassword, { logger: console, reason: 'initial-password-step' });
             registrationPasswordSubmitted = true;
-            console.log("✅ [密码] 密码设置完成，正在进入验证码阶段...");
         } else if (nextStep === 'captcha') {
             console.log("⚠️ [挑战] 触发了真人验证，请手动处理或检查代理...");
+        } else if (nextStep === 'unknown') {
+            const currentState = await classifyRegistrationPage(page, {
+                passwordSubmitted: registrationPasswordSubmitted,
+                timeoutMs: 1000
+            }).catch(() => ({ state: 'unknown', evidence: {} }));
+            throw new Error(`邮箱提交后未进入密码或邮箱验证码阶段：state=${currentState.state || 'unknown'} URL=${visibleUrlForLog(currentState.evidence?.url || page.url())}`);
         }
 
-        console.log("🔑 [Step 5] 正在从邮箱获取验证码...");
+        console.log("🔑 [Step 5] 正在等待邮箱验证码输入页...");
 
         // 进入 OTP 阶段前先确诊：若仍处于 Operation timed out / 连接关闭页 / 已注册错误页，提前抛错避免空等
         if (await isUserAlreadyExistsPage(page)) {
@@ -1983,7 +2399,21 @@ async function runRegistrationFlow() {
             }
         }
 
-        await findVisibleOtpSelector(page, 30000);
+        const handlePasswordPageDuringOtp = async (reason) => {
+            if (!await isCreatePasswordPageReady(page, { timeoutMs: 1000 })) {
+                return false;
+            }
+            console.warn(`⚠️  [恢复] OTP 阶段回到了密码页，重新填写数据库密码后等待新的邮箱验证码。reason=${reason}`);
+            await submitRegistrationPassword(page, registrationPassword, { logger: console, reason });
+            registrationPasswordSubmitted = true;
+            return true;
+        };
+
+        await waitForOtpInputReady(page, recoverOperationTimeout, recoverConnectionClosed, 30000, {
+            handlePasswordPage: handlePasswordPageDuringOtp,
+            refetchAfterPassword: false,
+            recoverPasswordPage: false
+        });
         await sleep(Math.random() * 1500 + 1000);
         const fetchCodeFn = async (excludeCode, pollOpts) => fetchRegistrationEmailVerificationCode(page, email, {
             maxRetries: pollOpts.maxRetries,
@@ -1999,7 +2429,10 @@ async function runRegistrationFlow() {
         await submitOtpWithRetry(page, email, MAX_OTP_RETRIES, {
             fetchCode: fetchCodeFn,
             beforeAttempt: async () => recoverOperationTimeout(),
-            waitForOtpInput: async () => waitForOtpInputReady(page, recoverOperationTimeout, recoverConnectionClosed, 45000)
+            waitForOtpInput: async () => waitForOtpInputReady(page, recoverOperationTimeout, recoverConnectionClosed, 45000, {
+                handlePasswordPage: handlePasswordPageDuringOtp,
+                refetchAfterPassword: true
+            })
         });
 
         console.log("📝 [Step 6] 正在完善个人资料（如果需要）...");
@@ -2283,10 +2716,19 @@ module.exports = {
     buildDefaultVerificationApiUrl,
     fetchRegistrationEmailVerificationCodeOnce,
     fetchRegistrationEmailVerificationCode,
+    classifyRegistrationPage,
+    findVisibleOtpSelector,
+    findVisiblePasswordSelector,
     prepareChatGptEmailEntry,
     detectNextRegistrationStep,
     resolveRegistrationPassword,
+    secretDebugFingerprint,
+    isCreatePasswordPageReady,
+    submitRegistrationPassword,
     advanceEmailVerificationToPassword,
+    waitForOtpInputReady,
+    waitForOtpSubmitResult,
+    submitOtpWithRetry,
     enableChatGptTotpMfa,
     saveRegistrationAccessTokenFile,
     shouldEnableRegistrationMfa,

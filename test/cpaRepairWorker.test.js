@@ -48,6 +48,57 @@ test('repair worker replaces account, uploads CPA JSON, and verifies health', as
   ]);
 });
 
+test('repair worker can run 2FA replacement before uploading CPA JSON', async () => {
+  const events = [];
+  const worker = createCpaRepairWorker({
+    cpaOutputDir: 'src/auto/product_files/cpa',
+    readFileImpl(path, encoding) {
+      assert.equal(path, 'src\\auto\\product_files\\cpa\\user@example.com.json');
+      assert.equal(encoding, 'utf8');
+      return '{"type":"openai"}';
+    },
+    cpaClient: {
+      async uploadAuthFile(input) {
+        events.push(['upload', input.name, input.payload]);
+        return { status: 'ok' };
+      },
+      async listAuthFiles() {
+        return [{ provider: 'codex', email: 'user@example.com', status: 'active', status_message: '' }];
+      },
+    },
+    replacementAccounts: {
+      markReplacementStarted(id) { events.push(['started', id]); },
+      markReplacementSuccess(id) { events.push(['success', id]); return { id, status: 'cpa_mounted' }; },
+      markReplacementFailure() { throw new Error('not expected'); },
+    },
+    replacementServices: {
+      async replaceAccount() {
+        events.push('replace');
+        throw new Error('plain replacement should not run');
+      },
+      async replaceAccountWith2FA(account, options) {
+        events.push(['replace-2fa', account.id, options.cpaTriggerDetails]);
+        return { ok: true, run: { id: 808 } };
+      },
+    },
+  });
+
+  const result = await worker.repair({
+    account: { id: 7, email: 'user@example.com' },
+    mode: '2fa',
+    credential: { provider: 'codex', email: 'user@example.com', status: 'error' },
+    reasons: ['auth_expired'],
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(events, [
+    ['started', 7],
+    ['replace-2fa', 7, 'provider=codex email=user@example.com status=error unavailable=false disabled=false reasons=auth_expired status_message='],
+    ['upload', 'codex-user@example.com-plus.json', '{"type":"openai"}'],
+    ['success', 7],
+  ]);
+});
+
 test('repair worker appends CPA upload steps to replacement run log', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cpa-repair-worker-'));
   const logPath = join(dir, 'replacement.log');

@@ -234,3 +234,1371 @@ test('enableChatGptTotpMfa runs MFA protocol in page context and returns secret 
   assert.equal(logs.some((line) => line.includes('WAITOC2YTXEEBUXP2266NLIGOLYSNYWE')), false);
   assert.equal(logs.some((line) => line.includes('secret=WAIT...NYWE')), true);
 });
+
+test('detectNextRegistrationStep treats email verification before password as password gate even with OTP input', async () => {
+  const { detectNextRegistrationStep } = requireRegisterModuleWithStubs();
+  const calls = [];
+  const page = {
+    url: () => 'https://auth.openai.com/email-verification',
+    locator(selector) {
+      return {
+        first() {
+          return {
+            async isVisible() {
+              calls.push(['isVisible', selector]);
+              return selector === 'input[name="code"]';
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+  };
+
+  const step = await detectNextRegistrationStep(page, {
+    passwordSubmitted: false,
+    timeout: 1,
+  });
+
+  assert.equal(step, 'email-verification-before-password');
+  assert.equal(calls.some((call) => call[1] === 'input[name="code"]'), true);
+});
+
+test('detectNextRegistrationStep treats visible OTP before password as password gate even when URL is not email-verification', async () => {
+  const { detectNextRegistrationStep } = requireRegisterModuleWithStubs();
+  const page = {
+    url: () => 'https://auth.openai.com/authorize',
+    locator(selector) {
+      return {
+        first() {
+          return {
+            async isVisible() {
+              return selector === 'input[name="code"]';
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+  };
+
+  const step = await detectNextRegistrationStep(page, {
+    passwordSubmitted: false,
+    timeout: 1,
+  });
+
+  assert.equal(step, 'email-verification-before-password');
+});
+
+test('detectNextRegistrationStep treats OpenAI login password page as password gate', async () => {
+  const { detectNextRegistrationStep } = requireRegisterModuleWithStubs();
+  const page = {
+    url: () => 'https://auth.openai.com/log-in/password',
+    locator(selector) {
+      return {
+        first() {
+          return {
+            async isVisible() {
+              return selector === 'input[type="password"]';
+            },
+            async evaluate(fn) {
+              if (selector !== 'input[type="password"]') return false;
+              return fn({ disabled: false, readOnly: false });
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+  };
+
+  const step = await detectNextRegistrationStep(page, {
+    passwordSubmitted: false,
+    timeout: 1,
+  });
+
+  assert.equal(step, 'password');
+});
+
+test('classifyRegistrationPage reports stable registration page states with evidence', async () => {
+  const { classifyRegistrationPage } = requireRegisterModuleWithStubs();
+  const makePage = ({ url, text = '', visible = {} }) => ({
+    url: () => url,
+    title: async () => text.split('\n')[0] || '',
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return text;
+          },
+        };
+      }
+      return {
+        async count() {
+          return visible[selector] ? 1 : 0;
+        },
+        first() {
+          return {
+            async waitFor() {
+              if (!visible[selector]) throw new Error('not visible');
+            },
+            async isVisible() {
+              return Boolean(visible[selector]);
+            },
+            async evaluate(fn) {
+              const meta = visible[selector] || {};
+              if (typeof fn !== 'function') return meta;
+              return fn({
+                disabled: false,
+                readOnly: false,
+                type: meta.type || 'text',
+                name: meta.name || '',
+                value: '',
+                getAttribute(name) {
+                  return meta[name] || '';
+                },
+                maxLength: meta.maxLength || -1,
+              });
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async textContent() {
+      return text;
+    },
+  });
+
+  assert.equal((await classifyRegistrationPage(makePage({
+    url: 'https://auth.openai.com/log-in/password',
+    text: 'Enter your password Email address Password Continue',
+    visible: { 'input[type="password"]': { type: 'password', name: 'password' } },
+  }), { passwordSubmitted: false })).state, 'password-login');
+
+  assert.equal((await classifyRegistrationPage(makePage({
+    url: 'https://auth.openai.com/create-account/password',
+    text: 'Create your password Password Continue',
+    visible: { 'input[name="new-password"]': { type: 'password', name: 'new-password' } },
+  }), { passwordSubmitted: false })).state, 'password-create');
+
+  assert.equal((await classifyRegistrationPage(makePage({
+    url: 'https://auth.openai.com/email-verification',
+    text: 'Check your inbox Code Continue',
+    visible: { 'input[name="code"]': { type: 'text', name: 'code', autocomplete: 'one-time-code' } },
+  }), { passwordSubmitted: false })).state, 'email-verification-before-password');
+
+  const otpState = await classifyRegistrationPage(makePage({
+    url: 'https://auth.openai.com/email-verification',
+    text: 'Check your inbox Code Continue',
+    visible: { 'input[name="code"]': { type: 'text', name: 'code', autocomplete: 'one-time-code' } },
+  }), { passwordSubmitted: true });
+  assert.equal(otpState.state, 'otp');
+  assert.equal(otpState.otpSelector, 'input[name="code"]');
+  assert.match(otpState.evidence.bodySnippet, /Check your inbox/);
+});
+
+test('classifyRegistrationPage reports incorrect password as password-error', async () => {
+  const { classifyRegistrationPage } = requireRegisterModuleWithStubs();
+  const page = {
+    url: () => 'https://auth.openai.com/log-in/password',
+    title: async () => 'Enter your password - OpenAI',
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return 'Enter your password Email address Password Incorrect email address or password Continue';
+          },
+        };
+      }
+      return {
+        first() {
+          return {
+            async waitFor() {
+              if (selector !== 'input[type="password"]') throw new Error('not visible');
+            },
+            async isVisible() {
+              return selector === 'input[type="password"]';
+            },
+            async evaluate(fn) {
+              if (selector !== 'input[type="password"]') return false;
+              return fn({
+                disabled: false,
+                readOnly: false,
+                type: 'password',
+                name: 'password',
+                getAttribute(name) {
+                  return name === 'type' ? 'password' : '';
+                },
+                maxLength: -1,
+              });
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async textContent() {
+      return 'Enter your password Email address Password Incorrect email address or password Continue';
+    },
+  };
+
+  const state = await classifyRegistrationPage(page, { passwordSubmitted: true, timeoutMs: 100 });
+  assert.equal(state.state, 'password-error');
+});
+
+test('detectNextRegistrationStep only treats email verification as OTP after password was submitted', async () => {
+  const { detectNextRegistrationStep } = requireRegisterModuleWithStubs();
+  const page = {
+    url: () => 'https://auth.openai.com/email-verification',
+    locator(selector) {
+      return {
+        first() {
+          return {
+            async isVisible() {
+              return selector === 'input[name="code"]';
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+  };
+
+  const step = await detectNextRegistrationStep(page, {
+    passwordSubmitted: true,
+    timeout: 1,
+  });
+
+  assert.equal(step, 'otp');
+});
+
+test('findVisibleOtpSelector ignores readonly email text input and selects editable OTP text input', async () => {
+  const { findVisibleOtpSelector } = requireRegisterModuleWithStubs();
+  const page = {
+    locator(selector) {
+      const textInputs = [
+        {
+          visible: true,
+          meta: {
+            disabled: false,
+            readOnly: true,
+            type: 'text',
+            name: '',
+            id: 'email',
+            placeholder: 'Email address',
+            autocomplete: '',
+            inputMode: '',
+            ariaLabel: '',
+            ariaDescription: 'Read only.',
+            maxLength: -1,
+          },
+        },
+        {
+          visible: true,
+          meta: {
+            disabled: false,
+            readOnly: false,
+            type: 'text',
+            name: 'code',
+            id: 'code',
+            placeholder: 'Code',
+            autocomplete: '',
+            inputMode: '',
+            ariaLabel: '',
+            ariaDescription: '',
+            maxLength: 6,
+          },
+        },
+      ];
+      const items = selector === 'input[type="text"]' ? textInputs : [];
+      const makeLocator = (index) => ({
+        async isVisible() {
+          return Boolean(items[index]?.visible);
+        },
+        async evaluate() {
+          return items[index]?.meta || null;
+        },
+      });
+      return {
+        async count() {
+          return items.length;
+        },
+        first() {
+          return makeLocator(0);
+        },
+        nth(index) {
+          return makeLocator(index);
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async textContent() {
+      return '';
+    },
+  };
+
+  const selector = await findVisibleOtpSelector(page, 1);
+  assert.equal(selector, ':nth-match(input[type="text"], 2)');
+});
+
+test('findVisiblePasswordSelector ignores password input that Playwright does not consider enabled', async () => {
+  const { findVisiblePasswordSelector } = requireRegisterModuleWithStubs();
+  const page = {
+    locator(selector) {
+      return {
+        first() {
+          return {
+            async isVisible() {
+              return selector === 'input[type="password"]';
+            },
+            async isEnabled() {
+              return false;
+            },
+            async evaluate(fn) {
+              return fn({
+                disabled: false,
+                readOnly: false,
+              });
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+  };
+
+  const selector = await findVisiblePasswordSelector(page, 1);
+  assert.equal(selector, '');
+});
+
+test('waitForOtpInputReady refetches code when timeout recovery lands on password page', async () => {
+  const { waitForOtpInputReady } = requireRegisterModuleWithStubs();
+  let handledReason = '';
+  const page = {
+    url() {
+      return 'https://auth.openai.com/create-account/password';
+    },
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return 'Create your password';
+          },
+        };
+      }
+      return {
+        async count() {
+          return selector === 'input[name="new-password"]' ? 1 : 0;
+        },
+        first() {
+          return {
+            async waitFor() {
+              if (selector !== 'input[name="new-password"]') throw new Error('not visible');
+            },
+            async isVisible() {
+              return selector === 'input[name="new-password"]';
+            },
+            async evaluate() {
+              return { type: 'password', name: 'new-password' };
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async textContent() {
+      return 'Create your password';
+    },
+  };
+
+  await assert.rejects(
+    () => waitForOtpInputReady(
+      page,
+      async () => false,
+      async () => false,
+      50,
+      {
+        handlePasswordPage: async (reason) => {
+          handledReason = reason;
+          return true;
+        },
+        refetchAfterPassword: true,
+      },
+    ),
+    /OTP_REFETCH_AFTER_RECOVERY/,
+  );
+  assert.equal(handledReason, 'password-page-during-otp-wait');
+});
+
+test('waitForOtpInputReady ignores stale password page when OTP appears after navigation settles', async () => {
+  const { waitForOtpInputReady } = requireRegisterModuleWithStubs();
+  let stage = 'password-stale';
+  let handled = false;
+  const page = {
+    url() {
+      return stage === 'otp'
+        ? 'https://auth.openai.com/email-verification'
+        : 'https://auth.openai.com/create-account/password';
+    },
+    locator(selector) {
+      return {
+        async count() {
+          if (stage === 'otp' && selector === 'input[name="code"]') return 1;
+          if (selector === 'input[name="new-password"]') return 1;
+          return 0;
+        },
+        first() {
+          return {
+            async isVisible() {
+              if (selector === 'input[name="new-password"]') return stage === 'password-stale';
+              if (selector === 'input[name="code"]') return stage === 'otp';
+              return false;
+            },
+            async evaluate() {
+              return selector === 'input[name="code"]'
+                ? { type: 'text', name: 'code', autocomplete: 'one-time-code' }
+                : { type: 'password', name: 'new-password' };
+            },
+          };
+        },
+        nth(index) {
+          return this.first(index);
+        },
+      };
+    },
+    async waitForTimeout() {
+      stage = 'otp';
+    },
+    async textContent() {
+      return 'Check your inbox Code';
+    },
+  };
+
+  const selector = await waitForOtpInputReady(
+    page,
+    async () => false,
+    async () => false,
+    500,
+    {
+      handlePasswordPage: async () => {
+        handled = true;
+        return true;
+      },
+      refetchAfterPassword: true,
+    },
+  );
+
+  assert.equal(selector, 'input[name="code"]');
+  assert.equal(handled, false);
+});
+
+test('submitRegistrationPassword treats OTP page after password transition as already submitted', async () => {
+  const { submitRegistrationPassword } = requireRegisterModuleWithStubs();
+  const originalRandom = Math.random;
+  let stage = 'password';
+  let clicked = false;
+  const page = {
+    url() {
+      return stage === 'otp'
+        ? 'https://auth.openai.com/email-verification'
+        : 'https://auth.openai.com/create-account/password';
+    },
+    locator(selector) {
+      return {
+        async count() {
+          return selector === 'input[name="code"]' ? 1 : 0;
+        },
+        first() {
+          return {
+            async isVisible() {
+              if (selector === 'input[name="new-password"]') {
+                stage = 'otp';
+                return false;
+              }
+              if (selector === 'input[name="code"]') return stage === 'otp';
+              return false;
+            },
+            async evaluate(fn) {
+              if (selector === 'input[name="code"]') {
+                return fn({
+                  disabled: false,
+                  readOnly: false,
+                  type: 'text',
+                  name: 'code',
+                  value: '',
+                  getAttribute(name) {
+                    return name === 'autocomplete' ? 'one-time-code' : '';
+                  },
+                  maxLength: 6,
+                });
+              }
+              return false;
+            },
+          };
+        },
+        nth(index) {
+          return this.first(index);
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async textContent() {
+      return 'Check your inbox Code Continue';
+    },
+  };
+
+  try {
+    Math.random = () => -1;
+    const result = await submitRegistrationPassword(page, 'database-pass', {
+      timeoutMs: 1,
+      logger: { log() {}, warn() {} },
+      humanFillInput: async () => {
+        throw new Error('should not fill password after OTP is visible');
+      },
+      humanClick: async () => {
+        clicked = true;
+      },
+    });
+    assert.equal(result, true);
+    assert.equal(clicked, false);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
+test('waitForOtpInputReady rejects immediately on incorrect password page', async () => {
+  const { waitForOtpInputReady } = requireRegisterModuleWithStubs();
+  let handled = false;
+  const page = {
+    url() {
+      return 'https://auth.openai.com/log-in/password';
+    },
+    title: async () => 'Enter your password - OpenAI',
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return 'Enter your password Incorrect email address or password';
+          },
+        };
+      }
+      return {
+        async count() {
+          return selector === 'input[type="password"]' ? 1 : 0;
+        },
+        first() {
+          return {
+            async waitFor() {
+              if (selector !== 'input[type="password"]') throw new Error('not visible');
+            },
+            async isVisible() {
+              return selector === 'input[type="password"]';
+            },
+            async evaluate(fn) {
+              if (selector !== 'input[type="password"]') return false;
+              return fn({
+                disabled: false,
+                readOnly: false,
+                type: 'password',
+                name: 'password',
+                getAttribute(name) {
+                  return name === 'type' ? 'password' : '';
+                },
+                maxLength: -1,
+              });
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async textContent() {
+      return 'Enter your password Incorrect email address or password';
+    },
+  };
+
+  await assert.rejects(
+    () => waitForOtpInputReady(
+      page,
+      async () => false,
+      async () => false,
+      500,
+      {
+        handlePasswordPage: async () => {
+          handled = true;
+          return true;
+        },
+      },
+    ),
+    /密码错误|password/i,
+  );
+  assert.equal(handled, false);
+});
+
+test('waitForOtpInputReady does not refill password page when password recovery is disabled', async () => {
+  const { waitForOtpInputReady } = requireRegisterModuleWithStubs();
+  let handled = false;
+  const page = {
+    url() {
+      return 'https://auth.openai.com/log-in/password';
+    },
+    title: async () => 'Enter your password - OpenAI',
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return 'Enter your password Password Continue';
+          },
+        };
+      }
+      return {
+        async count() {
+          return selector === 'input[type="password"]' ? 1 : 0;
+        },
+        first() {
+          return {
+            async waitFor() {
+              if (selector !== 'input[type="password"]') throw new Error('not visible');
+            },
+            async isVisible() {
+              return selector === 'input[type="password"]';
+            },
+            async evaluate(fn) {
+              if (selector !== 'input[type="password"]') return false;
+              return fn({
+                disabled: false,
+                readOnly: false,
+                type: 'password',
+                name: 'password',
+                getAttribute(name) {
+                  return name === 'type' ? 'password' : '';
+                },
+                maxLength: -1,
+              });
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async waitForLoadState() {},
+    async textContent() {
+      return 'Enter your password Password Continue';
+    },
+  };
+
+  await assert.rejects(
+    () => waitForOtpInputReady(
+      page,
+      async () => false,
+      async () => false,
+      20,
+      {
+        recoverPasswordPage: false,
+        handlePasswordPage: async () => {
+          handled = true;
+          return true;
+        },
+      },
+    ),
+    /未找到可见的验证码输入框/,
+  );
+  assert.equal(handled, false);
+});
+
+test('waitForOtpInputReady continues after timeout recovery refills password during initial OTP wait', async () => {
+  const { waitForOtpInputReady } = requireRegisterModuleWithStubs();
+  let stage = 'timeout';
+  const handledReasons = [];
+  const page = {
+    url() {
+      if (stage === 'otp') return 'https://auth.openai.com/email-verification';
+      if (stage === 'password') return 'https://auth.openai.com/create-account/password';
+      return 'https://auth.openai.com/error';
+    },
+    title: async () => '',
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            if (stage === 'timeout') return 'Operation timed out Try again';
+            if (stage === 'password') return 'Create your password';
+            return 'Check your inbox Code';
+          },
+        };
+      }
+      return {
+        async count() {
+          if (stage === 'password' && selector === 'input[name="new-password"]') return 1;
+          if (stage === 'otp' && selector === 'input[name="code"]') return 1;
+          return 0;
+        },
+        first() {
+          return {
+            async waitFor() {},
+            async isVisible() {
+              if (selector === 'input[name="new-password"]') return stage === 'password';
+              if (selector === 'input[name="code"]') return stage === 'otp';
+              return false;
+            },
+            async evaluate(fn) {
+              if (selector === 'input[name="new-password"]') {
+                return fn({
+                  disabled: false,
+                  readOnly: false,
+                  type: 'password',
+                  name: 'new-password',
+                  getAttribute(name) {
+                    if (name === 'type') return 'password';
+                    if (name === 'name') return 'new-password';
+                    return '';
+                  },
+                  maxLength: -1,
+                });
+              }
+              if (selector === 'input[name="code"]') {
+                return fn({
+                  disabled: false,
+                  readOnly: false,
+                  type: 'text',
+                  name: 'code',
+                  getAttribute(name) {
+                    if (name === 'type') return 'text';
+                    if (name === 'name') return 'code';
+                    if (name === 'autocomplete') return 'one-time-code';
+                    return '';
+                  },
+                  maxLength: 6,
+                });
+              }
+              return false;
+            },
+          };
+        },
+        nth() {
+          return this.first();
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async waitForLoadState() {},
+    async textContent() {
+      if (stage === 'timeout') return 'Operation timed out Try again';
+      if (stage === 'password') return 'Create your password';
+      return 'Check your inbox Code';
+    },
+  };
+
+  const selector = await waitForOtpInputReady(
+    page,
+    async () => {
+      if (stage !== 'timeout') return false;
+      stage = 'password';
+      return true;
+    },
+    async () => false,
+    500,
+    {
+      handlePasswordPage: async (reason) => {
+        handledReasons.push(reason);
+        stage = 'otp';
+        return true;
+      },
+      refetchAfterPassword: false,
+      recoverPasswordPage: false,
+    },
+  );
+
+  assert.equal(selector, 'input[name="code"]');
+  assert.deepEqual(handledReasons, ['timeout-recovery-returned-password-page']);
+});
+
+test('waitForOtpInputReady resets OTP wait window after timeout recovery submits password', async () => {
+  const { waitForOtpInputReady } = requireRegisterModuleWithStubs();
+  let stage = 'timeout';
+  const page = {
+    url() {
+      if (stage === 'otp') return 'https://auth.openai.com/email-verification';
+      if (stage === 'password') return 'https://auth.openai.com/create-account/password';
+      return 'https://auth.openai.com/error';
+    },
+    title: async () => '',
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            if (stage === 'timeout') return 'Operation timed out Try again';
+            if (stage === 'password') return 'Create your password';
+            return 'Check your inbox Code';
+          },
+        };
+      }
+      return {
+        async count() {
+          if (stage === 'password' && selector === 'input[name="new-password"]') return 1;
+          if (stage === 'otp' && selector === 'input[name="code"]') return 1;
+          return 0;
+        },
+        first() {
+          return {
+            async isVisible() {
+              if (selector === 'input[name="new-password"]') return stage === 'password';
+              if (selector === 'input[name="code"]') return stage === 'otp';
+              return false;
+            },
+            async evaluate(fn) {
+              if (selector === 'input[name="new-password"]') {
+                return fn({
+                  disabled: false,
+                  readOnly: false,
+                  type: 'password',
+                  name: 'new-password',
+                  getAttribute(name) {
+                    if (name === 'type') return 'password';
+                    if (name === 'name') return 'new-password';
+                    return '';
+                  },
+                  maxLength: -1,
+                });
+              }
+              if (selector === 'input[name="code"]') {
+                return fn({
+                  disabled: false,
+                  readOnly: false,
+                  type: 'text',
+                  name: 'code',
+                  getAttribute(name) {
+                    if (name === 'type') return 'text';
+                    if (name === 'name') return 'code';
+                    if (name === 'autocomplete') return 'one-time-code';
+                    return '';
+                  },
+                  maxLength: 6,
+                });
+              }
+              return false;
+            },
+          };
+        },
+        nth() {
+          return this.first();
+        },
+      };
+    },
+    async waitForTimeout() {
+      await new Promise((resolve) => setTimeout(resolve, 35));
+      if (stage === 'password-submitted') stage = 'otp';
+    },
+    async waitForLoadState() {},
+    async textContent() {
+      if (stage === 'timeout') return 'Operation timed out Try again';
+      if (stage === 'password') return 'Create your password';
+      return 'Check your inbox Code';
+    },
+  };
+
+  const selector = await waitForOtpInputReady(
+    page,
+    async () => {
+      if (stage !== 'timeout') return false;
+      stage = 'password';
+      return true;
+    },
+    async () => false,
+    40,
+    {
+      handlePasswordPage: async () => {
+        stage = 'password-submitted';
+        return true;
+      },
+      refetchAfterPassword: false,
+      recoverPasswordPage: false,
+    },
+  );
+
+  assert.equal(selector, 'input[name="code"]');
+});
+
+test('waitForOtpInputReady retries a stable password page even when immediate recovery is disabled', async () => {
+  const { waitForOtpInputReady } = requireRegisterModuleWithStubs();
+  let stage = 'password';
+  const handledReasons = [];
+  const page = {
+    url() {
+      return stage === 'otp'
+        ? 'https://auth.openai.com/email-verification'
+        : 'https://auth.openai.com/create-account/password';
+    },
+    title: async () => '',
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return stage === 'otp' ? 'Check your inbox Code' : 'Create your password';
+          },
+        };
+      }
+      return {
+        async count() {
+          if (stage === 'password' && selector === 'input[name="new-password"]') return 1;
+          if (stage === 'otp' && selector === 'input[name="code"]') return 1;
+          return 0;
+        },
+        first() {
+          return {
+            async isVisible() {
+              if (selector === 'input[name="new-password"]') return stage === 'password';
+              if (selector === 'input[name="code"]') return stage === 'otp';
+              return false;
+            },
+            async evaluate(fn) {
+              if (selector === 'input[name="new-password"]') {
+                return fn({
+                  disabled: false,
+                  readOnly: false,
+                  type: 'password',
+                  name: 'new-password',
+                  getAttribute(name) {
+                    if (name === 'type') return 'password';
+                    if (name === 'name') return 'new-password';
+                    return '';
+                  },
+                  maxLength: -1,
+                });
+              }
+              if (selector === 'input[name="code"]') {
+                return fn({
+                  disabled: false,
+                  readOnly: false,
+                  type: 'text',
+                  name: 'code',
+                  getAttribute(name) {
+                    if (name === 'type') return 'text';
+                    if (name === 'name') return 'code';
+                    if (name === 'autocomplete') return 'one-time-code';
+                    return '';
+                  },
+                  maxLength: 6,
+                });
+              }
+              return false;
+            },
+          };
+        },
+        nth() {
+          return this.first();
+        },
+      };
+    },
+    async waitForTimeout() {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    },
+    async waitForLoadState() {},
+    async textContent() {
+      return stage === 'otp' ? 'Check your inbox Code' : 'Create your password';
+    },
+  };
+
+  const selector = await waitForOtpInputReady(
+    page,
+    async () => false,
+    async () => false,
+    200,
+    {
+      recoverPasswordPage: false,
+      delayedPasswordRecoveryMs: 1,
+      refetchAfterPassword: false,
+      handlePasswordPage: async (reason) => {
+        handledReasons.push(reason);
+        stage = 'otp';
+        return true;
+      },
+    },
+  );
+
+  assert.equal(selector, 'input[name="code"]');
+  assert.deepEqual(handledReasons, ['password-page-during-otp-wait']);
+});
+
+test('submitRegistrationPassword clears existing input before typing database password', async () => {
+  const { submitRegistrationPassword } = requireRegisterModuleWithStubs();
+  let value = 'old-value';
+  const clicks = [];
+  const page = {
+    url() {
+      return 'https://auth.openai.com/create-account/password';
+    },
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return 'Create your password';
+          },
+        };
+      }
+      return {
+        async count() {
+          return selector === 'input[name="new-password"]' ? 1 : 0;
+        },
+        first() {
+          return {
+            async waitFor() {
+              if (selector !== 'input[name="new-password"]') throw new Error('not visible');
+            },
+            async click() {
+              clicks.push(['input.click']);
+            },
+            async fill(nextValue) {
+              value = nextValue;
+            },
+            async type(char) {
+              value += char;
+            },
+            async isVisible() {
+              return selector === 'input[name="new-password"]';
+            },
+            async evaluate(fn) {
+              if (selector !== 'input[name="new-password"]') {
+                return { type: 'text', name: '' };
+              }
+              return fn({ value, type: 'password', name: 'new-password' });
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async textContent() {
+      return 'Create your password';
+    },
+    async waitForSelector(selector) {
+      assert.equal(selector, 'button[type="submit"]');
+      return {
+        async hover() {},
+        async click() {
+          clicks.push(['submit.click']);
+        },
+      };
+    },
+  };
+
+  await submitRegistrationPassword(page, 'DbPass12!', {
+    logger: { log() {} },
+    timeoutMs: 100,
+  });
+
+  assert.equal(value, 'DbPass12!');
+  assert.deepEqual(clicks, [['input.click'], ['submit.click']]);
+});
+
+test('submitRegistrationPassword fills OpenAI login password input before OTP polling', async () => {
+  const { submitRegistrationPassword } = requireRegisterModuleWithStubs();
+  let value = '';
+  const page = {
+    url() {
+      return 'https://auth.openai.com/log-in/password';
+    },
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return 'Enter your password';
+          },
+        };
+      }
+      return {
+        first() {
+          return {
+            async waitFor() {
+              if (selector !== 'input[type="password"]') throw new Error('not visible');
+            },
+            async click() {},
+            async fill(nextValue) {
+              value = nextValue;
+            },
+            async type(char) {
+              value += char;
+            },
+            async isVisible() {
+              return selector === 'input[type="password"]';
+            },
+            async evaluate(fn) {
+              if (selector !== 'input[type="password"]') return false;
+              return fn({ value, type: 'password', disabled: false, readOnly: false });
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+    async textContent() {
+      return 'Enter your password';
+    },
+    async waitForSelector(selector) {
+      assert.equal(selector, 'button[type="submit"]');
+      return {
+        async hover() {},
+        async click() {},
+      };
+    },
+  };
+
+  await submitRegistrationPassword(page, 'DbPass12!', {
+    logger: { log() {} },
+    timeoutMs: 100,
+  });
+
+  assert.equal(value, 'DbPass12!');
+});
+
+test('submitOtpWithRetry waits for OTP input before fetching email code', async () => {
+  const { submitOtpWithRetry } = requireRegisterModuleWithStubs();
+  const sequence = [];
+  const page = {
+    locator() {
+      return {
+        first() {
+          return {
+            async isVisible() {
+              return false;
+            },
+          };
+        },
+      };
+    },
+    async waitForTimeout() {},
+  };
+
+  await assert.rejects(
+    () => submitOtpWithRetry(page, 'user@example.com', 1, {
+      fetchCode: async () => {
+        sequence.push('fetch-code');
+        return '123456';
+      },
+      waitForOtpInput: async () => {
+        sequence.push('wait-otp');
+        throw new Error('WAIT_OTP_SENTINEL');
+      },
+    }),
+    /WAIT_OTP_SENTINEL/,
+  );
+
+  assert.deepEqual(sequence, ['wait-otp']);
+});
+
+test('submitOtpWithRetry does not treat a still-visible OTP page as success before checking for incorrect code', async () => {
+  const { submitOtpWithRetry } = requireRegisterModuleWithStubs();
+  let currentUrl = 'https://auth.openai.com/email-verification';
+  let currentInput = '';
+  let submittedCode = '';
+  let submitCount = 0;
+  let waitTicksAfterSubmit = 0;
+  let incorrectVisible = false;
+  const fetched = [];
+
+  const makeLocator = (selector) => ({
+    first() {
+      return this;
+    },
+    nth() {
+      return this;
+    },
+    async count() {
+      return selector === 'input[name="code"]' ? 1 : 0;
+    },
+    async waitFor() {
+      if (selector === 'input[name="code"]' && currentUrl.includes('/email-verification')) return;
+      if (selector === 'body') return;
+      if (/button/.test(selector)) return;
+      throw new Error(`not visible: ${selector}`);
+    },
+    async isVisible() {
+      if (selector === 'input[name="code"]') return currentUrl.includes('/email-verification');
+      if (selector === 'input[type="email"]') return false;
+      if (selector === 'body') return true;
+      if (/button\[type="submit"\]\[name="intent"\]\[value="resend"\]/.test(selector)) return false;
+      if (/button/.test(selector)) return true;
+      return false;
+    },
+    async isDisabled() {
+      return false;
+    },
+    async click() {},
+    async fill(value) {
+      currentInput = String(value || '');
+    },
+    async type(char) {
+      currentInput += char;
+    },
+    async hover() {},
+    async scrollIntoViewIfNeeded() {},
+    async evaluate(fn) {
+      if (selector === 'input[name="code"]') {
+        return fn({
+          value: currentInput,
+          disabled: false,
+          readOnly: false,
+          type: 'text',
+          maxLength: 6,
+          getAttribute(name) {
+            if (name === 'name') return 'code';
+            if (name === 'autocomplete') return 'one-time-code';
+            if (name === 'type') return 'text';
+            return '';
+          },
+        });
+      }
+      if (/button/.test(selector)) {
+        return fn({
+          disabled: false,
+          textContent: 'Continue',
+          getAttribute(name) {
+            if (name === 'name') return 'intent';
+            if (name === 'value') return '';
+            return '';
+          },
+        });
+      }
+      return fn({ value: '', getAttribute() { return ''; } });
+    },
+    async textContent() {
+      return incorrectVisible ? 'Check your inbox Incorrect code Continue' : 'Check your inbox Code Continue';
+    },
+  });
+
+  const continueButton = {
+    first() {
+      return this;
+    },
+    async waitFor() {},
+    async isVisible() {
+      return true;
+    },
+    async isDisabled() {
+      return false;
+    },
+    async scrollIntoViewIfNeeded() {},
+    async hover() {},
+    async click() {
+      submitCount += 1;
+      submittedCode = currentInput;
+      waitTicksAfterSubmit = 0;
+      incorrectVisible = false;
+      if (submittedCode === '222222') {
+        currentUrl = 'https://auth.openai.com/about-you';
+      }
+    },
+    async evaluate(fn) {
+      return fn({
+        disabled: false,
+        textContent: 'Continue',
+        getAttribute(name) {
+          if (name === 'name') return 'intent';
+          if (name === 'value') return '';
+          return '';
+        },
+      });
+    },
+  };
+
+  const page = {
+    url() {
+      return currentUrl;
+    },
+    locator(selector) {
+      return makeLocator(selector);
+    },
+    getByRole() {
+      return continueButton;
+    },
+    async waitForTimeout() {
+      if (submittedCode === '111111' && currentUrl.includes('/email-verification')) {
+        waitTicksAfterSubmit += 1;
+        if (waitTicksAfterSubmit >= 2) incorrectVisible = true;
+      }
+    },
+    async waitForFunction(fn, oldUrl) {
+      if (currentUrl !== oldUrl) return true;
+      return new Promise(() => {});
+    },
+    async waitForSelector(selector) {
+      if (selector === '#prompt-textarea') return new Promise(() => {});
+      return makeLocator(selector);
+    },
+    async focus() {},
+    async type(_selector, char) {
+      currentInput += char;
+    },
+    async evaluate(fn) {
+      return fn();
+    },
+    async waitForLoadState() {},
+    async textContent() {
+      return incorrectVisible ? 'Check your inbox Incorrect code Continue' : 'Check your inbox Code Continue';
+    },
+  };
+
+  const result = await submitOtpWithRetry(page, 'user@example.com', 2, {
+    fetchCode: async (excludeCode) => {
+      fetched.push(excludeCode);
+      return fetched.length === 1 ? '111111' : '222222';
+    },
+    waitForOtpInput: async () => 'input[name="code"]',
+  });
+
+  assert.equal(result, '222222');
+  assert.equal(submitCount, 2);
+  assert.deepEqual(fetched, ['', '111111']);
+});
+
+test('resolveRegistrationPassword requires database password from env', () => {
+  const { resolveRegistrationPassword } = requireRegisterModuleWithStubs();
+
+  assert.equal(resolveRegistrationPassword({ ROXY_REGISTER_PASSWORD: ' AccountPass12! ' }), 'AccountPass12!');
+  assert.equal(resolveRegistrationPassword({ ROXY_OAUTH_PASSWORD: ' FallbackPass12! ' }), 'FallbackPass12!');
+  assert.throws(() => resolveRegistrationPassword({}), /ROXY_REGISTER_PASSWORD/);
+});
+
+test('prepareChatGptEmailEntry accepts already-open email modal without requiring login/signup buttons', async () => {
+  const { prepareChatGptEmailEntry } = requireRegisterModuleWithStubs();
+  const clicks = [];
+  const page = {
+    url: () => 'https://chatgpt.com/',
+    locator(selector) {
+      return {
+        first() {
+          return {
+            async waitFor(options = {}) {
+              assert.equal(selector, 'input[type="email"], input[name="email"]');
+              assert.equal(options.state, 'visible');
+            },
+            async isVisible() {
+              return true;
+            },
+          };
+        },
+      };
+    },
+    getByRole(_role, options) {
+      return {
+        first() {
+          return {
+            async waitFor() {
+              clicks.push(['unexpected-wait', options?.name]);
+              throw new Error('entry buttons should not be queried when email input is already visible');
+            },
+            async click() {
+              clicks.push(['unexpected-click', options?.name]);
+            },
+          };
+        },
+      };
+    },
+  };
+
+  const result = await prepareChatGptEmailEntry(page, { timeoutMs: 100 });
+
+  assert.deepEqual(result, { status: 'email-input-ready', source: 'existing-email-input' });
+  assert.deepEqual(clicks, []);
+});

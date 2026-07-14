@@ -283,6 +283,42 @@ test('is_openai_login_page ignores readonly email field on the password screen',
   assert.equal(await is_openai_login_page(page, { timeoutMs: 100 }), false);
 });
 
+test('is_codex_login_page ignores OpenAI password screen footer mentioning Codex', async () => {
+  const { is_codex_login_page } = require('../src/auto/roxy_oauth_login.js');
+  const page = {
+    getByRole(role, options = {}) {
+      if (role === 'button' && options.name === 'Continue') {
+        return {
+          async isVisible() { return true; },
+        };
+      }
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return {
+        async textContent() {
+          return [
+            'Enter your password',
+            'Email address',
+            'Edit',
+            'Password',
+            'Forgot password?',
+            'Continue',
+            'ChatGPT Terms of Use and Privacy Policy apply.',
+            'Your ChatGPT training controls apply to Codex.',
+            'See what data Codex receives from ChatGPT and how it may use it.'
+          ].join(' ');
+        },
+      };
+    },
+    url: () => 'https://auth.openai.com/log-in/password',
+    title: async () => 'Enter your password - OpenAI',
+    textContent: async () => 'Enter your password Password Continue ChatGPT Codex',
+  };
+
+  assert.equal(await is_codex_login_page(page, { timeoutMs: 100 }), false);
+});
+
 test('openAi_login fills email, clicks Continue, then waits for email verification page', async () => {
   const { openAi_login } = require('../src/auto/roxy_oauth_login.js');
   const { page, calls } = createOpenAiLoginPageHarness({
@@ -1275,6 +1311,91 @@ test('fetchPhoneVerificationCode extracts a continuous 6-digit code from SMS API
   assert.deepEqual(calls, [
     ['fetch', 'https://cdc.smslease.link/adminapi/jsscript/smsInfo/ABC_sms?key=test', 'GET'],
     ['response.text'],
+  ]);
+});
+
+test('fetchPhoneVerificationCode rejects access restricted HTML instead of reading CSS digits', async () => {
+  const { fetchPhoneVerificationCode } = require('../src/auto/roxy_oauth_login.js');
+
+  await assert.rejects(
+    () => fetchPhoneVerificationCode({
+      smsApiUrl: 'https://smscloud.sbs/api/system/get_sms/token',
+      timeoutMs: 100,
+      phoneCodeMinPollMs: 0,
+      codePollMaxAttempts: 1,
+      fetch: async () => ({
+        async text() {
+          return [
+            '<!DOCTYPE html>',
+            '<html lang="zh-CN">',
+            '<head><title>访问受限 / Access Restricted</title></head>',
+            '<style>body{color:#343a40;background:#f4f6f9}</style>',
+            '<body>Access Restricted</body>',
+            '</html>'
+          ].join('');
+        },
+      }),
+    }),
+    (error) => {
+      assert.equal(error.code, 'OPENAI_PHONE_CODE_ACCESS_RESTRICTED');
+      assert.match(error.message, /访问受限/);
+      return true;
+    }
+  );
+});
+
+test('fetchPhoneVerificationCode falls back to Roxy browser navigation when direct request is access restricted', async () => {
+  const { fetchPhoneVerificationCode } = require('../src/auto/roxy_oauth_login.js');
+  const calls = [];
+  const smsPage = {
+    async goto(url, options) {
+      calls.push(['smsPage.goto', url, options.waitUntil]);
+      return { status: () => 200 };
+    },
+    locator(selector) {
+      calls.push(['smsPage.locator', selector]);
+      return {
+        async textContent() {
+          calls.push(['smsPage.textContent']);
+          return '{"code":0,"message":"操作成功","data":{"isReceived":"yes","text":"Your OpenAI verification code is: 798824"}}';
+        },
+      };
+    },
+    async close() {
+      calls.push(['smsPage.close']);
+    },
+  };
+  const page = {
+    context() {
+      return {
+        async newPage() {
+          calls.push(['context.newPage']);
+          return smsPage;
+        },
+      };
+    },
+  };
+
+  const code = await fetchPhoneVerificationCode({
+    smsApiUrl: 'https://smscloud.sbs/api/system/get_sms/token',
+    timeoutMs: 100,
+    phoneCodeMinPollMs: 0,
+    codePollMaxAttempts: 1,
+    page,
+    fetch: async () => ({
+      async text() {
+        return '<title>访问受限 / Access Restricted</title><style>body{color:#343a40}</style>';
+      },
+    }),
+  });
+
+  assert.equal(code, '798824');
+  assert.deepEqual(calls, [
+    ['context.newPage'],
+    ['smsPage.goto', 'https://smscloud.sbs/api/system/get_sms/token', 'domcontentloaded'],
+    ['smsPage.locator', 'body'],
+    ['smsPage.textContent'],
+    ['smsPage.close'],
   ]);
 });
 
@@ -2699,6 +2820,55 @@ test('openRoxyBrowserForAutomation 打开 Roxy 窗口并返回 CDP 和 Playwrigh
   ]);
 });
 
+test('openRoxyBrowserForAutomation 开窗前写入 Roxy profile 窗口尺寸', async () => {
+  const calls = [];
+
+  class FakeRoxyBrowserClient {
+    constructor() {
+      this.dirId = 'dir-1';
+      this.workspaceId = 1;
+    }
+    async resolveDirId() { calls.push(['resolveDirId']); return 'dir-1'; }
+    async closeBrowser() { calls.push(['closeBrowser']); }
+    async clearLocalCache() { calls.push(['clearLocalCache']); }
+    async clearServerCache() { calls.push(['clearServerCache']); }
+    async randomFingerprint() { calls.push(['randomFingerprint']); }
+    async updateBrowserConfig(config) { calls.push(['updateBrowserConfig', config]); }
+    async openBrowser(args) { calls.push(['openBrowser', args]); }
+    async getConnectionInfo() {
+      calls.push(['getConnectionInfo']);
+      return { ws: 'ws://127.0.0.1:9222/devtools/browser/abc' };
+    }
+    async connectPlaywright(ws) {
+      calls.push(['connectPlaywright', ws]);
+      return { browser: { disconnect: async () => {} }, page: {}, context: {} };
+    }
+  }
+
+  const { openRoxyBrowserForAutomation } = require('../src/auto/roxy_oauth_login.js');
+
+  await openRoxyBrowserForAutomation({
+    RoxyBrowserClient: FakeRoxyBrowserClient,
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+    env: {
+      ROXY_KEEP_OPEN: '1',
+      ROXY_WINDOW_WIDTH: '1600',
+      ROXY_WINDOW_HEIGHT: '900',
+    },
+  });
+
+  assert.deepEqual(calls.slice(4, 7), [
+    ['randomFingerprint'],
+    ['updateBrowserConfig', {
+      fingerInfo: {
+        openWidth: '1600',
+        openHeight: '900',
+      },
+    }],
+    ['openBrowser', ['--window-size=1600,900']],
+  ]);
+});
+
 test('openRoxyBrowserForAutomation 检测到 ROXY_CDP_ENDPOINT 时跳过 Roxy 准备流程并直接 connectOverCDP', async () => {
   const calls = [];
   const messages = [];
@@ -2943,7 +3113,7 @@ test('roxy_oauth_login 在 dotenv 后读取 ROXY_KEEP_OPEN 并可关闭 Roxy 窗
   assert.deepEqual(calls.slice(-2), [['browser.close'], ['closeBrowser']]);
 });
 
-test('roxy_oauth_login 默认按 ROXY_KEEP_OPEN 推导 Roxy headless 参数', async () => {
+test('roxy_oauth_login 默认按 ROXY_KEEP_OPEN 推导 Roxy headless 参数并固定窗口大小', async () => {
   const openedArgs = [];
 
   class FakeRoxyBrowserClient {
@@ -2985,7 +3155,7 @@ test('roxy_oauth_login 默认按 ROXY_KEEP_OPEN 推导 Roxy headless 参数', as
     },
   });
 
-  assert.deepEqual(openedArgs[0], ['--headless=new']);
+  assert.deepEqual(openedArgs[0], ['--window-size=2048,1152', '--headless=new']);
 });
 
 test('roxy_oauth_login 调试保留浏览器时默认有头运行', async () => {
@@ -3030,7 +3200,17 @@ test('roxy_oauth_login 调试保留浏览器时默认有头运行', async () => 
     },
   });
 
-  assert.deepEqual(openedArgs[0], []);
+  assert.deepEqual(openedArgs[0], ['--window-size=2048,1152']);
+});
+
+test('roxy_oauth_login 支持通过 env 覆盖启动窗口大小', () => {
+  const { resolveRoxyOpenArgs } = require('../src/auto/roxy_oauth_login.js');
+
+  assert.deepEqual(resolveRoxyOpenArgs({
+    ROXY_KEEP_OPEN: '1',
+    ROXY_WINDOW_WIDTH: '1600',
+    ROXY_WINDOW_HEIGHT: '900',
+  }), ['--window-size=1600,900']);
 });
 
 test('runCli 打印可复用的 CDP endpoint', async () => {

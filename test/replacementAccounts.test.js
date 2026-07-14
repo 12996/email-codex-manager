@@ -33,7 +33,7 @@ test('initializeSchema creates replacement_accounts table and email unique index
 
   assert.equal(table.name, 'replacement_accounts');
   assert.equal(index.name, 'idx_replacement_accounts_email_unique');
-  assert.equal(statusColumn.dflt_value, "'for_sale'");
+  assert.equal(statusColumn.dflt_value, "'unregistered'");
 });
 
 test('replacement automation run repository creates and finishes runs', () => {
@@ -97,14 +97,14 @@ test('replacement automation run pruning keeps running runs even beyond max', ()
   assert.equal(existsSync(finishedLog), true);
 });
 
-test('createAccount trims email and defaults status to for_sale', () => {
+test('createAccount trims email and defaults status to unregistered', () => {
   const repo = createTestRepository();
 
   const account = repo.createAccount({ email: ' User@Example.COM ', phone: '123' });
 
   assert.equal(account.email, 'User@Example.COM');
   assert.equal(account.phone, '123');
-  assert.equal(account.status, 'for_sale');
+  assert.equal(account.status, 'unregistered');
   assert.equal(account.replacement_count, 0);
   assert.equal(account.public_code_enabled, 0);
   assert.match(account.public_code_key, /^vc_[A-Za-z0-9_-]{32}$/);
@@ -396,7 +396,7 @@ test('updateStatus accepts manual business statuses and rejects replacing', () =
   const repo = createTestRepository();
   const account = repo.createAccount({ email: 'user@example.com' });
 
-  for (const status of ['unregistered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned', 'failed']) {
+  for (const status of ['unregistered', 'registered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned', 'failed']) {
     const updated = repo.updateStatus(account.id, {
       status,
       status_note: `manual ${status}`,
@@ -410,6 +410,44 @@ test('updateStatus accepts manual business statuses and rejects replacing', () =
     () => repo.updateStatus(account.id, { status: 'replacing' }),
     /STATUS_INVALID/,
   );
+});
+
+test('updateActivationMethod trims and persists the method without changing other fields', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({
+    email: 'activation-method@example.com',
+    remark: 'keep this remark',
+  });
+
+  const updated = repo.updateActivationMethod(account.id, { activation_method: ' upi ' });
+
+  assert.equal(updated.activation_method, 'upi');
+  assert.equal(updated.remark, 'keep this remark');
+  assert.notEqual(updated.updated_at, account.updated_at);
+});
+
+test('updateActivationMethod can clear the method and rejects missing accounts', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'clear-activation-method@example.com', activation_method: 'ideal' });
+
+  assert.equal(repo.updateActivationMethod(account.id, { activation_method: '' }).activation_method, null);
+  assert.throws(
+    () => repo.updateActivationMethod(999999, { activation_method: 'upi' }),
+    /ACCOUNT_NOT_FOUND/,
+  );
+});
+
+test('markRegistrationSuccess sets account status to registered and stores 2FA secret', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'register-success@example.com' });
+
+  const updated = repo.markRegistrationSuccess(account.id, {
+    codex_2fa: ' JBSWY3DPEHPK3PXP ',
+  });
+
+  assert.equal(updated.status, 'registered');
+  assert.equal(updated.codex_2fa, 'JBSWY3DPEHPK3PXP');
+  assert.ok(updated.status_updated_at);
 });
 
 test('recordSmsFailure stores sms_last_error without storing code', () => {

@@ -70,3 +70,22 @@
 | 2026-07-02 | 注册后自动启用 2FA | done | `2026-07-02-registration-auto-enable-2fa.md` |
 | 2026-07-02 | iCloud 验证码 Gmail 收件 API | done | `2026-07-02-icloud-verification-code-api.md` |
 | 2026-07-03 | iCloud 邮箱验证码 API 优先级对齐 | done | `2026-07-03-icloud-email-code-api-priority.md` |
+| 2026-07-03 | 注册流程先设置数据库密码再提交邮箱验证码 | done | `2026-07-03-registration-password-before-email-otp.md` |
+| 2026-07-03 | Roxy 注册入口 modal 与窗口大小 | done | `2026-07-03-roxy-registration-entry-modal-and-window-size.md` |
+| 2026-07-03 | Roxy 2FA ChatGPT session 登录脚本 | done | `2026-07-03-roxy-2fa-chatgpt-session-login.md` |
+| 2026-07-03 | 补号操作菜单新增 2FA 登录入口 | done | `2026-07-03-replacement-2fa-login-action.md` |
+| 2026-07-03 | 自动化动作级 Roxy 窗口配置 | done | `2026-07-03-action-specific-roxy-browser-targets.md` |
+| 2026-07-03 | 2FA补号接入 CPA 上传复查链路 | done | `2026-07-03-replace-2fa-cpa-upload-chain.md` |
+| 2026-07-03 | 注册超时恢复兼容回到密码页 | done | `2026-07-03-registration-timeout-recovery-password-page.md` |
+| 2026-07-03 | 注册 OTP 阶段密码页误判防护 | done | `2026-07-03-registration-password-stale-page-guard.md` |
+| 2026-07-04 | 注册入口直连 Auth 兜底 | done | `2026-07-04-registration-direct-auth-fallback.md` |
+| 2026-07-04 | 注册成功状态与新增默认状态 | done | `2026-07-04-registration-status-registered.md` |
+| 2026-07-04 | 注册 OTP 等待窗口按阶段重置 | done | `2026-07-04-registration-otp-wait-window-reset.md` |
+| 2026-07-04 | 注册密码页到 OTP 页跳转竞态防护 | done | `2026-07-04-registration-password-to-otp-race.md` |
+| 2026-07-07 | 注册 OTP 提交后状态判定守卫 | done | `2026-07-07-registration-otp-submit-state-guard.md` |
+| 2026-07-07 | 浏览器自动化状态判定规则 | done | `2026-07-07-browser-automation-state-rule.md` |
+| 2026-07-07 | Roxy 2FA 登录阶段识别修复 | done | `2026-07-07-roxy-2fa-login-stage-detection.md` |
+| 2026-07-07 | Roxy Codex 页脚密码页误判防护 | done | `2026-07-07-roxy-codex-footer-password-guard.md` |
+| 2026-07-07 | 短信 API Roxy 浏览器兜底 | done | `2026-07-07-sms-api-roxy-browser-fallback.md` |
+| 2026-07-10 | 补号账号一键封禁邮件验活 | done | `2026-07-10-banned-email-healthcheck-button.md` |
+| 2026-07-14 | 补号账号开通方式下拉与页面维护 | done | `2026-07-14-replacement-activation-method.md` |

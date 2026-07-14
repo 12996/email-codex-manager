@@ -2,6 +2,180 @@
 
 状态：active
 
+## 2026-07-14 补号账号开通方式下拉与页面维护
+
+- 来源工作日志：`docs/work/2026-07-14-replacement-activation-method.md`
+- change：`docs/changes/CHG-077-replacement-activation-method-catalog.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：已新增 `replacement_activation_methods` 目录表和 6 个初始方式（越南直卡、`upi`、`ideal`、波兰、瑞士、`pix 直卡`）；补号列表开通方式已改为行内下拉，调用 `PATCH /replacement-accounts/:id/activation-method` 保存；“管理开通方式”弹窗可通过 `POST /replacement-activation-methods` 新增方式；历史目录外值以“历史值”保留。API 文档、设计文档和实施计划已同步。
+- 验证：专项测试通过 74/74；全部 JavaScript 测试通过 330/330；`node --check` 和 `git diff --check` 通过；重启 `13100` 服务后认证接口返回 6 个初始方式，`/replacement-ui` 页面模板包含新控件。`npm test` 仅因额外脚本 `test/test-verification-code.mjs` 连接未启动的 `localhost:3100` 而出现 `ECONNREFUSED`。
+- 下一步：代码实现和文档已完成；如需视觉/点击级验收，打开可用浏览器访问 `http://localhost:13100/replacement-ui`，验证下拉修改、新增方式、刷新持久化和状态下拉回归。当前 in-app browser 不可用，已完成认证 HTTP 级运行态验证。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-10 补号账号一键封禁邮件验活
+
+- 来源工作日志：`docs/work/2026-07-10-banned-email-healthcheck-button.md`
+- change：`docs/changes/CHG-076-banned-email-healthcheck-button.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：补号管理页已新增“一键验活”按钮；后端新增 `POST /replacement-accounts/healthcheck-banned`。接口只检测 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 状态账号，每个账号读取最近 5 封邮件；Gmail plus alias 路由到主 Gmail，iCloud 路由到 `ICLOUD_CODE_GMAIL_ACCOUNT`。邮件同时包含目标邮箱和 ChatGPT deactivation 稳定文案时，账号自动标记为 `banned`，状态备注写入“一键验活检测到 ChatGPT deactivation 邮件”。
+- 验证：`node --test test\accountHealthcheckService.test.js` 通过 3/3；`node --test test\replacementAccountsApi.test.js` 通过 22/22；`node --test test\replacementAccountsWeb.test.js` 通过 12/12。
+- 待办：用真实后台点击“一键验活”做一次人工验收；当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-07 短信 API Roxy 浏览器兜底
+
+- 来源工作日志：`docs/work/2026-07-07-sms-api-roxy-browser-fallback.md`
+- change：`docs/changes/CHG-075-sms-api-roxy-browser-fallback.md`，状态 `implemented`，尚未合并到 PRD。
+- issue：`docs/issues/issue-010-sms-api-direct-request-region-restricted.md`，状态 `resolved`。
+- 当前进展：已确认 run `433` 不是 OpenAI 未发短信，也不是短信平台未收到。直连同一短信 API 时，Node 默认请求、Chrome UA 请求、API Accept 请求均返回 `访问受限 / Access Restricted` HTML；当前 Roxy `mac` 真实浏览器新标签导航同一 URL 返回短信 JSON，包含 `isReceived=yes` 和 6 位 OpenAI 验证码。因此根因是自动化子进程直连出口被短信平台地区限制，Roxy 浏览器出口可访问。
+- 修复：`fetchPhoneVerificationCodeOnce()` 现在检测访问受限 HTML；当前有 Roxy Playwright `page` 时，会新开 Roxy 浏览器临时页导航短信 API 读取响应并关闭临时页。验证码解析跳过 `<style>` 和 CSS 色值，避免把访问受限页的颜色值误当验证码。`openAi_phone_add()` 和 `openAi_phone_code()` 已传入当前 page，让发送前旧码快照和后续轮询都可走 Roxy browser fallback。
+- 验证：新增 fallback 回归测试先失败于 `OPENAI_PHONE_CODE_ACCESS_RESTRICTED`；修复后 `node --test test\roxyOauthLogin.test.js` 通过，78/78；`node --test test\roxy2FAAuthLogin.test.js` 通过，11/11；`node --check src\auto\roxy_oauth_login.js` 和 `git diff --check` 通过。实机连接当前 Roxy CDP，仅调用短信读取函数，已通过 Roxy browser fallback 读取到 6 位验证码，未提交 OpenAI 表单。
+- 待办：原 run 已失败，当前 OpenAI 页仍在手机验证码页。可重新触发 account `78` 的 `2FA补号`，确认手机验证码阶段继续到 Codex/callback。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-07 Roxy Codex 页脚密码页误判防护
+
+- 来源工作日志：`docs/work/2026-07-07-roxy-codex-footer-password-guard.md`
+- change：`docs/changes/CHG-074-roxy-codex-footer-password-guard.md`，状态 `implemented`，尚未合并到 PRD。
+- issue：`docs/issues/issue-009-roxy-codex-footer-password-misclassification.md`，状态 `resolved`。
+- 当前进展：已连接用户保留的 Roxy `mac` 窗口确认实时页面是 `https://auth.openai.com/log-in/password`，密码输入框可见且可用。根因为 OpenAI password 页页脚含 `ChatGPT` / `Codex` 文案，旧 `is_codex_login_page()` 只看 Codex、ChatGPT 和 Continue，误判为 Codex consent，导致 2FA 补号没进入密码填写。现在 Codex consent 判定会显式排除 password 页，并要求 `sign in to codex` / `continue to codex` / `authorize codex` 这类授权确认语义。
+- 验证：新增回归测试先失败于 `true !== false`；修复后 `node --test test\roxyOauthLogin.test.js` 通过，76/76；`node --test test\roxy2FAAuthLogin.test.js` 通过，11/11；`node --check src\auto\roxy_oauth_login.js` 通过。当前 Roxy password 页实机复检 `is_codex_login_page=false`，2FA 专用 `is_openai_password_page=true`。
+- 待办：原失败子进程已退出，需重新触发 `2FA补号` 让新子进程加载修复并验证 account `78` 或同类账号的完整链路。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-07 Roxy 2FA 登录阶段识别修复
+
+- 来源工作日志：`docs/work/2026-07-07-roxy-2fa-login-stage-detection.md`
+- change：`docs/changes/CHG-062-roxy-2fa-chatgpt-session-login.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：修复 `src/auto/roxy_2fa_login.js` 把 ChatGPT 游客首页误判为已登录的问题。现在只有页面内请求 `/api/auth/session` 返回 `accessToken` 才判定 `chatgpt-home`；有 `Log in` 按钮时优先判定 `chatgpt-entry`。多个 `Log in` 按钮时点击第一个可见按钮。每次页面动作完成后都会日志记录 `动作后阶段识别 from=... stage=... url=...`。`fetchChatGptSession()` 现在优先页面内 `fetch()`，不再把可视页面导航到 `/api/auth/session`。
+- 验证：`node --test test\roxy2FALogin.test.js` 通过，6/6；`node --test test\roxy2FALogin.test.js test\replacementServices.test.js` 通过，31/31；`node --check src\auto\roxy_2fa_login.js` 通过。实机 account `75` 的 `login-2fa` run `431` 成功，最终 Roxy 页面保持在 `https://chatgpt.com/`。
+- 待办：实机日志中仍出现一次 `openai-password -> unknown` 后重试密码并成功进入 MFA；若后续频繁出现，可继续调长 password 后阶段等待窗口或增加提交成功判定。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-07 浏览器自动化状态判定规则
+
+- 来源工作日志：`docs/work/2026-07-07-browser-automation-state-rule.md`
+- change：`docs/changes/CHG-073-browser-automation-state-judgment-rule.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：已把本次 OTP 错码误判和 disabled/detached password input 误判沉淀到 `AGENTS.md` 的 `0.1 浏览器自动化状态判定规则`。后续处理 Roxy/OpenAI/ChatGPT 自动化时，提交后必须按阶段状态机分类页面；操作输入框前必须检查可见、`isEnabled()`、disabled/readOnly/aria-disabled/inert/stale 条件；当前浏览器页面和截图优先于代码预期。
+- 同步记录：`.learnings/LEARNINGS.md` 新增 `LRN-20260707-001` 并标记已推广到 `AGENTS.md`。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-07 注册 OTP 提交后状态判定守卫
+
+- 来源工作日志：`docs/work/2026-07-07-registration-otp-submit-state-guard.md`
+- change：`docs/changes/CHG-072-registration-otp-submit-state-guard.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：定位 run `418`、`419` 的失败根因：OTP 提交后通用 Continue 点击函数把 `formGone` 当作成功，但 OTP 页本来没有 `input[type="email"]`，导致错误验证码未等到 `Incorrect code` 就进入 Step 6。现在新增 `waitForOtpSubmitResult()`，只有进入 `/about-you`、资料页、`chatgpt.com` 或主站 session 才算 OTP 成功；检测到 `Incorrect code` 会排除旧码并继续下一轮轮询；长时间仍停在 OTP 页会明确报“邮箱验证码提交后未进入下一阶段”。追加排查 run `421` 后确认当前 Roxy 页面实际已经在 `email-verification` Code 输入页，失败原因是前一瞬间的 password input 过渡 DOM 被当成可填写密码页，但 Playwright 判定该元素 `not enabled`；`findVisiblePasswordSelector()` 现已要求 `isEnabled()` 为真并排除 disabled/inert 容器。
+- 验证：新增回归测试先失败于返回第一次错误验证码；追加 disabled password input 回归测试先失败于返回 `input[type="password"]`；修复后 `node --test .\test\roxyRegisterOpenai.test.js` 通过，28/28；`node --check .\src\auto\roxy_register_openai.js` 和 `git diff --check` 通过。
+- 待办：下一次真实注册时观察错码后是否继续出现第二轮 `email-code-request`，并确认不再从 `email-verification` 误入 Step 6。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-04 注册密码页到 OTP 页跳转竞态防护
+
+- 来源工作日志：`docs/work/2026-07-04-registration-password-to-otp-race.md`
+- change：`docs/changes/CHG-071-registration-password-to-otp-race.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：run `372` 的失败截图和当前 Roxy 浏览器均显示页面已在 `https://auth.openai.com/email-verification` OTP 输入页。根因是 OTP 等待阶段刚判断页面像密码页并进入重填密码分支，但 `submitRegistrationPassword()` 的人类化延迟期间页面已自动跳到 OTP 页，随后密码页就绪检查抛出“密码页未就绪”。现在 `submitRegistrationPassword()` 在密码页就绪失败时会复检 OTP 输入框；若 OTP 已可用，则记录“密码页已自动进入邮箱验证码页，跳过重复填写密码”并返回成功，交回外层继续验证码流程。
+- 验证：新增回归测试先失败于同一错误；修复后 `node --test test\roxyRegisterOpenai.test.js` 通过，26/26；`node --check src\auto\roxy_register_openai.js` 通过。
+- 待办：run `372` 原子进程已退出，不能自动续跑；下一次重新触发注册时新子进程会加载修复。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-04 注册 OTP 等待窗口按阶段重置
+
+- 来源工作日志：`docs/work/2026-07-04-registration-otp-wait-window-reset.md`
+- change：`docs/changes/CHG-070-registration-otp-wait-window-reset.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：修复 OpenAI 超时恢复后 OTP 等待仍沿用旧 deadline 的问题。`waitForOtpInputReady()` 现在使用可重置等待窗口：超时恢复后若回到密码页并重新提交密码，会重置 OTP 等待窗口；初始 OTP 等待阶段即使 `recoverPasswordPage=false`，如果密码页稳定停留超过防抖时间，也会重新提交密码并重置等待窗口。日志新增 `已重置验证码页等待窗口 reason=... timeoutMs=...`。
+- 验证：`node --test test\roxyRegisterOpenai.test.js` 通过，25/25；`node --check src\auto\roxy_register_openai.js` 通过；`node --test test\replacementServices.test.js test\roxyRegisterOpenai.test.js test\replacementAccountsApi.test.js` 通过，71/71；`git diff --check` 通过。
+- 待办：下次实机注册遇到 OpenAI 超时页时，观察是否出现 `reason=timeout-recovery-returned-password-page` 的等待窗口重置日志，并确认随后能继续进入 OTP 页再拉取邮箱验证码。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-04 注册成功状态与新增默认状态
+
+- 来源工作日志：`docs/work/2026-07-04-registration-status-registered.md`
+- change：`docs/changes/CHG-069-registration-status-registered.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：补号账号新增业务状态 `registered`，前端显示“已注册”。`createAccount()` 和新库表默认状态已从 `for_sale` 改为 `unregistered`；`POST /replacement-accounts/:id/register` 注册成功后调用 `markRegistrationSuccess()`，统一写入 `status=registered`、`codex_2fa` 和 `status_updated_at`。前端状态筛选、行内下拉、编辑弹窗和图例均已加入“已注册”。
+- 验证：`node --test test\replacementAccounts.test.js` 通过，32/32；`node --test test\replacementAccountsApi.test.js` 通过，21/21；`node --test test\replacementAccountsWeb.test.js` 通过，12/12。
+- 数据修正：本次按当前调试上下文把已注册成功的 account `60` 补写为 `registered`；旧数据不做批量迁移。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-04 注册入口直连 Auth 兜底
+
+- 来源工作日志：`docs/work/2026-07-04-registration-direct-auth-fallback.md`
+- change：`docs/changes/CHG-068-registration-direct-auth-fallback.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：最新实机失败并不是邮箱 API 第一时间接不到码，而是 account `60` 在 ChatGPT 邮箱 modal 提交后，`/api/auth/signin/openai?...login_hint=...` 返回 403 HTML，页面停在邮箱输入 loading，旧逻辑误入 OTP 等待。`src/auto/roxy_register_openai.js` 已新增 `prepareDirectAuthEmailEntry()`：邮箱提交后仍是 `state=email-entry` 且在 `chatgpt.com` 时，切换到 `https://auth.openai.com/log-in` 直连登录页重新提交邮箱；兜底后仍未知则明确报入口阶段错误。OTP 预等待阶段的超时恢复也已调整：如果尚未拉验证码且恢复回密码页并重新提交密码，继续确认页面状态，不再抛内部 `OTP_REFETCH_AFTER_RECOVERY`。
+- 验证：`node --check src\auto\roxy_register_openai.js` 通过；`node --test test\roxyRegisterOpenai.test.js` 通过，23/23；实机 run `359` / account `60` 注册成功，第一次邮箱验证码失败后继续轮询并提交第二次验证码，注册后自动启用 2FA，`replacement_accounts.codex_2fa` 已写入（长度 32，未输出 secret）。
+- 注意：不要打开或粘贴 `/api/auth/session` 原始内容，其中包含 access token/session token。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-03 注册 OTP 阶段密码页误判防护
+
+- 来源工作日志：`docs/work/2026-07-03-registration-password-stale-page-guard.md`
+- change：`docs/changes/CHG-067-registration-password-stale-page-guard.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：run `354` 的失败根因为密码提交后导航到 OTP 页期间，旧 DOM 中短暂存在的 `input[name="new-password"]` 被误判为“OTP 阶段回到了创建密码页”，导致重复提交数据库密码；第三次尝试时页面已是 `https://auth.openai.com/email-verification`，所以 `page.type()` 等不到 `new-password`。run `355` 又确认页面实际停在 `https://auth.openai.com/log-in/password`，旧逻辑只识别 `create-account/password`，因此跳过登录密码页并错误进入 OTP 轮询。
+- 修复：新增 `classifyRegistrationPage()` 统一识别邮箱输入、创建密码、登录密码、密码错误、邮箱验证但密码未提交、OTP、人机、超时、连接关闭、已注册、资料页、ChatGPT session、unknown。`detectNextRegistrationStep()` 和 `waitForOtpInputReady()` 优先走统一状态分类。`log-in/password` 和 `create-account/password` 都纳入 password gate。`submitOtpWithRetry()` 改为先确认 OTP 输入框，再 fetch 邮箱验证码，避免密码页提前消耗验证码。`waitForOtpInputReady()` 在初次密码提交后的预等待阶段禁用自动重填密码；遇到 `Incorrect email address or password` 直接报 `password-error`。`submitRegistrationPassword()` 改为先清空输入框再输入数据库密码，并仅日志记录密码长度和短 SHA-256 指纹，不输出明文。
+- 验证：`node --check src\auto\roxy_register_openai.js` 通过；`node --test test\roxyRegisterOpenai.test.js` 通过，22/22；`node --test test\replacementServices.test.js test\roxyRegisterOpenai.test.js test\replacementAccountsApi.test.js` 通过，68/68；`git diff --check` 通过。实机 account `57` 确认脚本先填数据库密码、不提前拉邮箱验证码；OpenAI 返回密码错误后失败退出，不再循环重复填写密码，页面密码框已清空。
+- 待办：本次只改注册子进程脚本，下一次注册自动化 spawn 新进程时会读取当前文件；用下一个未注册且数据库密码正确的真实账号验证 `log-in/password` / `create-account/password` 都会先填数据库密码，之后才拉取/提交邮箱验证码。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-03 注册超时恢复兼容回到密码页
+
+- 来源工作日志：`docs/work/2026-07-03-registration-timeout-recovery-password-page.md`
+- change：`docs/changes/CHG-066-registration-timeout-recovery-password-page.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：run `351` 的失败根因为 OpenAI 超时页点击“重试”后回到 `Create a password`，旧 OTP 兜底 selector 误命中只读邮箱文本框并 `fill()` 超时。`src/auto/roxy_register_openai.js` 已改为 OTP 输入框必须可编辑且像 code/OTP 字段；OTP 阶段若回到密码页，会重新填写数据库密码并提交，已获取验证码作废并重新轮询新码。
+- 验证：`node --test test\roxyRegisterOpenai.test.js` 通过，13/13。
+- 待办：重启当前 `node src/server.js` 后新注册子进程加载修复；用下一个未注册真实账号验证超时恢复后不会再误填只读邮箱输入框。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-03 2FA补号接入 CPA 上传复查链路
+
+- 来源工作日志：`docs/work/2026-07-03-replace-2fa-cpa-upload-chain.md`
+- change：`docs/changes/CHG-065-replace-2fa-cpa-upload-chain.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：`POST /replacement-accounts/:id/replace-2fa` 在生产注入 `cpaRepairWorker` 时已改走 `repair({ account, source: 'manual', mode: '2fa' })`。worker 会先调用 `replacementServices.replaceAccountWith2FA()` 生成本地 CPA JSON，再上传 `codex-<email>-plus.json`，复查 CPA auth file 健康后才标记账号为 `cpa_mounted`。未注入 worker 时仍保留直接 2FA 自动化 fallback。
+- 验证：`node --test test\cpaRepairWorker.test.js` 通过 6/6；`node --test test\replacementAccountsApi.test.js` 通过 21/21；`node --test test\cpaRepairWorker.test.js test\replacementAccountsApi.test.js test\replacementServices.test.js` 通过 52/52；`node --check src\cpaRepairWorker.js`、`node --check src\server.js`、`git diff --check` 均通过。
+- 待办：重启当前 `node src/server.js` 后新 `replace-2fa` 路由逻辑生效；可用真实账号从 UI 点击“2FA补号”做端到端验证。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-03 自动化动作级 Roxy 窗口配置
+
+- 来源工作日志：`docs/work/2026-07-03-action-specific-roxy-browser-targets.md`
+- change：`docs/changes/CHG-064-action-specific-roxy-browser-targets.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：`src/replacementServices.js` 已支持注册、普通补号、2FA 补号、2FA 登录分别使用动作级 Roxy 窗口变量。动作级窗口变量存在时会覆盖全局 `ROXY_BROWSER_*`，并在未配置动作级 CDP 时清除全局 `ROXY_CDP_ENDPOINT`，避免所有动作误复用同一窗口。
+- 推荐配置：`ROXY_REGISTER_BROWSER_SORT_NUM`、`ROXY_2FA_LOGIN_BROWSER_SORT_NUM`、`ROXY_REPLACE_BROWSER_SORT_NUM`、`ROXY_REPLACE_2FA_BROWSER_SORT_NUM` 分别填不同 Roxy SN。
+- 验证：`node --test test\replacementServices.test.js` 通过 25/25。
+- 待办：重启当前 `node src/server.js` 后新配置映射才会在 UI 触发的子进程中生效。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-03 补号操作菜单新增 2FA 登录入口
+
+- 来源工作日志：`docs/work/2026-07-03-replacement-2fa-login-action.md`
+- change：`docs/changes/CHG-063-replacement-2fa-login-action.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：补号管理页“操作⌄”菜单已新增 `2FA登录`，前端调用 `POST /replacement-accounts/:id/login-2fa`。后端新增路由并调用 `replacementServices.loginAccountWith2FA(account)`，子进程运行 `src/auto/roxy_2fa_login.js`，注入 `ROXY_2FA_EMAIL`、`ROXY_OAUTH_EMAIL`、`ROXY_OAUTH_PASSWORD` 以及 `ROXY_OAUTH_2FA_CODE` 或 `ROXY_OAUTH_TOTP_SECRET`。该操作不写补号成功状态、不增加补号次数；现有 `2FA补号` 保持原 Codex OAuth 补号链路不变。
+- 验证：`node --test test\replacementServices.test.js` 通过 24/24；`node --test test\replacementAccountsApi.test.js` 通过 19/19；`node --test test\replacementAccountsWeb.test.js` 通过 12/12；`node --test test\roxy2FALogin.test.js` 通过 3/3；`node --check src\replacementServices.js`、`node --check src\server.js`、`node --check web\app.js` 均通过。
+- 待办：重启当前 `node src/server.js` 后新入口生效；可选用真实账号从 UI 点击 `2FA登录` 做端到端验证。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-03 Roxy 2FA ChatGPT session 登录脚本
+
+- 来源工作日志：`docs/work/2026-07-03-roxy-2fa-chatgpt-session-login.md`
+- change：`docs/changes/CHG-062-roxy-2fa-chatgpt-session-login.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：已基于 Roxy profile `gpt`、SN `617-8` 的手动录制确认真实路径为 ChatGPT session 登录：`chatgpt.com` 入口 -> OpenAI password -> MFA challenge -> `chatgpt.com/api/auth/callback/openai` -> `chatgpt.com/`。新增独立 `src/auto/roxy_2fa_login.js`，不走 Codex OAuth authorize，也不进入手机号接码；登录成功后请求 `/api/auth/session` 并保存 access token 到 `src/auto/product_files/2fa_login/`。
+- 验证：`node --test test\roxy2FALogin.test.js` 通过 3/3；`node --test test\roxy2FAAuthLogin.test.js` 通过 11/11；`node --test test\roxyRegisterOpenai.test.js` 通过 11/11；`node --test test\roxyOauthLogin.test.js` 通过 75/75。
+- 待办：如需实机运行，配置 `ROXY_2FA_EMAIL` 或 `ROXY_OAUTH_EMAIL`、`ROXY_OAUTH_PASSWORD`、`ROXY_OAUTH_2FA_CODE` 或 `ROXY_OAUTH_TOTP_SECRET` 后执行 `node src\auto\roxy_2fa_login.js`。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-03 Roxy 注册入口 modal 与窗口大小
+
+- 来源工作日志：`docs/work/2026-07-03-roxy-registration-entry-modal-and-window-size.md`
+- change：`docs/changes/CHG-060-roxy-registration-entry-modal-and-window-size.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：已连接当前 Roxy 窗口确认失败根因不是页面没加载，而是 `https://chatgpt.com/` 已打开 `Log in or sign up` 邮箱 modal，旧注册脚本仍强依赖查找登录/注册入口按钮。`src/auto/roxy_register_openai.js` 新增 `prepareChatGptEmailEntry()`，当前页已有邮箱输入框时直接继续填写邮箱；未出现邮箱输入框时优先点击 `Log in`，再回退 `Sign up`。主注册入口和超时恢复入口均已复用该逻辑。`src/auto/roxy_oauth_login.js` 开窗参数默认增加 `--window-size=2048,1152`，并支持 `ROXY_WINDOW_WIDTH` / `ROXY_WINDOW_HEIGHT` / `ROXY_WINDOW_SIZE` 覆盖。实机发现 Chrome args 会被 Roxy profile 覆盖后，又在 `src/auto/roxy-browser-client.cjs` 新增 `updateBrowserConfig()`，开窗前写入 `fingerInfo.openWidth/openHeight`。
+- 验证：`node --test test\roxyRegisterOpenai.test.js test\roxyOauthLogin.test.js` 通过，84/84 pass；`node --test test\roxyOauthLogin.test.js test\roxyBrowserClient.test.js` 通过，81/81 pass。实机注册 run `350` 成功完成并自动启用 2FA；窗口尺寸二次实机验证 `outerWidth=2048`、`outerHeight=1152`。当前 `node src/server.js` 已重启，运行中服务已加载最新修复。
+- 待办：后续继续注册新号时观察 RoxyBrowser 是否稳定保留 profile 窗口尺寸；不要在日志或页面中暴露 `/api/auth/session` 的 token 内容。
+- PRD 合并提醒：当前未合并的 `implemented` change 为 `CHG-049` 至 `CHG-060` 中除已合并项外的 12 个以上，已超过 5 个，应安排 PRD 基线合并。
+
+## 2026-07-03 注册流程先设置数据库密码再提交邮箱验证码
+
+- 来源工作日志：`docs/work/2026-07-03-registration-password-before-email-otp.md`
+- change：`docs/changes/CHG-059-registration-password-before-email-otp.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：Roxy OpenAI 注册流程已改为使用补号账号数据库 `password` 创建密码，`registerAccount()` 会注入 `ROXY_REGISTER_PASSWORD`。注册脚本在 password 未提交前遇到 `auth.openai.com/email-verification` 时，不论是否可见 OTP 输入框，都会先点击主按钮推进到 `create-account/password`；二次修正后，即使 URL 不是 `/email-verification`，只要 password 未提交且 OTP 输入框可见，也会先返回 `email-verification-before-password`，禁止直接接码。只有 password 提交后，OTP 输入框才被识别为真正邮箱验证码页。OTP 错码后继续排除旧码，每轮 24 次、5 秒间隔轮询新码。注册完成后自动启用 2FA 与 `registrationMfa.secret` 写入补号账号 `codex_2fa` 的链路保持不变。
+- 验证：`node --test test\replacementServices.test.js test\roxyRegisterOpenai.test.js` 通过，31/31 pass；`node --test test\replacementAccountsApi.test.js` 通过，18/18 pass；二次修正后 `node --test test\replacementServices.test.js test\roxyRegisterOpenai.test.js test\replacementAccountsApi.test.js` 通过，51/51 pass；`node --check src\auto\roxy_register_openai.js`、`node --check src\replacementServices.js`、`node --check src\server.js` 均通过。
+- 待办：当前 `node src/server.js` 已于 2026-07-03 20:19:25 重启并加载修正；下一个未注册真实账号需要端到端验证 password 前 OTP 不填码、数据库密码设置成功、第二次邮箱验证码提交成功、`codex_2fa` 自动写库。
+- PRD 合并提醒：当前未合并的 `implemented` change 为 `CHG-049`、`CHG-050`、`CHG-051`、`CHG-052`、`CHG-053`、`CHG-054`、`CHG-055`、`CHG-056`、`CHG-057`、`CHG-058`、`CHG-059`，已超过 5 个，应安排 PRD 基线合并。
+
 ## 2026-07-03 iCloud 邮箱验证码 API 优先级对齐
 
 - 来源工作日志：`docs/work/2026-07-03-icloud-email-code-api-priority.md`

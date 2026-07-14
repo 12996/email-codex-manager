@@ -1,0 +1,30 @@
+# 2026-07-07 Roxy Codex 页脚密码页误判防护
+
+- 状态：done
+- 目标：修复 2FA 补号进入 OpenAI password 页后不输入密码的问题。
+- 修改文件：
+  - `src/auto/roxy_oauth_login.js`
+  - `test/roxyOauthLogin.test.js`
+  - `docs/issues/issue-009-roxy-codex-footer-password-misclassification.md`
+  - `docs/changes/CHG-074-roxy-codex-footer-password-guard.md`
+  - `docs/changes/CHANGE_REGISTRY.md`
+  - `docs/issues/README.md`
+  - `docs/work/work-log.md`
+  - `docs/work/handoff.md`
+- 过程：
+  - 连接用户保留的 Roxy `mac` 窗口，确认页面实时状态为 `https://auth.openai.com/log-in/password`，密码输入框可见、非 disabled、非 readonly。
+  - 对照失败日志 `replacement-2fa-78-2026-07-07T10-31-07-375Z.log`，确认邮箱提交后错误记录 `next=codex-login`。
+  - 根因为 password 页页脚包含 `ChatGPT` / `Codex` 文案，旧 `is_codex_login_page()` 把页脚说明当作 Codex 授权确认页。
+  - 新增失败回归测试后，收紧 Codex consent 判定：排除 password 页，并要求 `sign in to codex` 等授权确认语义。
+- 验证结果：
+  - RED：`node --test test\roxyOauthLogin.test.js` 新增用例先失败于 `true !== false`。
+  - GREEN：`node --test test\roxyOauthLogin.test.js` 通过，76/76。
+  - GREEN：`node --test test\roxy2FAAuthLogin.test.js` 通过，11/11。
+  - GREEN：`node --check src\auto\roxy_oauth_login.js` 通过。
+  - 实机复检当前 password 页：`is_codex_login_page=false`，2FA 专用 `is_openai_password_page=true`。
+- 未完成 / 风险：
+  - 当前已修复检测逻辑；原失败子进程已退出，需重新触发 `2FA补号` 让新子进程加载修复。
+  - 未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+- 下一步：
+  - 从 UI 对 account `78` 或同类账号重新触发 `2FA补号`，确认 `email -> password -> mfa -> Codex/callback` 全链路通过。
+- 日终交接：已更新 `handoff.md`。

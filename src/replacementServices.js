@@ -8,9 +8,16 @@ import { codedError } from './replacementAccounts.js';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DEFAULT_ROXY_OAUTH_SCRIPT = join(__dirname, 'auto', 'roxy_oauth_login.js');
 const DEFAULT_ROXY_2FA_AUTH_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_auth_login.js');
+const DEFAULT_ROXY_2FA_LOGIN_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_login.js');
 const DEFAULT_ROXY_REGISTER_SCRIPT = join(__dirname, 'auto', 'roxy_register_openai.js');
 const DEFAULT_LOG_DIR = join(__dirname, '..', 'data', 'automation-logs');
 const activeChildren = new Map();
+const ROXY_TARGET_ENV_KEYS = [
+  'ROXY_BROWSER_DIR_ID',
+  'ROXY_BROWSER_SORT_NUM',
+  'ROXY_BROWSER_WINDOW_NAME',
+  'ROXY_CDP_ENDPOINT',
+];
 
 export function createReplacementServices({
   fetchImpl = fetch,
@@ -19,6 +26,7 @@ export function createReplacementServices({
   nodePath = process.execPath,
   scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
   twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
+  twoFaLoginScriptPath = DEFAULT_ROXY_2FA_LOGIN_SCRIPT,
   registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
   baseEnv = process.env,
   automationRuns,
@@ -29,6 +37,7 @@ export function createReplacementServices({
     nodePath,
     scriptPath,
     twoFaScriptPath,
+    twoFaLoginScriptPath,
     registerScriptPath,
     baseEnv,
     automationRuns,
@@ -81,6 +90,16 @@ export function createReplacementServices({
       return defaultAutomation.replaceAccountWith2FA(account, options);
     },
 
+    async loginAccountWith2FA(account, options) {
+      if (automation?.loginAccountWith2FA) {
+        return automation.loginAccountWith2FA(account, options);
+      }
+      if (!defaultAutomation?.loginAccountWith2FA) {
+        throw codedError('LOGIN_2FA_NOT_CONFIGURED', '2fa login automation is not configured');
+      }
+      return defaultAutomation.loginAccountWith2FA(account, options);
+    },
+
     async registerAccount(account) {
       if (automation?.registerAccount) {
         return automation.registerAccount(account);
@@ -99,6 +118,7 @@ export function createRoxyOAuthChildProcessAutomation({
   nodePath = process.execPath,
   scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
   twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
+  twoFaLoginScriptPath = DEFAULT_ROXY_2FA_LOGIN_SCRIPT,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
@@ -108,6 +128,7 @@ export function createRoxyOAuthChildProcessAutomation({
     nodePath,
     scriptPath,
     twoFaScriptPath,
+    twoFaLoginScriptPath,
     registerScriptPath: DEFAULT_ROXY_REGISTER_SCRIPT,
     baseEnv,
     automationRuns,
@@ -120,6 +141,7 @@ export function createRoxyChildProcessAutomation({
   nodePath = process.execPath,
   scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
   twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
+  twoFaLoginScriptPath = DEFAULT_ROXY_2FA_LOGIN_SCRIPT,
   registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
   baseEnv = process.env,
   automationRuns,
@@ -131,13 +153,13 @@ export function createRoxyChildProcessAutomation({
       const phone = normalizeOptional(account?.phone);
       const smsApi = normalizeOptional(account?.sms_api);
       const emailCodeApi = normalizeEmailCodeApiForAccount(account);
-      const env = {
+      const env = applyActionRoxyTargetEnv({
         ...baseEnv,
         ROXY_OAUTH_EMAIL: email,
         ...(phone ? { ROXY_OAUTH_PHONE: phone } : {}),
         ...(smsApi ? { PHONE_VERIFICATION_SMS_API_URL: smsApi } : {}),
         ...(emailCodeApi ? { VERIFICATION_CODE_API_URL: emailCodeApi } : {}),
-      };
+      }, 'ROXY_REPLACE');
       if (!emailCodeApi) {
         delete env.VERIFICATION_CODE_API_URL;
       }
@@ -152,7 +174,13 @@ export function createRoxyChildProcessAutomation({
         logDir,
         kind: 'replacement',
         failureCode: 'REPLACE_FAILED',
-        envSummaryKeys: ['ROXY_OAUTH_EMAIL', 'ROXY_OAUTH_PHONE', 'PHONE_VERIFICATION_SMS_API_URL', 'VERIFICATION_CODE_API_URL'],
+        envSummaryKeys: [
+          'ROXY_OAUTH_EMAIL',
+          'ROXY_OAUTH_PHONE',
+          'PHONE_VERIFICATION_SMS_API_URL',
+          'VERIFICATION_CODE_API_URL',
+          ...ROXY_TARGET_ENV_KEYS,
+        ],
         cpaTriggerDetails: options?.cpaTriggerDetails,
       });
     },
@@ -164,14 +192,14 @@ export function createRoxyChildProcessAutomation({
       const emailCodeApi = normalizeEmailCodeApiForAccount(account);
       const password = normalizeOptional(account?.password);
       const codex2fa = normalizeOptional(account?.codex_2fa);
-      const env = {
+      const env = applyActionRoxyTargetEnv({
         ...baseEnv,
         ROXY_OAUTH_EMAIL: email,
         ...(phone ? { ROXY_OAUTH_PHONE: phone } : {}),
         ...(smsApi ? { PHONE_VERIFICATION_SMS_API_URL: smsApi } : {}),
         ...(emailCodeApi ? { VERIFICATION_CODE_API_URL: emailCodeApi } : {}),
         ...(password ? { ROXY_OAUTH_PASSWORD: password } : {}),
-      };
+      }, 'ROXY_REPLACE_2FA');
 
       if (!emailCodeApi) {
         delete env.VERIFICATION_CODE_API_URL;
@@ -207,21 +235,75 @@ export function createRoxyChildProcessAutomation({
           'ROXY_OAUTH_PASSWORD',
           'ROXY_OAUTH_2FA_CODE',
           'ROXY_OAUTH_TOTP_SECRET',
+          ...ROXY_TARGET_ENV_KEYS,
         ],
         cpaTriggerDetails: options?.cpaTriggerDetails,
+      });
+    },
+
+    loginAccountWith2FA(account) {
+      const email = normalizeRequired(account?.email, 'LOGIN_2FA_FAILED', '2fa login account email is required');
+      const password = normalizeOptional(account?.password);
+      const codex2fa = normalizeOptional(account?.codex_2fa);
+      const env = applyActionRoxyTargetEnv({
+        ...baseEnv,
+        ROXY_2FA_EMAIL: email,
+        ROXY_OAUTH_EMAIL: email,
+        ...(password ? { ROXY_OAUTH_PASSWORD: password } : {}),
+      }, 'ROXY_2FA_LOGIN');
+
+      if (!password) {
+        delete env.ROXY_OAUTH_PASSWORD;
+      }
+      if (codex2fa) {
+        if (/^\d{6,8}$/.test(codex2fa)) {
+          env.ROXY_OAUTH_2FA_CODE = codex2fa;
+          delete env.ROXY_OAUTH_TOTP_SECRET;
+        } else {
+          env.ROXY_OAUTH_TOTP_SECRET = codex2fa;
+          delete env.ROXY_OAUTH_2FA_CODE;
+        }
+      } else {
+        delete env.ROXY_OAUTH_2FA_CODE;
+        delete env.ROXY_OAUTH_TOTP_SECRET;
+      }
+
+      return runChildProcess({
+        spawnImpl,
+        command: nodePath,
+        args: [twoFaLoginScriptPath],
+        env,
+        account: { ...account, email },
+        automationRuns,
+        logDir,
+        kind: 'login-2fa',
+        failureCode: 'LOGIN_2FA_FAILED',
+        envSummaryKeys: [
+          'ROXY_2FA_EMAIL',
+          'ROXY_OAUTH_EMAIL',
+          'ROXY_OAUTH_PASSWORD',
+          'ROXY_OAUTH_2FA_CODE',
+          'ROXY_OAUTH_TOTP_SECRET',
+          ...ROXY_TARGET_ENV_KEYS,
+        ],
       });
     },
 
     registerAccount(account) {
       const email = normalizeRequired(account?.email, 'REGISTER_FAILED', 'registration account email is required');
       const emailCodeApi = normalizeEmailCodeApiForAccount(account);
-      const env = {
+      const password = normalizeOptional(account?.password);
+      const env = applyActionRoxyTargetEnv({
         ...baseEnv,
         ROXY_REGISTER_EMAIL: email,
         ROXY_OAUTH_EMAIL: email,
+        ...(password ? { ROXY_REGISTER_PASSWORD: password } : {}),
         ...(emailCodeApi ? { REGISTRATION_EMAIL_CODE_API_URL: emailCodeApi } : {}),
-      };
+      }, 'ROXY_REGISTER');
       delete env.PHONE_VERIFICATION_SMS_API_URL;
+      if (!password) {
+        delete env.ROXY_REGISTER_PASSWORD;
+      }
       if (!emailCodeApi) {
         delete env.REGISTRATION_EMAIL_CODE_API_URL;
         delete env.VERIFICATION_CODE_API_URL;
@@ -237,10 +319,38 @@ export function createRoxyChildProcessAutomation({
         logDir,
         kind: 'registration',
         failureCode: 'REGISTER_FAILED',
-        envSummaryKeys: ['ROXY_REGISTER_EMAIL', 'ROXY_OAUTH_EMAIL', 'VERIFICATION_CODE_API_URL', 'REGISTRATION_EMAIL_CODE_API_URL'],
+        envSummaryKeys: [
+          'ROXY_REGISTER_EMAIL',
+          'ROXY_OAUTH_EMAIL',
+          'ROXY_REGISTER_PASSWORD',
+          'VERIFICATION_CODE_API_URL',
+          'REGISTRATION_EMAIL_CODE_API_URL',
+          ...ROXY_TARGET_ENV_KEYS,
+        ],
       });
     },
   };
+}
+
+function applyActionRoxyTargetEnv(env, prefix) {
+  const dirId = normalizeOptional(env[`${prefix}_BROWSER_DIR_ID`]);
+  const sortNum = normalizeOptional(env[`${prefix}_BROWSER_SORT_NUM`]);
+  const windowName = normalizeOptional(env[`${prefix}_BROWSER_WINDOW_NAME`]);
+  const cdpEndpoint = normalizeOptional(env[`${prefix}_CDP_ENDPOINT`]);
+  const hasBrowserTarget = Boolean(dirId || sortNum || windowName);
+
+  if (hasBrowserTarget || cdpEndpoint) {
+    for (const key of ROXY_TARGET_ENV_KEYS) {
+      delete env[key];
+    }
+  }
+
+  if (dirId) env.ROXY_BROWSER_DIR_ID = dirId;
+  if (sortNum) env.ROXY_BROWSER_SORT_NUM = sortNum;
+  if (windowName) env.ROXY_BROWSER_WINDOW_NAME = windowName;
+  if (cdpEndpoint) env.ROXY_CDP_ENDPOINT = cdpEndpoint;
+
+  return env;
 }
 
 function normalizeEmailCodeApiForAccount(account) {

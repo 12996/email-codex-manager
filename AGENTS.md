@@ -10,6 +10,19 @@ AI 应根据任务目标自行判断需要阅读哪些文档，不要机械读�
 
 录制完成后，AI 再基于实际录制结果整理 selector、流程函数和测试。Roxy OAuth 相关可复用运行时代码写入 `src/auto/roxy_oauth_login.js`，手动验证入口写入 `src/auto/roxy_oauth_steps_manual_test.js`。
 
+## 0.1 浏览器自动化状态判定规则
+
+处理 Roxy/OpenAI/ChatGPT 等浏览器自动化流程时，AI 必须遵守以下规则，避免把过渡态 DOM 或通用点击结果误判为流程成功：
+
+- 页面状态以实时运行态为准：当前浏览器页面、截图、URL、可访问性树、DOM、网络请求优先于源码里的预期状态和历史日志。
+- 提交按钮点击后，不得仅凭 `click` 成功、`formGone`、URL 未报错、短时间没看到错误提示来判断成功；必须等待并分类后续页面状态。
+- 验证码、密码、手机号、授权确认等阶段必须有阶段专用状态机：明确区分成功页、仍在当前页、错误提示、超时页、连接错误页、相邻阶段页。
+- 操作输入框前必须确认元素不仅可见，还要可操作：优先检查 Playwright `locator.isEnabled()`，并排除 `disabled`、`readOnly`、`aria-disabled="true"`、`inert`、`fieldset[disabled]` 或 detached/stale 元素。
+- 当页面识别结果与当前截图/浏览器状态冲突时，先暂停扩大修改范围，连接当前页面采集 URL、标题、body 文本、input/button 元数据，再修状态判定；不要继续基于猜测补丁。
+- OTP/邮箱验证码提交后必须等待明确结果：进入资料页或主站才算成功；出现 `Incorrect code` 等错码提示必须排除旧码继续轮询；仍停留在验证码页应继续等待或明确超时失败。
+- 密码页判定不能只看是否存在 `input[type="password"]`；必须同时确认 URL/页面文案符合密码阶段，且 password input 可用。验证码页上的过渡态、disabled 或 detached password DOM 不得触发“重填密码”。
+- 每次修复页面状态机或竞态问题，必须先补对应回归测试，覆盖“当前阶段短暂停留”“相邻页误判”“元素 disabled/detached”“错误提示延迟出现”等至少一个负例。
+
 ## 1. 文档入口
 
 项目文档总入口：

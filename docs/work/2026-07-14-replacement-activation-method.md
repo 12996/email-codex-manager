@@ -1,0 +1,36 @@
+# 2026-07-14 补号账号开通方式下拉与页面维护
+
+- 状态：done
+- 目标：让 `/replacement-ui` 的开通方式像账号状态一样支持行内下拉修改，并支持页面新增未来方式。
+- 修改文件：
+  - `src/db.js`
+  - `src/replacementActivationMethods.js`
+  - `src/replacementAccounts.js`
+  - `src/server.js`
+  - `web/index.html`
+  - `web/app.js`
+  - `web/styles.css`
+  - `test/replacementActivationMethods.test.js`
+  - `test/replacementAccounts.test.js`
+  - `test/replacementAccountsApi.test.js`
+  - `test/replacementAccountsWeb.test.js`
+  - `docs/project/api.md`
+  - `docs/changes/CHG-077-replacement-activation-method-catalog.md`
+  - `docs/changes/CHANGE_REGISTRY.md`
+- 当前实现：
+  - 数据库初始化时创建 `replacement_activation_methods` 表。
+  - 初始方式为：越南直卡、`upi`、`ideal`、波兰、瑞士、`pix 直卡`。
+  - 列表开通方式使用行内下拉，调用 `PATCH /replacement-accounts/:id/activation-method`。
+  - 页面“管理开通方式”调用 `POST /replacement-activation-methods` 新增方式。
+  - 旧目录外历史值显示为“历史值”，不会覆盖原数据。
+- 验证结果：
+  - TDD RED 已确认新仓储、账号方法、API、前端测试分别在功能缺失时失败。
+  - 当前专项测试：`node --test test/replacementActivationMethods.test.js test/replacementAccounts.test.js test/replacementAccountsApi.test.js test/replacementAccountsWeb.test.js`，74/74 通过。
+  - 全部 JavaScript 测试：`node --test test/*.test.js`，330/330 通过。
+  - `node --check`、`git diff --check` 通过。
+  - 重启本地 `13100` 服务后，认证请求返回 6 个初始方式；`/replacement-ui` HTML 包含管理按钮、动态下拉和管理弹窗。
+- 未完成 / 风险：
+  - `npm test` 额外执行的 `test/test-verification-code.mjs` 依赖另一个已启动的 `localhost:3100` 服务，本次返回 `ECONNREFUSED`；该脚本不属于本次功能测试，JavaScript 测试文件已全部通过。
+  - in-app browser 当前不可用，因此未完成真实点击级浏览器验收；已使用认证 HTTP 请求验证运行态接口和页面模板。
+- 下一步：如需视觉/点击级验收，打开可用浏览器后访问 `http://localhost:13100/replacement-ui`，验证下拉切换和新增方式弹窗。
+- 日终交接：完成后更新 `handoff.md`
