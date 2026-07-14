@@ -7,8 +7,8 @@
 - 来源工作日志：`docs/work/2026-07-15-replacement-status-api-log-mapping.md`
 - 关联 change：`docs/changes/CHG-080-replacement-status-email-api-source.md`，状态 `implemented`，尚未合并到 PRD。
 - 当前进展：已确认 `roll-happier-6@icloud.com` 的数据库值为 `http://5.253.38.136:8080/code?email=roll-happier-6@icloud.com`，实际请求使用该完整 URL；此前日志的 `displayEmailApi()` 只隐藏 query，造成窗口看起来像未按账号查询。现在 Plus/验活日志显示脱敏后的接口基址并追加“账号邮箱”，不泄露 query 中的其他参数。
-- 验证：真实数据库行读取和注入 `fetch` 请求探针均确认完整 URL；RED 阶段两条进度日志回归测试按预期失败，修复后专项测试 12/12 通过。
-- 下一步：重启 `13100` 服务后，在 `/replacement-ui` 再点击“一键验活”或“查询 Plus 状态”，应看到 `正在读取邮箱 API：.../code（账号邮箱：当前账号）`；没有 `email_code_api` 的账号仍应显示跳过。
+- 验证：真实数据库行读取和注入 `fetch` 请求探针均确认完整 URL；RED 阶段两条进度日志回归测试按预期失败，修复后专项测试 12/12、全量测试 353/353 通过；`13100` 已重启为 PID `27696`，`GET /login` 返回 200。
+- 下一步：在 `/replacement-ui` 再点击“一键验活”或“查询 Plus 状态”，应看到 `正在读取邮箱 API：.../code（账号邮箱：当前账号）`；没有 `email_code_api` 的账号仍应显示跳过。
 - PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD-003 基线合并。
 
 ## 2026-07-15 Roxy 2FA ChatGPT session 状态判定加固

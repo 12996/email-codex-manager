@@ -37,6 +37,7 @@
 - 数据库只读查询和请求 URL 探针确认实际请求为完整 `email_code_api`。
 - `node --check`、`git diff --check` 通过。
 - 全量 `node --test test/*.test.js` 通过 353/353。
+- 重启 `13100` 服务后，`GET http://localhost:13100/login` 返回 200。
 
 ## 关联
 
