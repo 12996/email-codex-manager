@@ -2,6 +2,16 @@
 
 状态：active
 
+## 2026-07-14 补号状态查询实时进度窗口
+
+- 来源工作日志：`docs/work/2026-07-14-replacement-healthcheck-progress-window.md`
+- change：`docs/changes/CHG-079-replacement-healthcheck-progress-window.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：一键验活和查询 Plus 状态现在支持 SSE 实时进度；页面点击后立即打开“执行进度”窗口，逐个输出开始查询、读取邮箱、命中/未命中/失败，完成后保留汇总。原有 JSON API 保持兼容。Plus 命中仍更新为 `plus_active`，封禁命中仍更新为 `banned`。
+- 验证：服务进度事件测试、API JSON/SSE 测试和前端静态测试已通过；全量 JavaScript 测试 `node --test test/*.test.js` 通过 340/340；相关 `node --check` 和 `git diff --check` 通过。
+- 风险：关闭进度窗口不会取消后端任务；真实 IMAP 查询依赖 Gmail App Password 和 iCloud 默认 Gmail 配置。
+- 下一步：重启正在运行的 13100 服务后，在页面点击两个按钮验证实时日志。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
 ## 2026-07-14 补号账号 Plus 状态查询
 
 - 来源工作日志：`docs/work/2026-07-14-replacement-plus-status-check.md`

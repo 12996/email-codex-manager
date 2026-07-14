@@ -1205,6 +1205,15 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 }
 ```
 
+实时进度：请求头增加 `Accept: text/event-stream` 时，接口返回 SSE 流，不改变状态处理逻辑。每条事件格式为 `data: <JSON>\n\n`，事件类型包括：
+
+- `start`：任务开始和候选账号数量。
+- `account-start`：某个账号开始处理。
+- `account-step`：正在读取收件箱或匹配邮件。
+- `account-result`：该账号命中、未命中或失败；包含 `email`、`outcome`、`status` 和 `message`。
+- `complete`：任务完成，`result` 字段与普通 JSON 响应相同。
+- `error`：服务级错误。
+
 ### POST `/replacement-accounts/check-plus-status`
 
 手动批量查询补号账号的 ChatGPT Plus 状态。该接口复用后台登录态，只处理未软删除且当前状态为 `registered` 的账号。
@@ -1245,6 +1254,8 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
   }
 }
 ```
+
+该接口同样支持上方说明的 `Accept: text/event-stream` 实时进度响应。
 
 ### POST `/replacement-accounts/:id/fetch-sms-code`
 
@@ -1794,8 +1805,8 @@ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS=30
 | 删除账号 | `DELETE /replacement-accounts/:id` | 软删除 |
 | 修改状态 | `PATCH /replacement-accounts/:id/status` | 更新状态和备注 |
 | 启用/停用公开验证码 | `PATCH /replacement-accounts/:id/public-code` | 只更新 `public_code_enabled` 和必要的 `public_code_key` |
-| 一键验活 | `POST /replacement-accounts/healthcheck-banned` | 检测封禁邮件并自动标记 `banned` |
-| 查询 Plus 状态 | `POST /replacement-accounts/check-plus-status` | 只查询 `registered` 账号，命中订阅邮件后标记 `plus_active` |
+| 一键验活 | `POST /replacement-accounts/healthcheck-banned` | 检测封禁邮件并自动标记 `banned`，支持 SSE 进度 |
+| 查询 Plus 状态 | `POST /replacement-accounts/check-plus-status` | 只查询 `registered` 账号，命中订阅邮件后标记 `plus_active`，支持 SSE 进度 |
 | 获取验证码 | `POST /replacement-accounts/:id/fetch-sms-code` | 实时返回验证码，不入库 |
 | 获取 JSON | `POST /replacement-accounts/:id/fetch-json` | 保存 JSON 原文 |
 | 注册 OpenAI | `POST /replacement-accounts/:id/register` | 启动注册自动化子进程，邮箱验证码走 POST 内部接口 |

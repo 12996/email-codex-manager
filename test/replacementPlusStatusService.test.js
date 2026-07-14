@@ -135,3 +135,36 @@ test('runPlusStatusCheck records failures without changing registered status', a
   assert.match(replacementAccounts.getAccount(failed.id).last_error, /Plus 状态查询失败：IMAP temporary failure/);
   assert.deepEqual(result.failedAccounts.map((item) => item.email), [failed.email]);
 });
+
+test('runPlusStatusCheck emits account progress events', async () => {
+  const { accounts, replacementAccounts } = createRepos();
+  const mailbox = createGmailAccount(accounts);
+  const account = replacementAccounts.createAccount({
+    email: 'receiver+progress@gmail.com',
+    status: 'registered',
+  });
+  const events = [];
+
+  await runPlusStatusCheck({
+    accounts,
+    replacementAccounts,
+    mailService: {
+      async fetchMessages() {
+        return [plusMessage(account.email)];
+      },
+    },
+    icloudCodeDefaultGmailAccount: mailbox.gmail_email,
+    onProgress: (event) => events.push(event),
+  });
+
+  assert.deepEqual(events.map((event) => event.type), [
+    'start',
+    'account-start',
+    'account-step',
+    'account-step',
+    'account-result',
+  ]);
+  assert.equal(events[1].email, account.email);
+  assert.equal(events.at(-1).outcome, 'plus');
+  assert.match(events.at(-1).message, /命中 Plus 订阅邮件/);
+});

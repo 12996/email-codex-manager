@@ -1,0 +1,32 @@
+# 2026-07-14 补号状态查询实时进度窗口
+
+- 状态：done
+- 目标：让“一键验活”和“查询 Plus 状态”在执行期间实时显示账号级过程信息，完成后保留汇总窗口。
+- 修改文件：
+  - `src/accountHealthcheckService.js`
+  - `src/replacementPlusStatusService.js`
+  - `src/server.js`
+  - `web/index.html`
+  - `web/app.js`
+  - `web/styles.css`
+  - `test/accountHealthcheckService.test.js`
+  - `test/replacementPlusStatusService.test.js`
+  - `test/replacementAccountsApi.test.js`
+  - `test/replacementAccountsWeb.test.js`
+  - `docs/project/api.md`
+  - `docs/changes/CHG-079-replacement-healthcheck-progress-window.md`
+  - `docs/changes/CHANGE_REGISTRY.md`
+- 当前实现：
+  - 两个批量服务支持 `onProgress` 事件回调，输出任务开始、账号开始、读取邮箱、账号结果和失败信息。
+  - 两个批量 API 在 `Accept: text/event-stream` 时返回 SSE；默认 JSON 响应保持兼容。
+  - 页面新增共享“执行进度”窗口，自动滚动日志，完成后显示汇总并保留窗口。
+  - Plus 命中仍写回 `plus_active`，封禁邮件命中仍写回 `banned`。
+- 验证结果：
+  - `accountHealthcheckService`、Plus 服务测试通过。
+  - API 测试通过，覆盖 JSON 与 SSE 响应。
+  - 前端静态回归测试通过。
+  - 全量 JavaScript 测试 `node --test test/*.test.js` 通过，340/340。
+  - `node --check` 和 `git diff --check` 通过。
+- 未完成 / 风险：真实 IMAP 查询仍依赖 Gmail App Password 和 iCloud 默认 Gmail 配置；关闭窗口不会取消后端任务。
+- 下一步：重启 13100 服务并提交实现。
+- 日终交接：完成后更新 `handoff.md`

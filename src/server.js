@@ -326,13 +326,19 @@ export function createApp({
   });
 
   app.post('/replacement-accounts/healthcheck-banned', requireAuth, async (req, res) => {
+    const run = (onProgress) => runBannedEmailHealthcheck({
+      accounts,
+      replacementAccounts,
+      mailService,
+      icloudCodeDefaultGmailAccount,
+      onProgress,
+    });
+    if (wantsProgressStream(req)) {
+      await streamProgressResponse(res, run);
+      return;
+    }
     try {
-      const result = await runBannedEmailHealthcheck({
-        accounts,
-        replacementAccounts,
-        mailService,
-        icloudCodeDefaultGmailAccount,
-      });
+      const result = await run();
       res.json({ ok: true, result });
     } catch (error) {
       sendApiError(res, error);
@@ -340,13 +346,19 @@ export function createApp({
   });
 
   app.post('/replacement-accounts/check-plus-status', requireAuth, async (req, res) => {
+    const run = (onProgress) => runPlusStatusCheck({
+      accounts,
+      replacementAccounts,
+      mailService,
+      icloudCodeDefaultGmailAccount,
+      onProgress,
+    });
+    if (wantsProgressStream(req)) {
+      await streamProgressResponse(res, run);
+      return;
+    }
     try {
-      const result = await runPlusStatusCheck({
-        accounts,
-        replacementAccounts,
-        mailService,
-        icloudCodeDefaultGmailAccount,
-      });
+      const result = await run();
       res.json({ ok: true, result });
     } catch (error) {
       sendApiError(res, error);
@@ -706,6 +718,33 @@ export function createApp({
 function markAccountError(accounts, accountId, error) {
   const status = error.code === 'AUTH_FAILED' ? 'auth_failed' : 'error';
   accounts.markFetchFailure(accountId, status, error.message);
+}
+
+function wantsProgressStream(req) {
+  return String(req.headers.accept || '').includes('text/event-stream');
+}
+
+async function streamProgressResponse(res, run) {
+  res.status(200).set({
+    'Content-Type': 'text/event-stream; charset=utf-8',
+    'Cache-Control': 'no-cache',
+    Connection: 'keep-alive',
+  });
+  res.flushHeaders?.();
+
+  const send = (event) => {
+    if (res.writableEnded || res.destroyed) return;
+    res.write(`data: ${JSON.stringify(event)}\n\n`);
+  };
+
+  try {
+    const result = await run(send);
+    send({ type: 'complete', result, message: '执行完成' });
+  } catch (error) {
+    send({ type: 'error', message: error.message || '执行失败' });
+  } finally {
+    res.end();
+  }
 }
 
 async function sendLatestVerificationCodeResponse(res, { account, accounts, mailService }) {

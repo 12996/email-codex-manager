@@ -211,6 +211,15 @@
     </div>
   </dialog>
 
+  <dialog id="progressDialog">
+    <div class="progress-dialog">
+      <h2 id="progressTitle">执行进度</h2>
+      <p id="progressSummary" class="muted">等待执行</p>
+      <div id="progressLog" class="progress-log" role="log" aria-live="polite" aria-atomic="false"></div>
+      <menu><button class="primary" type="button" data-close>关闭窗口</button></menu>
+    </div>
+  </dialog>
+
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="web/notifications.js"></script>
   <script src="web/app.js"></script>

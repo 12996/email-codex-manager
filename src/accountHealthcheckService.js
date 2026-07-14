@@ -32,8 +32,15 @@ export async function runBannedEmailHealthcheck({
   replacementAccounts,
   mailService,
   icloudCodeDefaultGmailAccount = '',
+  onProgress,
 } = {}) {
   const candidates = listCandidates(replacementAccounts);
+  reportProgress(onProgress, {
+    type: 'start',
+    operation: 'healthcheck-banned',
+    total: candidates.length,
+    message: `开始一键验活，共 ${candidates.length} 个账号`,
+  });
   const result = {
     checked: candidates.length,
     banned: 0,
@@ -44,7 +51,16 @@ export async function runBannedEmailHealthcheck({
     failedAccounts: [],
   };
 
-  for (const account of candidates) {
+  for (const [index, account] of candidates.entries()) {
+    reportProgress(onProgress, {
+      type: 'account-start',
+      operation: 'healthcheck-banned',
+      index: index + 1,
+      total: candidates.length,
+      id: account.id,
+      email: account.email,
+      message: `开始验活（${index + 1}/${candidates.length}）`,
+    });
     try {
       const mailboxEmail = mailboxEmailForAccount(account.email, icloudCodeDefaultGmailAccount);
       const mailbox = accounts.getAccountByGmailEmail(deriveMainGmailAccount(mailboxEmail));
@@ -52,10 +68,25 @@ export async function runBannedEmailHealthcheck({
         throw new Error(`未配置验活收件箱：${mailboxEmail}`);
       }
 
+      reportProgress(onProgress, {
+        type: 'account-step',
+        operation: 'healthcheck-banned',
+        id: account.id,
+        email: account.email,
+        message: `正在读取收件箱：${mailboxEmail}`,
+      });
+
       const messages = await mailService.fetchMessages(mailbox, {
         readLocation: 'inbox',
         limit: 5,
         targetEmail: account.email,
+      });
+      reportProgress(onProgress, {
+        type: 'account-step',
+        operation: 'healthcheck-banned',
+        id: account.id,
+        email: account.email,
+        message: `已读取 ${messages.length} 封邮件，正在匹配封禁文案`,
       });
       const matched = messages.find((message) => messageIndicatesChatGptDeactivation(message, account.email));
       if (matched) {
@@ -67,17 +98,44 @@ export async function runBannedEmailHealthcheck({
           subject: matched.subject || '',
           date: matched.date || '',
         });
+        reportProgress(onProgress, {
+          type: 'account-result',
+          operation: 'healthcheck-banned',
+          id: account.id,
+          email: account.email,
+          outcome: 'banned',
+          status: 'banned',
+          message: '命中封禁邮件，状态已改为 banned',
+        });
         continue;
       }
 
       result.clean += 1;
       result.cleanAccounts.push({ id: account.id, email: account.email });
+      reportProgress(onProgress, {
+        type: 'account-result',
+        operation: 'healthcheck-banned',
+        id: account.id,
+        email: account.email,
+        outcome: 'clean',
+        status: account.status,
+        message: '未命中封禁邮件，状态保持不变',
+      });
     } catch (error) {
       result.failed += 1;
       result.failedAccounts.push({
         id: account.id,
         email: account.email,
         message: error.message || '验活失败',
+      });
+      reportProgress(onProgress, {
+        type: 'account-result',
+        operation: 'healthcheck-banned',
+        id: account.id,
+        email: account.email,
+        outcome: 'failed',
+        status: account.status,
+        message: `查询失败：${error.message || '验活失败'}`,
       });
     }
   }
@@ -109,4 +167,13 @@ function mailboxEmailForAccount(email, icloudCodeDefaultGmailAccount) {
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function reportProgress(onProgress, event) {
+  if (typeof onProgress !== 'function') return;
+  try {
+    onProgress(event);
+  } catch {
+    // Progress reporting must not interrupt the account check itself.
+  }
 }

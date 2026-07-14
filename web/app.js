@@ -52,6 +52,7 @@ const tableFieldLimits = Object.fromEntries(
 );
 
 const $ = (selector) => document.querySelector(selector);
+let progressActionRunning = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
@@ -625,34 +626,140 @@ async function registerAccount(account) {
 
 async function healthcheckBannedAccounts() {
   if (!confirm('确认对 plus_active、cpa_mounted、for_sale、sold 状态账号执行一键验活？每个账号只检查最近 5 封邮件。')) return;
-  try {
-    const body = await api('/replacement-accounts/healthcheck-banned', { method: 'POST' });
-    const result = body.result || {};
-    const detail = `检测 ${result.checked || 0} 个，新封禁 ${result.banned || 0} 个，未命中 ${result.clean || 0} 个，失败 ${result.failed || 0} 个`;
-    addActivity('一键验活', detail);
-    toast(detail);
-    await loadAccounts();
-  } catch (error) {
-    addActivity('一键验活失败', error.message);
-    toast(error.message);
-    await loadAccounts();
-  }
+  await runProgressAction({
+    title: '一键验活进度',
+    endpoint: '/replacement-accounts/healthcheck-banned',
+    activityTitle: '一键验活',
+    formatSummary: (result) => `检测 ${result.checked || 0} 个，新封禁 ${result.banned || 0} 个，未命中 ${result.clean || 0} 个，失败 ${result.failed || 0} 个`,
+  });
 }
 
 async function checkPlusStatusAccounts() {
   if (!confirm('确认只查询当前“已注册”状态账号的 Plus 状态吗？')) return;
+  await runProgressAction({
+    title: '查询 Plus 状态进度',
+    endpoint: '/replacement-accounts/check-plus-status',
+    activityTitle: '查询 Plus 状态',
+    formatSummary: (result) => `查询 ${result.checked || 0} 个，Plus ${result.plus || 0} 个，仍为已注册 ${result.registered || 0} 个，失败 ${result.failed || 0} 个`,
+  });
+}
+
+async function runProgressAction({ title, endpoint, activityTitle, formatSummary }) {
+  if (progressActionRunning) {
+    toast('已有批量查询正在执行');
+    return;
+  }
+  progressActionRunning = true;
+  showProgressDialog(title);
   try {
-    const body = await api('/replacement-accounts/check-plus-status', { method: 'POST' });
-    const result = body.result || {};
-    const detail = `查询 ${result.checked || 0} 个，Plus ${result.plus || 0} 个，仍为已注册 ${result.registered || 0} 个，失败 ${result.failed || 0} 个`;
-    addActivity('查询 Plus 状态', detail);
+    const result = await streamProgress(endpoint);
+    const detail = formatSummary(result);
+    $('#progressSummary').textContent = detail;
+    appendProgressLog(detail, 'success');
+    addActivity(activityTitle, detail);
     toast(detail);
     await loadAccounts();
   } catch (error) {
-    addActivity('查询 Plus 状态失败', error.message);
+    $('#progressSummary').textContent = '执行失败';
+    appendProgressLog(`执行失败：${error.message}`, 'error');
+    addActivity(`${activityTitle}失败`, error.message);
     toast(error.message);
     await loadAccounts();
+  } finally {
+    progressActionRunning = false;
   }
+}
+
+function showProgressDialog(title) {
+  $('#progressTitle').textContent = title;
+  $('#progressSummary').textContent = '正在连接服务...';
+  $('#progressLog').innerHTML = '';
+  const dialog = $('#progressDialog');
+  if (!dialog.open) dialog.showModal();
+}
+
+async function streamProgress(endpoint) {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'content-type': 'application/json',
+      accept: 'text/event-stream',
+    },
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.message || body.error || `请求失败：${response.status}`);
+  }
+  if (!response.body) throw new Error('浏览器不支持实时进度流');
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let result = null;
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() || '';
+    for (const frame of frames) {
+      const event = parseProgressFrame(frame);
+      if (!event) continue;
+      handleProgressEvent(event);
+      if (event.type === 'complete') result = event.result;
+    }
+    if (done) break;
+  }
+  const lastEvent = parseProgressFrame(buffer);
+  if (lastEvent) {
+    handleProgressEvent(lastEvent);
+    if (lastEvent.type === 'complete') result = lastEvent.result;
+  }
+  if (!result) throw new Error('进度流未正常完成');
+  return result;
+}
+
+function parseProgressFrame(frame) {
+  const data = frame.split(/\r?\n/)
+    .filter((line) => line.startsWith('data:'))
+    .map((line) => line.slice(5).trim())
+    .join('\n');
+  if (!data) return null;
+  return JSON.parse(data);
+}
+
+function handleProgressEvent(event) {
+  if (event.type === 'start') {
+    $('#progressSummary').textContent = event.message;
+    appendProgressLog(event.message);
+    return;
+  }
+  if (event.type === 'account-start' || event.type === 'account-step') {
+    appendProgressLog(`${event.email}：${event.message}`);
+    return;
+  }
+  if (event.type === 'account-result') {
+    const level = ['plus', 'banned'].includes(event.outcome)
+      ? 'success'
+      : event.outcome === 'failed' ? 'error' : 'muted';
+    appendProgressLog(`${event.email}：${event.message}`, level);
+    return;
+  }
+  if (event.type === 'complete') {
+    appendProgressLog(event.message || '执行完成', 'success');
+    return;
+  }
+  if (event.type === 'error') {
+    throw new Error(event.message || '执行失败');
+  }
+}
+
+function appendProgressLog(message, level = 'info') {
+  const log = $('#progressLog');
+  const entry = document.createElement('div');
+  entry.className = `progress-log-entry ${level}`;
+  entry.textContent = `[${new Date().toLocaleTimeString('zh-CN')}] ${message}`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
 }
 
 async function batchReplace() {

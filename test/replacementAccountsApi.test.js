@@ -465,6 +465,71 @@ test('POST /replacement-accounts/check-plus-status updates only registered accou
   }
 });
 
+test('replacement status batch APIs stream account progress when requested', async () => {
+  const { app, replacementAccounts } = createTestContext(successfulServices(), {
+    accounts: {
+      listAccounts() {
+        return [];
+      },
+      getAccountByGmailEmail(email) {
+        return email === 'receiver@gmail.com'
+          ? { id: 99, gmail_email: 'receiver@gmail.com', gmail_app_password: 'abcdefghijklmnop' }
+          : null;
+      },
+    },
+    mailService: {
+      async fetchMessages(account, options) {
+        assert.equal(account.gmail_email, 'receiver@gmail.com');
+        if (options.targetEmail === 'receiver+plus@gmail.com') {
+          return [{
+            subject: "You've successfully subscribed to ChatGPT Plus.",
+            toAddresses: ['receiver+plus@gmail.com'],
+            bodyText: 'ChatGPT Plus Subscription The OpenAI Team',
+          }];
+        }
+        return [{
+          subject: 'Important update about your ChatGPT account',
+          bodyText: `This message concerns ${options.targetEmail}. Your account has been deactivated because recent activity violated our Terms and Usage Policies.`,
+        }];
+      },
+    },
+  });
+  replacementAccounts.createAccount({ email: 'receiver+plus@gmail.com', status: 'registered' });
+  replacementAccounts.createAccount({ email: 'receiver+banned@gmail.com', status: 'for_sale' });
+  const server = await startTestServer(app);
+
+  async function stream(path) {
+    const response = await fetch(`${server.baseUrl}${path}`, {
+      method: 'POST',
+      headers: {
+        accept: 'text/event-stream',
+        cookie: authCookie(),
+      },
+    });
+    return { response, text: await response.text() };
+  }
+
+  try {
+    const plus = await stream('/replacement-accounts/check-plus-status');
+    assert.equal(plus.response.status, 200);
+    assert.match(plus.response.headers.get('content-type'), /text\/event-stream/);
+    assert.match(plus.text, /"type":"account-start"/);
+    assert.match(plus.text, /"type":"account-step"/);
+    assert.match(plus.text, /"type":"account-result"/);
+    assert.match(plus.text, /"status":"plus_active"/);
+    assert.match(plus.text, /"type":"complete"/);
+
+    const banned = await stream('/replacement-accounts/healthcheck-banned');
+    assert.equal(banned.response.status, 200);
+    assert.match(banned.response.headers.get('content-type'), /text\/event-stream/);
+    assert.match(banned.text, /"outcome":"banned"/);
+    assert.match(banned.text, /"status":"banned"/);
+    assert.match(banned.text, /"type":"complete"/);
+  } finally {
+    await server.close();
+  }
+});
+
 test('replacement account action APIs update status and call injected services', async () => {
   const { app, replacementAccounts } = createTestContext();
   const created = replacementAccounts.createAccount({

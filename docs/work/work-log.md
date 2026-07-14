@@ -90,3 +90,4 @@
 | 2026-07-10 | 补号账号一键封禁邮件验活 | done | `2026-07-10-banned-email-healthcheck-button.md` |
 | 2026-07-14 | 补号账号开通方式下拉与页面维护 | done | `2026-07-14-replacement-activation-method.md` |
 | 2026-07-14 | 补号账号 Plus 状态查询 | done | `2026-07-14-replacement-plus-status-check.md` |
+| 2026-07-14 | 补号状态查询实时进度窗口 | done | `2026-07-14-replacement-healthcheck-progress-window.md` |

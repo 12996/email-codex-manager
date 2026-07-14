@@ -26,8 +26,15 @@ export async function runPlusStatusCheck({
   replacementAccounts,
   mailService,
   icloudCodeDefaultGmailAccount = '',
+  onProgress,
 } = {}) {
   const candidates = listCandidates(replacementAccounts);
+  reportProgress(onProgress, {
+    type: 'start',
+    operation: 'check-plus-status',
+    total: candidates.length,
+    message: `开始查询 Plus 状态，共 ${candidates.length} 个已注册账号`,
+  });
   const result = {
     checked: candidates.length,
     plus: 0,
@@ -38,7 +45,16 @@ export async function runPlusStatusCheck({
     failedAccounts: [],
   };
 
-  for (const account of candidates) {
+  for (const [index, account] of candidates.entries()) {
+    reportProgress(onProgress, {
+      type: 'account-start',
+      operation: 'check-plus-status',
+      index: index + 1,
+      total: candidates.length,
+      id: account.id,
+      email: account.email,
+      message: `开始查询（${index + 1}/${candidates.length}）`,
+    });
     try {
       const mailboxEmail = mailboxEmailForAccount(account.email, icloudCodeDefaultGmailAccount);
       const mailbox = accounts.getAccountByGmailEmail(deriveMainGmailAccount(mailboxEmail));
@@ -46,12 +62,27 @@ export async function runPlusStatusCheck({
         throw new Error(`未配置状态查询收件箱：${mailboxEmail}`);
       }
 
-      const messages = await mailService.fetchMessages(mailbox, {
+      reportProgress(onProgress, {
+        type: 'account-step',
+        operation: 'check-plus-status',
+        id: account.id,
+        email: account.email,
+        message: `正在读取收件箱：${mailboxEmail}`,
+      });
+
+      const messages = (await mailService.fetchMessages(mailbox, {
         readLocation: 'inbox',
         limit: PLUS_STATUS_CHECK_LIMIT,
         targetEmail: account.email,
+      })) || [];
+      reportProgress(onProgress, {
+        type: 'account-step',
+        operation: 'check-plus-status',
+        id: account.id,
+        email: account.email,
+        message: `已读取 ${messages.length} 封邮件，正在匹配 Plus 订阅文案`,
       });
-      const matched = (messages || []).find((message) => (
+      const matched = messages.find((message) => (
         messageIndicatesChatGptPlusSubscription(message, account.email)
       ));
 
@@ -64,11 +95,29 @@ export async function runPlusStatusCheck({
           subject: matched.subject || '',
           date: matched.date || '',
         });
+        reportProgress(onProgress, {
+          type: 'account-result',
+          operation: 'check-plus-status',
+          id: account.id,
+          email: account.email,
+          outcome: 'plus',
+          status: 'plus_active',
+          message: '命中 Plus 订阅邮件，状态已改为 plus_active',
+        });
         continue;
       }
 
       result.registered += 1;
       result.registeredAccounts.push({ id: account.id, email: account.email });
+      reportProgress(onProgress, {
+        type: 'account-result',
+        operation: 'check-plus-status',
+        id: account.id,
+        email: account.email,
+        outcome: 'registered',
+        status: 'registered',
+        message: '未命中 Plus 订阅邮件，状态保持 registered',
+      });
     } catch (error) {
       replacementAccounts.recordPlusStatusCheckFailure(account.id, error.message || '状态查询失败');
       result.failed += 1;
@@ -76,6 +125,15 @@ export async function runPlusStatusCheck({
         id: account.id,
         email: account.email,
         message: error.message || '状态查询失败',
+      });
+      reportProgress(onProgress, {
+        type: 'account-result',
+        operation: 'check-plus-status',
+        id: account.id,
+        email: account.email,
+        outcome: 'failed',
+        status: account.status,
+        message: `查询失败：${error.message || '状态查询失败'}`,
       });
     }
   }
@@ -129,4 +187,13 @@ function messageRecipients(message) {
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function reportProgress(onProgress, event) {
+  if (typeof onProgress !== 'function') return;
+  try {
+    onProgress(event);
+  } catch {
+    // Progress reporting must not interrupt the account status check.
+  }
 }

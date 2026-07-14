@@ -120,3 +120,36 @@ test('runBannedEmailHealthcheck reports clean and failed accounts without changi
   assert.deepEqual(result.failedAccounts.map((item) => item.email), [failed.email]);
   assert.match(result.failedAccounts[0].message, /IMAP temporary failure/);
 });
+
+test('runBannedEmailHealthcheck emits account progress events', async () => {
+  const { accounts, replacementAccounts } = createRepos();
+  const mailbox = createGmailAccount(accounts);
+  const account = replacementAccounts.createAccount({
+    email: 'receiver+clean@gmail.com',
+    status: 'for_sale',
+  });
+  const events = [];
+
+  await runBannedEmailHealthcheck({
+    accounts,
+    replacementAccounts,
+    mailService: {
+      async fetchMessages() {
+        return [];
+      },
+    },
+    icloudCodeDefaultGmailAccount: mailbox.gmail_email,
+    onProgress: (event) => events.push(event),
+  });
+
+  assert.deepEqual(events.map((event) => event.type), [
+    'start',
+    'account-start',
+    'account-step',
+    'account-step',
+    'account-result',
+  ]);
+  assert.equal(events[1].email, account.email);
+  assert.equal(events.at(-1).outcome, 'clean');
+  assert.match(events.at(-1).message, /未命中封禁邮件/);
+});
