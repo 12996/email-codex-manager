@@ -1,0 +1,31 @@
+# 2026-07-15 Roxy 2FA ChatGPT session 状态判定加固
+
+- 状态：done
+- 目标：检查并加固 `src/auto/roxy_2fa_login.js` 的页面阶段判断，参考 `src/auto/roxy_oauth_login.js` 的提交后复查和页面上下文请求规则。
+- 修改文件：
+  - `src/auto/roxy_2fa_login.js`
+  - `test/roxy2FALogin.test.js`
+  - `docs/project/api.md`
+  - `docs/issues/issue-012-roxy-2fa-session-state-guard.md`
+  - `docs/changes/CHG-082-roxy-2fa-session-state-guard.md`
+  - `docs/changes/CHANGE_REGISTRY.md`
+  - `docs/issues/README.md`
+  - `docs/work/work-log.md`
+  - `docs/work/handoff.md`
+- 排查结果：
+  - `waitForKnownStage()` 没有超时边界最终复查。
+  - `fetchChatGptSession()` 在 page-context session 空响应时会导航主页面到 session API，与既有文档规则不一致。
+  - 登录按钮、邮箱输入和 Continue 操作只检查可见性；callback 只用字符串包含判断。
+- 实现：
+  - 增加控件/输入框可用性判断，排除 disabled、readOnly、`aria-disabled` 和 `inert` 过渡状态。
+  - 阶段等待增加最终复查。
+  - page 有 `evaluate` 时 session 失败不导航；严格校验 ChatGPT callback origin/path。
+- 验证结果：
+  - RED：新增五类状态判断回归测试按预期失败。
+  - GREEN：`node --test test/roxy2FALogin.test.js` 通过 13/13。
+  - `node --check src/auto/roxy_2fa_login.js`、`node --check test/roxy2FALogin.test.js`、`git diff --check` 通过。
+- 未完成 / 风险：
+  - 尚未重新触发真实 `login-2fa` 做浏览器端到端验证；需要在 UI 点击“2FA登录”观察真实 Roxy 页面日志。
+  - 当前未合并的 `implemented` change 已超过 5 个，应安排 PRD-003 基线合并。
+- 下一步：重新触发一个 `login-2fa`，确认日志路径仍为 `chatgpt-entry -> openai-email -> openai-password -> openai-mfa -> chatgpt-home`。
+- 日终交接：完成后更新 `handoff.md`。

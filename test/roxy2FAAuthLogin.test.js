@@ -126,6 +126,28 @@ test('openAi_password_login fills the password and does not click one-time code'
   assert.equal(calls.some((call) => call[0] === 'oneTimeCode.click'), false);
 });
 
+test('is_openai_password_page ignores a visible but disabled password input during a transition', async () => {
+  const { is_openai_password_page } = require('../src/auto/roxy_2fa_auth_login.js');
+  const page = {
+    getByRole(role, options = {}) {
+      if (role === 'textbox' && options.name === 'Password') {
+        return {
+          async isVisible() { return true; },
+          async isEnabled() { return false; },
+          async isEditable() { return false; },
+        };
+      }
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return { async textContent() { return 'Enter your password Password Continue'; } };
+    },
+    url: () => 'https://auth.openai.com/log-in/password',
+  };
+
+  assert.equal(await is_openai_password_page(page, { timeoutMs: 100 }), false);
+});
+
 test('openAi_mfa_code detects MFA page, fills code, and clicks Continue', async () => {
   const { is_openai_mfa_page, openAi_mfa_code } = require('../src/auto/roxy_2fa_auth_login.js');
   const { page, calls } = createMfaPageHarness();
@@ -713,6 +735,107 @@ test('process2FAOAuthLoginFlow waits when email submit slowly lands on the passw
     ['email.fill', 'hamper.steaks-0m+rqf0833vi873fl987@icloud.com'],
     ['password.fill', 'openai-password'],
     ['exchangeToken', 'code_slow_password', 'verifier_slow_password', 'hamper.steaks-0m+rqf0833vi873fl987@icloud.com'],
+  ]);
+});
+
+test('process2FAOAuthLoginFlow rechecks the page when password appears during the final post-email wait', async () => {
+  const { process2FAOAuthLoginFlow } = require('../src/auto/roxy_2fa_auth_login.js');
+  const calls = [];
+  let stage = 'email-login';
+  let waitCount = 0;
+  let currentUrl = 'https://auth.openai.com/log-in';
+
+  const bodyText = () => {
+    if (stage === 'email-login') return 'Welcome back Email address Continue';
+    if (stage === 'loading') return 'Loading';
+    if (stage === 'password') return 'Enter your password Email address Edit Password Forgot password? Continue';
+    if (stage === 'mfa') return 'Verify your identity Enter the code from your authenticator app Code Continue';
+    if (stage === 'codex') return 'Sign in to Codex with ChatGPT. Continue';
+    return '';
+  };
+
+  const advance = (nextStage, nextUrl) => {
+    stage = nextStage;
+    currentUrl = nextUrl;
+  };
+
+  const page = {
+    getByRole(role, options = {}) {
+      if (role === 'textbox' && options.name === 'Email address') {
+        return {
+          async isVisible() { return stage === 'email-login'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['email.fill', value]); },
+        };
+      }
+      if (role === 'textbox' && options.name === 'Password') {
+        return {
+          async isVisible() { return stage === 'password'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['password.fill', value]); },
+        };
+      }
+      if (role === 'textbox' && options.name === 'Code') {
+        return {
+          async isVisible() { return stage === 'mfa'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['code.fill', value]); },
+        };
+      }
+      if (role === 'button' && options.name === 'Log in with a one-time code') {
+        return { async isVisible() { return false; } };
+      }
+      return {
+        async isVisible() { return ['email-login', 'password', 'mfa', 'codex'].includes(stage); },
+        async click() {
+          calls.push(['continue.click', stage]);
+          if (stage === 'email-login') advance('loading', 'https://auth.openai.com/log-in');
+          else if (stage === 'password') advance('mfa', 'https://auth.openai.com/mfa-challenge/chal_123');
+          else if (stage === 'mfa') advance('codex', 'https://auth.openai.com/sign-in-with-chatgpt/codex/consent');
+          else if (stage === 'codex') advance('callback', 'http://localhost:1455/auth/callback?code=code_final_wait&state=state_final_wait');
+        },
+      };
+    },
+    locator() {
+      return { async textContent() { return bodyText(); } };
+    },
+    url: () => currentUrl,
+    title: async () => 'OAuth',
+    textContent: async () => bodyText(),
+    waitForTimeout: async () => {
+      waitCount += 1;
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      if (stage === 'loading' && waitCount >= 2) {
+        advance('password', 'https://auth.openai.com/log-in/password');
+      }
+    },
+  };
+
+  const result = await process2FAOAuthLoginFlow(page, {
+    email: 'final-wait@example.com',
+    password: 'openai-password',
+    mfaCode: '654321',
+    verifier: 'verifier_final_wait',
+    state: 'state_final_wait',
+    timeoutMs: 100,
+    postEmailStageTimeoutMs: 5,
+    stageDetectTimeoutMs: 1,
+    transitionTimeoutMs: 100,
+    maxStageTurns: 10,
+    exchangeToken: async (code, verifier, email) => {
+      calls.push(['exchangeToken', code, verifier, email]);
+      return { cpaPath: 'local-cpa.json' };
+    },
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  assert.equal(result.status, 'oauth-completed');
+  assert.deepEqual(calls.filter((call) => ['password.fill', 'exchangeToken'].includes(call[0])), [
+    ['password.fill', 'openai-password'],
+    ['exchangeToken', 'code_final_wait', 'verifier_final_wait', 'final-wait@example.com'],
   ]);
 });
 

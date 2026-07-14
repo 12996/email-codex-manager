@@ -196,6 +196,167 @@ test('detectChatGpt2FAStage does not treat ChatGPT prompt box as logged in witho
   assert.equal(stage.stage, 'unknown');
 });
 
+test('waitForKnownStage rechecks the stage after a timeout-boundary navigation', async () => {
+  const { waitForKnownStage } = require('../src/auto/roxy_2fa_login.js');
+  assert.equal(typeof waitForKnownStage, 'function');
+
+  let stage = 'loading';
+  const page = {
+    url: () => 'https://auth.openai.com/log-in',
+    getByRole(role, options = {}) {
+      if (role === 'textbox' && options.name === 'Email address') {
+        return { async isVisible() { return stage === 'email'; } };
+      }
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return { async textContent() { return stage === 'email' ? 'Welcome back Email address Continue' : 'Loading'; } };
+    },
+    async textContent() {
+      return stage === 'email' ? 'Welcome back Email address Continue' : 'Loading';
+    },
+    async title() { return 'OpenAI'; },
+    async waitForTimeout() {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      stage = 'email';
+    },
+  };
+
+  const result = await waitForKnownStage(page, {
+    timeoutMs: 100,
+    stageDetectTimeoutMs: 1,
+    transitionTimeoutMs: 5,
+  });
+
+  assert.equal(result.stage, 'openai-email');
+});
+
+test('fetchChatGptSession does not navigate away when the page-context session request has no token', async () => {
+  const { fetchChatGptSession } = require('../src/auto/roxy_2fa_login.js');
+  const gotoCalls = [];
+  const page = {
+    async evaluate() { return null; },
+    async goto(url) { gotoCalls.push(url); },
+    async textContent() { return '{}'; },
+  };
+
+  await assert.rejects(
+    () => fetchChatGptSession(page, { sessionTimeoutMs: 100, logger: { log: () => {} } }),
+    (error) => error.code === 'CHATGPT_SESSION_ACCESS_TOKEN_MISSING'
+  );
+  assert.deepEqual(gotoCalls, []);
+});
+
+test('isChatGptLoginEntryPage ignores a visible but disabled Log in button', async () => {
+  const { isChatGptLoginEntryPage } = require('../src/auto/roxy_2fa_login.js');
+  const page = {
+    url: () => 'https://chatgpt.com/',
+    getByRole(role, options = {}) {
+      if (role === 'button' && String(options.name).match(/log in/i)) {
+        return {
+          async isVisible() { return true; },
+          async isEnabled() { return false; },
+        };
+      }
+      return { async isVisible() { return false; } };
+    },
+  };
+
+  assert.equal(await isChatGptLoginEntryPage(page, { timeoutMs: 100 }), false);
+});
+
+test('isChatGptLoginEntryPage ignores a visible Log in button with aria-disabled', async () => {
+  const { isChatGptLoginEntryPage } = require('../src/auto/roxy_2fa_login.js');
+  const page = {
+    url: () => 'https://chatgpt.com/',
+    getByRole(role, options = {}) {
+      if (role === 'button' && String(options.name).match(/log in/i)) {
+        return {
+          async isVisible() { return true; },
+          async isEnabled() { return true; },
+          async getAttribute(name) { return name === 'aria-disabled' ? 'true' : null; },
+        };
+      }
+      return { async isVisible() { return false; } };
+    },
+  };
+
+  assert.equal(await isChatGptLoginEntryPage(page, { timeoutMs: 100 }), false);
+});
+
+test('submitOpenAiEmail rejects a visible but disabled email input before filling it', async () => {
+  const { submitOpenAiEmail } = require('../src/auto/roxy_2fa_login.js');
+  const page = {
+    url: () => 'https://auth.openai.com/log-in',
+    getByRole(role, options = {}) {
+      if (role === 'textbox' && options.name === 'Email address') {
+        return {
+          async isVisible() { return true; },
+          async isEnabled() { return false; },
+          async isEditable() { return false; },
+          async waitFor() {},
+          async click() {},
+          async fill() {},
+        };
+      }
+      return { async isVisible() { return true; }, async click() {} };
+    },
+    locator() {
+      return { async textContent() { return 'Welcome back Email address Continue'; } };
+    },
+  };
+
+  await assert.rejects(
+    () => submitOpenAiEmail(page, { email: 'user@example.com', timeoutMs: 100 }),
+    (error) => error.code === 'OPENAI_LOGIN_PAGE_NOT_FOUND'
+  );
+});
+
+test('detectChatGpt2FAStage rejects a callback path embedded in another origin', async () => {
+  const { detectChatGpt2FAStage } = require('../src/auto/roxy_2fa_login.js');
+  const page = {
+    url: () => 'https://evil.example/?next=https://chatgpt.com/api/auth/callback/openai',
+    getByRole() {
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return { async textContent() { return 'Unexpected page'; } };
+    },
+    async textContent() { return 'Unexpected page'; },
+    async title() { return 'Unexpected'; },
+    async evaluate() { return null; },
+  };
+
+  const stage = await detectChatGpt2FAStage(page, { timeoutMs: 100, stageDetectTimeoutMs: 1 });
+  assert.equal(stage.stage, 'unknown');
+});
+
+test('detectChatGpt2FAStage ignores a visible but disabled OpenAI email input', async () => {
+  const { detectChatGpt2FAStage } = require('../src/auto/roxy_2fa_login.js');
+  const page = {
+    url: () => 'https://auth.openai.com/log-in',
+    getByRole(role, options = {}) {
+      if (role === 'textbox' && options.name === 'Email address') {
+        return {
+          async isVisible() { return true; },
+          async isEnabled() { return false; },
+          async isEditable() { return false; },
+        };
+      }
+      return { async isVisible() { return false; } };
+    },
+    locator() {
+      return { async textContent() { return 'Welcome back Email address Continue'; } };
+    },
+    async textContent() { return 'Welcome back Email address Continue'; },
+    async title() { return 'Welcome back - OpenAI'; },
+    async evaluate() { return null; },
+  };
+
+  const stage = await detectChatGpt2FAStage(page, { timeoutMs: 100, stageDetectTimeoutMs: 1 });
+  assert.equal(stage.stage, 'unknown');
+});
+
 test('openChatGptLoginEntry clicks the first visible login button when multiple exist', async () => {
   const { openChatGptLoginEntry } = require('../src/auto/roxy_2fa_login.js');
   const calls = [];

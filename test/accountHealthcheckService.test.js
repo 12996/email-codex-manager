@@ -196,7 +196,10 @@ test('runBannedEmailHealthcheck emits account progress events', async () => {
     'account-result',
   ]);
   assert.equal(events[1].email, account.email);
-  assert.match(events[2].message, /正在读取邮箱 API/);
+  assert.equal(
+    events[2].message,
+    `正在读取邮箱 API：https://mail.example.test/code（账号邮箱：${account.email}）`,
+  );
   assert.equal(events.at(-1).outcome, 'clean');
   assert.match(events.at(-1).message, /未命中封禁邮件/);
 });

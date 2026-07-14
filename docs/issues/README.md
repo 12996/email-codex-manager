@@ -16,3 +16,5 @@
 | issue-008 | Roxy OAuth 密码页 / 邮箱验证码页误判 | resolved | `issue-008-roxy-openai-password-email-code-misclassification.md` |
 | issue-009 | Roxy 2FA 补号密码页被 Codex 页脚误判 | resolved | `issue-009-roxy-codex-footer-password-misclassification.md` |
 | issue-010 | 短信 API 直连访问受限导致 2FA 补号拿不到手机验证码 | resolved | `issue-010-sms-api-direct-request-region-restricted.md` |
+| issue-011 | Roxy 2FA 邮箱提交后阶段识别竞态 | resolved | `issue-011-roxy-2fa-post-email-stage-race.md` |
+| issue-012 | Roxy 2FA session 登录状态判定风险 | resolved | `issue-012-roxy-2fa-session-state-guard.md` |

@@ -25,3 +25,27 @@ Roxy OpenAI 注册流程中，OTP 提交后曾把通用 Continue 点击函数返
 - Promoted: AGENTS.md
 
 ---
+
+## [LRN-20260715-001] best_practice
+
+**Logged**: 2026-07-15T01:15:00+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: backend
+
+### Summary
+对带 query 的账号级 API 做日志脱敏时，必须同时展示目标账号映射，并单独验证实际请求 URL。
+
+### Details
+补号状态检查实际使用数据库 `replacement_accounts.email_code_api` 的完整 URL，但进度日志为了隐藏 query/hash 只显示了接口基址，容易被误认为请求使用了共享邮箱。日志展示和网络请求是两个不同证据，不能只根据展示文本判断数据源。
+
+### Suggested Action
+账号级外部 API 的进度日志保留脱敏策略，同时显示当前账号邮箱；排查时使用注入的 `fetch` 或网络记录确认最终请求 URL，并在回归测试中锁定账号与请求参数映射。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/replacementEmailApiService.js`, `src/accountHealthcheckService.js`, `src/replacementPlusStatusService.js`
+- Tags: observability, email-code-api, account-isolation
+- See Also: CHG-080
+
+---

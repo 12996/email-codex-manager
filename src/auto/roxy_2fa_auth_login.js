@@ -65,6 +65,19 @@ async function isVisible(locator, timeoutMs) {
     return false;
 }
 
+async function isUsableInput(locator, timeoutMs) {
+    if (!await isVisible(locator, timeoutMs)) return false;
+    if (typeof locator.isEnabled === 'function'
+        && !await locator.isEnabled({ timeout: timeoutMs }).catch(() => false)) {
+        return false;
+    }
+    if (typeof locator.isEditable === 'function'
+        && !await locator.isEditable({ timeout: timeoutMs }).catch(() => false)) {
+        return false;
+    }
+    return true;
+}
+
 async function collectPageDebug(page) {
     const url = typeof page.url === 'function' ? page.url() : '';
     const title = typeof page.title === 'function' ? await page.title().catch(() => '') : '';
@@ -165,7 +178,7 @@ async function is_openai_password_page(page, options = {}) {
     const url = typeof page.url === 'function' ? String(page.url() || '') : '';
     const passwordInput = page.getByRole('textbox', { name: 'Password' });
     return (url.includes('/log-in/password') || bodyText.includes('enter your password'))
-        && await isVisible(passwordInput, timeoutMs);
+        && await isUsableInput(passwordInput, timeoutMs);
 }
 
 async function is_openai_mfa_page(page, options = {}) {
@@ -173,7 +186,7 @@ async function is_openai_mfa_page(page, options = {}) {
     const bodyText = (await getBodyText(page, timeoutMs)).toLowerCase();
     const url = typeof page.url === 'function' ? String(page.url() || '') : '';
     const codeInput = page.getByRole('textbox', { name: 'Code' });
-    const hasCodeInput = await isVisible(codeInput, timeoutMs);
+    const hasCodeInput = await isUsableInput(codeInput, timeoutMs);
     const hasMfaUrl = url.includes('/mfa-challenge/');
     const hasMfaText = bodyText.includes('verify your identity')
         || bodyText.includes('authenticator app')
@@ -249,6 +262,9 @@ async function waitForPostPasswordStage(page, options = {}) {
             await sleepMs(300);
         }
     }
+    // 页面可能在最后一次等待期间完成导航；超时边界处必须再做一次即时复查，避免把有效后续页误报为 unknown。
+    const finalStage = await detectPostPasswordStage(page, options);
+    if (finalStage) return finalStage;
     return {
         stage: 'unknown',
         ...(await collectPageDebug(page))
@@ -287,6 +303,9 @@ async function waitForPostEmail2FAStage(page, options = {}) {
             await sleepMs(300);
         }
     }
+    // 邮箱提交后的 password/MFA 页面可能刚好在最后一次等待中渲染完成。
+    const finalStage = await detectPostEmail2FAStage(page, options);
+    if (finalStage) return finalStage;
     return {
         stage: 'unknown',
         ...(await collectPageDebug(page))
@@ -514,6 +533,10 @@ async function runCli(proc = process, deps = {}) {
     } catch (error) {
         const logger = pickLogger(deps.logger);
         logger.error(`❌ [roxy-2fa-auth-login] roxy_2fa_auth_login 失败: ${error.message || error}`);
+        if (error && (error.url || error.title || error.bodyText)) {
+            const bodyText = String(error.bodyText || '').replace(/\s+/g, ' ').slice(0, 300);
+            logger.error(`[roxy-2fa-auth-login] phase=error action=页面状态诊断 url=${error.url || 'empty'} title=${error.title || 'empty'} body=${bodyText || 'empty'}`);
+        }
         if (error && error.stack) {
             logger.error(error.stack);
         }

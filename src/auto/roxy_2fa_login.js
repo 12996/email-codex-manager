@@ -70,6 +70,37 @@ async function isVisible(locator, timeoutMs) {
     return false;
 }
 
+async function isUsableControl(locator, timeoutMs) {
+    if (!await isVisible(locator, timeoutMs)) return false;
+    if (typeof locator.isEnabled === 'function'
+        && !await locator.isEnabled({ timeout: timeoutMs }).catch(() => false)) {
+        return false;
+    }
+    if (typeof locator.getAttribute === 'function') {
+        const ariaDisabled = await locator.getAttribute('aria-disabled', { timeout: timeoutMs }).catch(() => null);
+        if (String(ariaDisabled || '').toLowerCase() === 'true') return false;
+        const inert = await locator.getAttribute('inert', { timeout: timeoutMs }).catch(() => null);
+        if (inert !== null) return false;
+    }
+    if (typeof locator.evaluate === 'function') {
+        const semantics = await locator.evaluate((element) => ({
+            ariaDisabled: Boolean(element.closest('[aria-disabled="true"]')),
+            inert: Boolean(element.closest('[inert]'))
+        })).catch(() => null);
+        if (semantics?.ariaDisabled || semantics?.inert) return false;
+    }
+    return true;
+}
+
+async function isUsableInput(locator, timeoutMs) {
+    if (!await isUsableControl(locator, timeoutMs)) return false;
+    if (typeof locator.isEditable === 'function'
+        && !await locator.isEditable({ timeout: timeoutMs }).catch(() => false)) {
+        return false;
+    }
+    return true;
+}
+
 function getPageUrl(page) {
     return typeof page?.url === 'function' ? String(page.url() || '') : '';
 }
@@ -133,7 +164,7 @@ async function isChatGptLoginEntryPage(page, options = {}) {
         return false;
     }
     const loginButton = firstLocator(page.getByRole?.('button', { name: /log in/i }));
-    return isVisible(loginButton, timeoutMs);
+    return isUsableControl(loginButton, timeoutMs);
 }
 
 async function openChatGptLoginEntry(page, options = {}) {
@@ -144,9 +175,33 @@ async function openChatGptLoginEntry(page, options = {}) {
             ...(await collectPageDebug(page))
         });
     }
+    const loginButton = firstLocator(page.getByRole('button', { name: /log in/i }));
+    if (!await isUsableControl(loginButton, timeoutMs)) {
+        throw createAutomationError('CHATGPT_LOGIN_BUTTON_NOT_USABLE', 'ChatGPT 登录按钮当前不可操作', {
+            ...(await collectPageDebug(page))
+        });
+    }
     log(logger, 'chatgpt-entry', '点击 Log in');
-    await firstLocator(page.getByRole('button', { name: /log in/i })).click({ timeout: timeoutMs });
+    await loginButton.click({ timeout: timeoutMs });
     return { status: 'chatgpt-login-clicked' };
+}
+
+async function isOpenAiEmailPage(page, options = {}) {
+    const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+    if (!await base.is_openai_login_page(page, options)) return false;
+    const emailInput = page.getByRole('textbox', { name: 'Email address' });
+    return isUsableInput(emailInput, timeoutMs);
+}
+
+async function clickUsableContinue(page, timeoutMs, options = {}) {
+    const continueButton = firstLocator(page.getByRole('button', { name: 'Continue', exact: true }));
+    if (!await isUsableControl(continueButton, timeoutMs)) {
+        throw createAutomationError('OPENAI_CONTINUE_BUTTON_NOT_USABLE', 'OpenAI Continue 按钮当前不可操作', {
+            ...(await collectPageDebug(page)),
+            ...(options.step ? { step: options.step } : {})
+        });
+    }
+    await continueButton.click({ timeout: timeoutMs });
 }
 
 function logStageAfterAction(logger, fromStage, nextStage) {
@@ -160,19 +215,24 @@ async function submitOpenAiEmail(page, options = {}) {
     if (!email) {
         throw createAutomationError('OPENAI_LOGIN_EMAIL_REQUIRED', 'OpenAI 登录邮箱不能为空');
     }
-    if (!await base.is_openai_login_page(page, options)) {
+    if (!await isOpenAiEmailPage(page, options)) {
         throw createAutomationError('OPENAI_LOGIN_PAGE_NOT_FOUND', '当前页面不是 OpenAI 邮箱登录页', {
             ...(await collectPageDebug(page))
         });
     }
 
     const emailInput = page.getByRole('textbox', { name: 'Email address' });
+    if (!await isUsableInput(emailInput, timeoutMs)) {
+        throw createAutomationError('OPENAI_EMAIL_INPUT_NOT_USABLE', 'OpenAI 邮箱输入框当前不可操作', {
+            ...(await collectPageDebug(page))
+        });
+    }
     log(logger, 'openai-email', '填写邮箱');
     await emailInput.waitFor({ state: 'visible', timeout: timeoutMs });
     await emailInput.click();
     await emailInput.fill(email);
     log(logger, 'openai-email', '点击 Continue');
-    await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+    await clickUsableContinue(page, timeoutMs, { step: 'openai-email' });
     return { status: 'email-submitted', email };
 }
 
@@ -190,12 +250,17 @@ async function submitOpenAiPassword(page, options = {}) {
     }
 
     const passwordInput = page.getByRole('textbox', { name: 'Password' });
+    if (!await isUsableInput(passwordInput, timeoutMs)) {
+        throw createAutomationError('OPENAI_PASSWORD_INPUT_NOT_USABLE', 'OpenAI 密码输入框当前不可操作', {
+            ...(await collectPageDebug(page))
+        });
+    }
     log(logger, 'openai-password', '填写密码');
     await passwordInput.waitFor({ state: 'visible', timeout: timeoutMs });
     await passwordInput.click();
     await passwordInput.fill(password);
     log(logger, 'openai-password', '点击 Continue');
-    await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+    await clickUsableContinue(page, timeoutMs, { step: 'openai-password' });
     return { status: 'password-submitted' };
 }
 
@@ -213,24 +278,39 @@ async function submitOpenAiMfa(page, options = {}) {
     }
 
     const codeInput = page.getByRole('textbox', { name: 'Code' });
+    if (!await isUsableInput(codeInput, timeoutMs)) {
+        throw createAutomationError('OPENAI_MFA_INPUT_NOT_USABLE', 'OpenAI MFA 验证码输入框当前不可操作', {
+            ...(await collectPageDebug(page))
+        });
+    }
     log(logger, 'openai-mfa', '填写 2FA code', 'code=provided');
     await codeInput.waitFor({ state: 'visible', timeout: timeoutMs });
     await codeInput.click();
     await codeInput.fill(code);
     log(logger, 'openai-mfa', '点击 Continue');
-    await page.getByRole('button', { name: 'Continue', exact: true }).click({ timeout: timeoutMs });
+    await clickUsableContinue(page, timeoutMs, { step: 'openai-mfa' });
     return { status: 'mfa-submitted', codeLength: code.length };
+}
+
+function isChatGptCallbackUrl(url) {
+    try {
+        const parsed = new URL(String(url || ''));
+        return parsed.origin === 'https://chatgpt.com'
+            && parsed.pathname === '/api/auth/callback/openai';
+    } catch (_) {
+        return false;
+    }
 }
 
 async function detectChatGpt2FAStage(page, options = {}) {
     const timeoutMs = Math.min(options.stageDetectTimeoutMs || DEFAULT_STAGE_DETECT_TIMEOUT_MS, options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS);
     const detectOptions = { ...options, timeoutMs };
     const url = getPageUrl(page);
-    if (url.includes('chatgpt.com/api/auth/callback/openai')) return { stage: 'chatgpt-callback', url };
+    if (isChatGptCallbackUrl(url)) return { stage: 'chatgpt-callback', url };
     if (await isChatGptLoggedInPage(page, detectOptions)) return { stage: 'chatgpt-home', url };
     if (await isChatGptLoginEntryPage(page, detectOptions)) return { stage: 'chatgpt-entry', url };
     if (await twoFA.is_openai_choose_account_page(page, detectOptions)) return { stage: 'choose-account', url };
-    if (await base.is_openai_login_page(page, detectOptions)) return { stage: 'openai-email', url };
+    if (await isOpenAiEmailPage(page, detectOptions)) return { stage: 'openai-email', url };
     if (await twoFA.is_openai_password_page(page, detectOptions)) return { stage: 'openai-password', url };
     if (await twoFA.is_openai_mfa_page(page, detectOptions)) return { stage: 'openai-mfa', url };
     return { stage: 'unknown', url, ...(await collectPageDebug(page)) };
@@ -250,6 +330,10 @@ async function waitForKnownStage(page, options = {}) {
             await sleepMs(300);
         }
     }
+    const finalStage = await detectChatGpt2FAStage(page, options);
+    if (finalStage.stage !== 'unknown' && finalStage.stage !== options.ignoreStage) {
+        return finalStage;
+    }
     return { stage: 'unknown', ...(await collectPageDebug(page)) };
 }
 
@@ -259,7 +343,7 @@ async function fetchChatGptSession(page, options = {}) {
     const timeoutMs = options.sessionTimeoutMs || 120000;
     log(logger, 'session', '请求 ChatGPT session');
     let session = await getChatGptSessionSnapshot(page, { ...options, sessionUrl });
-    if (!session && typeof page.goto === 'function') {
+    if (!session && typeof page?.evaluate !== 'function' && typeof page.goto === 'function') {
         await page.goto(sessionUrl, { waitUntil: 'networkidle', timeout: timeoutMs });
         const content = await page.textContent('body');
         try {
@@ -478,6 +562,7 @@ module.exports = {
     DEFAULT_TOKEN_OUTPUT_DIR,
     detectChatGpt2FAStage,
     fetchChatGptSession,
+    isChatGptLoginEntryPage,
     isChatGptLoggedInPage,
     openChatGptLoginEntry,
     processChatGpt2FALoginFlow,
@@ -486,5 +571,6 @@ module.exports = {
     save2FALoginCredentialFile,
     submitOpenAiEmail,
     submitOpenAiMfa,
-    submitOpenAiPassword
+    submitOpenAiPassword,
+    waitForKnownStage
 };

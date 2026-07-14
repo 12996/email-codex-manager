@@ -1,0 +1,32 @@
+# 2026-07-14 Roxy 2FA 邮箱提交后阶段判定竞态修复
+
+- 状态：done
+- 目标：修复 2FA 补号邮箱提交后已进入 password 页却被判定为 `unknown` 的问题，并降低过渡 DOM 误判。
+- 修改文件：
+  - `src/auto/roxy_2fa_auth_login.js`
+  - `test/roxy2FAAuthLogin.test.js`
+  - `.learnings/ERRORS.md`
+  - `docs/issues/issue-011-roxy-2fa-post-email-stage-race.md`
+  - `docs/changes/CHG-081-roxy-2fa-post-email-stage-guard.md`
+  - `docs/project/api.md`
+  - `docs/work/work-log.md`
+  - `docs/work/handoff.md`
+- 排查结果：
+  - 真实失败 run `465` 在邮箱提交后记录 `next=unknown`。
+  - 通过失败后保留的 Roxy 页面确认实际 URL 为 `https://auth.openai.com/log-in/password`，标题为 `Enter your password - OpenAI`，密码输入框可用。
+  - 根因为阶段等待窗口结束后没有最终即时复查，错过了最后一次等待期间完成的页面渲染。
+- 实现：
+  - 邮箱、password、MFA 提交后的等待超时边界增加最终阶段复查。
+  - password/MFA 页面要求输入框可见且 enabled/editable。
+  - 失败时输出 URL、标题和截断 body 摘要，便于进度窗口定位，不输出密码、验证码或 token。
+- 验证结果：
+  - RED：临界等待竞态测试先失败于 `OPENAI_2FA_POST_EMAIL_STAGE_UNKNOWN`。
+  - RED：disabled password 输入框测试先失败于 `true !== false`。
+  - GREEN：`node --test test/roxy2FAAuthLogin.test.js` 通过 13/13。
+  - GREEN：`node --test test/*.test.js` 通过 346/346。
+  - `node --check src/auto/roxy_2fa_auth_login.js`、`node --check test/roxy2FAAuthLogin.test.js`、`git diff --check` 通过。
+- 未完成 / 风险：
+  - Roxy 实时复检会话在只读检查结束时被关闭，后续真实链路需重新触发 2FA 补号验证；代码测试不受影响。
+  - 当前未合并的 `implemented` change 已超过 5 个，应安排 PRD-003 基线合并。
+- 下一步：重新触发一个 2FA 补号，确认日志出现 `识别到 OpenAI 密码登录页`，并继续到 MFA/Codex/callback。
+- 日终交接：完成后更新 `handoff.md`。

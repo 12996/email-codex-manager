@@ -84,7 +84,7 @@ export async function runBannedEmailHealthcheck({
         operation: 'healthcheck-banned',
         id: account.id,
         email: account.email,
-        message: `正在读取邮箱 API：${displayEmailApi(account.email_code_api)}`,
+        message: `正在读取邮箱 API：${displayEmailApi(account.email_code_api)}（账号邮箱：${account.email}）`,
       });
 
       const messages = await emailApiService.fetchMessages(account, {

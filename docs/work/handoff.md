@@ -2,6 +2,36 @@
 
 状态：active
 
+## 2026-07-15 补号状态查询邮箱 API 日志映射修正
+
+- 来源工作日志：`docs/work/2026-07-15-replacement-status-api-log-mapping.md`
+- 关联 change：`docs/changes/CHG-080-replacement-status-email-api-source.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：已确认 `roll-happier-6@icloud.com` 的数据库值为 `http://5.253.38.136:8080/code?email=roll-happier-6@icloud.com`，实际请求使用该完整 URL；此前日志的 `displayEmailApi()` 只隐藏 query，造成窗口看起来像未按账号查询。现在 Plus/验活日志显示脱敏后的接口基址并追加“账号邮箱”，不泄露 query 中的其他参数。
+- 验证：真实数据库行读取和注入 `fetch` 请求探针均确认完整 URL；RED 阶段两条进度日志回归测试按预期失败，修复后专项测试 12/12 通过。
+- 下一步：重启 `13100` 服务后，在 `/replacement-ui` 再点击“一键验活”或“查询 Plus 状态”，应看到 `正在读取邮箱 API：.../code（账号邮箱：当前账号）`；没有 `email_code_api` 的账号仍应显示跳过。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD-003 基线合并。
+
+## 2026-07-15 Roxy 2FA ChatGPT session 状态判定加固
+
+- 来源工作日志：`docs/work/2026-07-15-roxy-2fa-session-state-guard.md`
+- change：`docs/changes/CHG-082-roxy-2fa-session-state-guard.md`，状态 `implemented`，尚未合并到 PRD。
+- issue：`docs/issues/issue-012-roxy-2fa-session-state-guard.md`，状态 `resolved`。
+- 当前进展：`src/auto/roxy_2fa_login.js` 已增加阶段等待最终复查、控件 visible/enabled/editable 守卫、严格 ChatGPT callback origin/path；page 有 `evaluate` 时 session 空响应不再导航可视页面。
+- 验证：`node --test test/roxy2FALogin.test.js` 通过 13/13；相关 `node --check` 和 `git diff --check` 通过。
+- 下一步：重新触发 `login-2fa` 做真实 Roxy 端到端验证，确认 `chatgpt-entry -> openai-email -> openai-password -> openai-mfa -> chatgpt-home`。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD-003 基线合并。
+
+## 2026-07-14 Roxy 2FA 邮箱提交后阶段判定竞态修复
+
+- 来源工作日志：`docs/work/2026-07-14-roxy-2fa-stage-detection-guard.md`
+- change：`docs/changes/CHG-081-roxy-2fa-post-email-stage-guard.md`，状态 `implemented`，尚未合并到 PRD。
+- issue：`docs/issues/issue-011-roxy-2fa-post-email-stage-race.md`，状态 `resolved`。
+- 当前进展：2FA OAuth 在邮箱提交、password 提交和 MFA 提交后的等待窗口结束时增加最终即时阶段复查；password/MFA 输入框必须可见且 enabled/editable；未知状态会把 URL、标题和截断页面摘要写入运行日志。
+- 根因证据：run `465` 失败后 Roxy 页面实际位于 `https://auth.openai.com/log-in/password`，旧状态机因错过最后一次渲染把可用 password 页判定为 `unknown`。
+- 验证：`node --test test/roxy2FAAuthLogin.test.js` 通过 13/13；全量 `node --test test/*.test.js` 通过 346/346；相关 `node --check` 和 `git diff --check` 通过。
+- 下一步：重新触发一个 2FA 补号，确认日志出现 `识别到 OpenAI 密码登录页` 并继续到 MFA/Codex/callback。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD-003 基线合并。
+
 ## 2026-07-14 补号状态检查使用账号邮箱 API
 
 - 来源工作日志：`docs/work/2026-07-14-replacement-status-email-api-source.md`

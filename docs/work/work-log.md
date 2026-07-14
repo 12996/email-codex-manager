@@ -92,3 +92,6 @@
 | 2026-07-14 | 补号账号 Plus 状态查询 | done | `2026-07-14-replacement-plus-status-check.md` |
 | 2026-07-14 | 补号状态查询实时进度窗口 | done | `2026-07-14-replacement-healthcheck-progress-window.md` |
 | 2026-07-14 | 补号状态检查使用账号邮箱 API | done | `2026-07-14-replacement-status-email-api-source.md` |
+| 2026-07-14 | Roxy 2FA 邮箱提交后阶段判定竞态修复 | done | `2026-07-14-roxy-2fa-stage-detection-guard.md` |
+| 2026-07-15 | Roxy 2FA ChatGPT session 状态判定加固 | done | `2026-07-15-roxy-2fa-session-state-guard.md` |
+| 2026-07-15 | 补号状态查询邮箱 API 日志映射修正 | done | `2026-07-15-replacement-status-api-log-mapping.md` |

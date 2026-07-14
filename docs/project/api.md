@@ -1235,7 +1235,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 
 邮箱 API 响应要求：
 
-- 请求方式为 `GET`，URL 使用补号账号行中保存的完整 `email_code_api`，系统不会再为该 URL 拼接邮箱参数。
+- 请求方式为 `GET`，URL 使用补号账号行中保存的完整 `email_code_api`，系统不会再为该 URL 拼接邮箱参数。进度窗口为避免把 query 中的其他参数写入日志，只展示去掉 query/hash 的接口基址，并追加当前数据库账号邮箱；这不改变实际请求 URL。
 - 响应可以是完整邮件 JSON 对象、邮件数组、HTML 或纯文本；JSON 对象至少应包含 `subject`、`body`、`bodyHtml`、`bodyText`、`html`、`text`、`content` 中的一个字段。
 - 例如：`{"email":"user@icloud.com","subject":"ChatGPT - Your new plan","received_at":"2026-07-14T10:23:21Z","body":"<html>...</html>"}`。
 - 只有 `{ "code": "123456" }` 这类验证码-only 响应不能用于 Plus 状态判断，会计入失败，不会回退到 IMAP。
@@ -1543,6 +1543,12 @@ src/auto/roxy_2fa_auth_login.js
 
 其余邮箱、手机、SMS API、邮箱验证码 API、Roxy 配置、callback、token 导出和日志规则同 `/replacement-accounts/:id/replace`。运行日志 `kind` 为 `replacement-2fa`，日志只记录相关 env 是否设置，不记录密码、2FA code、TOTP secret、验证码或 token 明文。
 
+2FA 页面状态判定规则：
+
+- 邮箱提交、password 提交和 MFA 提交后的等待窗口结束时，会再做一次即时阶段复查，避免页面在最后一次等待期间完成导航却被归类为 `unknown`。
+- password/MFA 阶段要求对应输入框可见且可操作；Playwright 环境优先检查 `isEnabled()` 和 `isEditable()`，disabled/readOnly 过渡控件不会触发填写动作。
+- 状态仍未知时，运行日志会输出 URL、标题和截断页面摘要用于诊断，但不会输出密码、验证码或 token 明文。
+
 成功响应格式同 `/replacement-accounts/:id/replace`：
 
 ```json
@@ -1737,6 +1743,8 @@ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS=30
 
 - 服务侧编排步骤：形如 `step=<步骤> action=<动作>`，覆盖账号校验、子进程环境准备、启动 child、创建 run、绑定 stdout/stderr、等待结束和最终状态标记。
 - 自动化脚本输出：`src/auto/roxy_oauth_login.js`、`src/auto/roxy_2fa_auth_login.js` 或 `src/auto/roxy_register_openai.js` 输出的 `stdout/stderr`，包括 Roxy 准备、页面状态识别、填写邮箱、密码/2FA、请求/填写邮箱验证码、选择短信验证、请求/填写手机验证码、Codex 授权、callback 和 token 导出等阶段日志。
+- `src/auto/roxy_2fa_login.js` 的 ChatGPT session 登录状态规则：只有页面内 `/api/auth/session` 返回 `accessToken` 才判定 `chatgpt-home`；动作后等待窗口结束会再次复查阶段；登录按钮、邮箱、密码、MFA 和 Continue 控件必须可操作，并排除 `aria-disabled` / `inert`；callback 必须匹配 `https://chatgpt.com/api/auth/callback/openai`。页面已有 `evaluate` 能力时，session 请求失败不会导航当前页面到 session API。
+- 2FA 状态识别失败时，脚本会额外输出当前页面 URL、标题和截断 body 摘要，便于区分 loading、相邻阶段和真实未知页；该摘要不包含密码、验证码或 token 明文。
 
 敏感信息约束：日志只记录验证码是否已获取/已填写、Cookie 是否配置和 token 解析/保存状态，不记录验证码、`admin_auth` Cookie、access token、refresh token 或完整短信响应。
 
