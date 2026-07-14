@@ -110,6 +110,15 @@ export function createReplacementAccountRepository(db) {
         .filter((account) => ['plus_active', 'cpa_mounted', 'for_sale', 'sold'].includes(account.status));
     },
 
+    listPlusStatusCheckCandidates() {
+      return db.prepare(`
+        SELECT * FROM replacement_accounts
+        WHERE deleted_at IS NULL
+          AND status = 'registered'
+        ORDER BY id DESC
+      `).all().map(normalizeAccountRecord);
+    },
+
     getAccount(id) {
       return normalizeAccountRecord(db.prepare(`
         SELECT * FROM replacement_accounts
@@ -280,6 +289,39 @@ export function createReplacementAccountRepository(db) {
         now,
         existing.id,
       );
+      return this.getAccount(existing.id);
+    },
+
+    markPlusStatusDetected(id, statusNote) {
+      const existing = assertAccountExists(this.getAccount(id));
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE replacement_accounts
+        SET
+          status = 'plus_active',
+          status_note = ?,
+          status_updated_at = ?,
+          last_error = NULL,
+          updated_at = ?
+        WHERE id = ?
+      `).run(
+        normalizeOptional(statusNote) || 'Plus 状态查询命中订阅邮件',
+        now,
+        now,
+        existing.id,
+      );
+      return this.getAccount(existing.id);
+    },
+
+    recordPlusStatusCheckFailure(id, errorMessage) {
+      const existing = assertAccountExists(this.getAccount(id));
+      const now = new Date().toISOString();
+      const message = normalizeErrorMessage(errorMessage) || '未知错误';
+      db.prepare(`
+        UPDATE replacement_accounts
+        SET last_error = ?, updated_at = ?
+        WHERE id = ?
+      `).run(`Plus 状态查询失败：${message}`, now, existing.id);
       return this.getAccount(existing.id);
     },
 

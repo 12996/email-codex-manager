@@ -2,6 +2,16 @@
 
 状态：active
 
+## 2026-07-14 补号账号 Plus 状态查询
+
+- 来源工作日志：`docs/work/2026-07-14-replacement-plus-status-check.md`
+- change：`docs/changes/CHG-078-replacement-plus-status-check.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：新增 `POST /replacement-accounts/check-plus-status` 和 `src/replacementPlusStatusService.js`，只查询 `registered` 状态账号最近 30 封 inbox 邮件；同时匹配 `You've successfully subscribed to ChatGPT Plus`、`ChatGPT Plus Subscription`、`The OpenAI Team`，命中后更新为 `plus_active`。未命中保持 `registered`，失败保持 `registered` 并记录 `last_error`。补号管理页新增“查询 Plus 状态”按钮。
+- 验证：Plus 状态专项、仓储、API、前端组合测试通过 78/78；全量 JavaScript 测试 `node --test test/*.test.js` 通过 337/337；相关 JS `node --check` 和 `git diff --check` 通过。
+- 风险：真实查询依赖 Gmail App Password；iCloud 账号依赖 `ICLOUD_CODE_GMAIL_ACCOUNT`。用户提供的 `/code?email=...` 属于验证码接口，不作为完整订阅邮件来源。
+- 下一步：重启正在运行的 13100 服务后，在 `http://localhost:13100/replacement-ui` 点击“查询 Plus 状态”做真实邮箱验收。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
 ## 2026-07-14 补号账号开通方式下拉与页面维护
 
 - 来源工作日志：`docs/work/2026-07-14-replacement-activation-method.md`

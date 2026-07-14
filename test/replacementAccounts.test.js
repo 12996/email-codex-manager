@@ -450,6 +450,42 @@ test('markRegistrationSuccess sets account status to registered and stores 2FA s
   assert.ok(updated.status_updated_at);
 });
 
+test('listPlusStatusCheckCandidates returns only non-deleted registered accounts', () => {
+  const repo = createTestRepository();
+  const registered = repo.createAccount({ email: 'plus-check-registered@example.com', status: 'registered' });
+  repo.createAccount({ email: 'plus-check-active@example.com', status: 'plus_active' });
+  const deleted = repo.createAccount({ email: 'plus-check-deleted@example.com', status: 'registered' });
+  repo.deleteAccount(deleted.id);
+
+  assert.deepEqual(
+    repo.listPlusStatusCheckCandidates().map((account) => account.id),
+    [registered.id],
+  );
+});
+
+test('markPlusStatusDetected changes registered account to plus_active and clears last error', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'plus-check-hit@example.com', status: 'registered' });
+  repo.recordPlusStatusCheckFailure(account.id, 'old query failure');
+
+  const updated = repo.markPlusStatusDetected(account.id, 'Plus 状态查询命中订阅邮件');
+
+  assert.equal(updated.status, 'plus_active');
+  assert.equal(updated.status_note, 'Plus 状态查询命中订阅邮件');
+  assert.equal(updated.last_error, null);
+  assert.ok(updated.status_updated_at);
+});
+
+test('recordPlusStatusCheckFailure preserves registered status and stores error', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'plus-check-failed@example.com', status: 'registered' });
+
+  const updated = repo.recordPlusStatusCheckFailure(account.id, 'IMAP temporary failure');
+
+  assert.equal(updated.status, 'registered');
+  assert.equal(updated.last_error, 'Plus 状态查询失败：IMAP temporary failure');
+});
+
 test('recordSmsFailure stores sms_last_error without storing code', () => {
   const repo = createTestRepository();
   const account = repo.createAccount({ email: 'user@example.com' });

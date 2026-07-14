@@ -79,6 +79,7 @@ function bindEvents() {
     loadAccounts();
   });
   $('#healthcheckBannedButton').addEventListener('click', healthcheckBannedAccounts);
+  $('#checkPlusStatusButton').addEventListener('click', checkPlusStatusAccounts);
   $('#batchReplaceButton').addEventListener('click', batchReplace);
   $('#manageActivationMethodsButton').addEventListener('click', openActivationMethodDialog);
   $('#newAccountButton').addEventListener('click', () => openAccountDialog());
@@ -633,6 +634,22 @@ async function healthcheckBannedAccounts() {
     await loadAccounts();
   } catch (error) {
     addActivity('一键验活失败', error.message);
+    toast(error.message);
+    await loadAccounts();
+  }
+}
+
+async function checkPlusStatusAccounts() {
+  if (!confirm('确认只查询当前“已注册”状态账号的 Plus 状态吗？')) return;
+  try {
+    const body = await api('/replacement-accounts/check-plus-status', { method: 'POST' });
+    const result = body.result || {};
+    const detail = `查询 ${result.checked || 0} 个，Plus ${result.plus || 0} 个，仍为已注册 ${result.registered || 0} 个，失败 ${result.failed || 0} 个`;
+    addActivity('查询 Plus 状态', detail);
+    toast(detail);
+    await loadAccounts();
+  } catch (error) {
+    addActivity('查询 Plus 状态失败', error.message);
     toast(error.message);
     await loadAccounts();
   }

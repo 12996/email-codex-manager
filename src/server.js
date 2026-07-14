@@ -15,6 +15,7 @@ import { createCpaRepairQueue } from './cpaRepairQueue.js';
 import { createCpaRepairWorker } from './cpaRepairWorker.js';
 import { createDatabase } from './db.js';
 import { runBannedEmailHealthcheck } from './accountHealthcheckService.js';
+import { runPlusStatusCheck } from './replacementPlusStatusService.js';
 import { createReplacementAutomationRunRepository } from './replacementAutomationRuns.js';
 import {
   deriveMainGmailAccount,
@@ -327,6 +328,20 @@ export function createApp({
   app.post('/replacement-accounts/healthcheck-banned', requireAuth, async (req, res) => {
     try {
       const result = await runBannedEmailHealthcheck({
+        accounts,
+        replacementAccounts,
+        mailService,
+        icloudCodeDefaultGmailAccount,
+      });
+      res.json({ ok: true, result });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
+  app.post('/replacement-accounts/check-plus-status', requireAuth, async (req, res) => {
+    try {
+      const result = await runPlusStatusCheck({
         accounts,
         replacementAccounts,
         mailService,

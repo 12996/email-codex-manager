@@ -1,0 +1,31 @@
+# 2026-07-14 补号账号 Plus 状态查询
+
+- 状态：done
+- 目标：只查询 `registered` 状态补号账号的收件箱，命中 OpenAI Plus 订阅确认邮件后更新为 `plus_active`。
+- 修改文件：
+  - `src/replacementPlusStatusService.js`
+  - `src/replacementAccounts.js`
+  - `src/server.js`
+  - `web/index.html`
+  - `web/app.js`
+  - `test/replacementPlusStatusService.test.js`
+  - `test/replacementAccounts.test.js`
+  - `test/replacementAccountsApi.test.js`
+  - `test/replacementAccountsWeb.test.js`
+  - `docs/project/api.md`
+  - `docs/changes/CHG-078-replacement-plus-status-check.md`
+  - `docs/changes/CHANGE_REGISTRY.md`
+- 当前实现：
+  - 新增 Plus 邮件匹配和批量查询服务，复用 IMAP Gmail/iCloud 收件箱映射。
+  - 只读取 `registered` 账号最近 30 封 inbox 邮件。
+  - 命中 `You've successfully subscribed to ChatGPT Plus`、`ChatGPT Plus Subscription`、`The OpenAI Team` 后写入 `plus_active`。
+  - 未命中保持 `registered`；失败保持 `registered` 并写入 `last_error`。
+  - 页面新增“查询 Plus 状态”按钮，调用 `POST /replacement-accounts/check-plus-status`。
+- 验证结果：
+  - Plus 状态专项、仓储、API、前端测试组合通过，78/78。
+  - `node --check` 通过：`src/replacementPlusStatusService.js`、`src/replacementAccounts.js`、`src/server.js`、`web/app.js`。
+  - 全量 JavaScript 测试 `node --test test/*.test.js` 通过，337/337。
+  - `git diff --check` 通过。
+- 未完成 / 风险：真实邮箱查询依赖已配置 Gmail App Password；iCloud 账号依赖 `ICLOUD_CODE_GMAIL_ACCOUNT`。
+- 下一步：重启正在运行的 13100 服务后，在 `/replacement-ui` 点击“查询 Plus 状态”做真实邮箱验收。
+- 日终交接：完成后更新 `handoff.md`

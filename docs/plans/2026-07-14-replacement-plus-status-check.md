@@ -42,7 +42,7 @@ Expected: FAIL because the service and repository methods do not exist yet.
 
 **Step 1: Add repository tests**
 
-Verify a candidate query returns only non-deleted `registered` accounts and that the positive result writes `plus_active`, `status_updated_at`, status note, and clears `last_error. Verify a failure method records an error without changing status.
+Verify a candidate query returns only non-deleted `registered` accounts and that the positive result writes `plus_active`, `status_updated_at`, status note, and clears `last_error`. Verify a failure method records an error without changing status.
 
 **Step 2: Run the focused repository tests**
 

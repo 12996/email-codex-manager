@@ -1205,6 +1205,47 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 }
 ```
 
+### POST `/replacement-accounts/check-plus-status`
+
+手动批量查询补号账号的 ChatGPT Plus 状态。该接口复用后台登录态，只处理未软删除且当前状态为 `registered` 的账号。
+
+后端行为：
+
+1. Gmail 和 Gmail plus alias 账号读取主 Gmail 收件箱；iCloud 账号读取 `ICLOUD_CODE_GMAIL_ACCOUNT` 对应 Gmail 收件箱。
+2. 每个账号读取收件箱最近 30 封邮件，并把 `targetEmail` 传给邮件读取服务。
+3. 主题、预览、正文或 HTML 同时包含 `You've successfully subscribed to ChatGPT Plus`、`ChatGPT Plus Subscription` 和 `The OpenAI Team` 时，判定为 Plus 订阅邮件。
+4. 如果邮件包含收件人地址，则还必须包含目标账号邮箱，避免共享 iCloud 收件箱串号。
+5. 命中后写入 `status = plus_active`、`status_updated_at` 和 `status_note = Plus 状态查询命中订阅邮件`，并清空 `last_error`。
+6. 未命中时状态保持 `registered`。
+7. 单个账号 IMAP 失败或收件箱未配置时状态保持 `registered`，并将失败原因写入 `last_error`；单个失败不影响其他账号。
+8. `email_code_api` 仍只用于验证码流程，本接口不把它当作完整邮件来源。
+
+成功响应：
+
+```json
+{
+  "ok": true,
+  "result": {
+    "checked": 2,
+    "plus": 1,
+    "registered": 1,
+    "failed": 0,
+    "plusAccounts": [
+      {
+        "id": 1,
+        "email": "user@example.com",
+        "subject": "You've successfully subscribed to ChatGPT Plus.",
+        "date": "2026-07-14T01:00:00.000Z"
+      }
+    ],
+    "registeredAccounts": [
+      { "id": 2, "email": "clean@example.com" }
+    ],
+    "failedAccounts": []
+  }
+}
+```
+
 ### POST `/replacement-accounts/:id/fetch-sms-code`
 
 实时请求账号配置的 `sms_api` 并返回验证码。验证码只在响应中返回，不写入数据库。
@@ -1754,6 +1795,7 @@ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS=30
 | 修改状态 | `PATCH /replacement-accounts/:id/status` | 更新状态和备注 |
 | 启用/停用公开验证码 | `PATCH /replacement-accounts/:id/public-code` | 只更新 `public_code_enabled` 和必要的 `public_code_key` |
 | 一键验活 | `POST /replacement-accounts/healthcheck-banned` | 检测封禁邮件并自动标记 `banned` |
+| 查询 Plus 状态 | `POST /replacement-accounts/check-plus-status` | 只查询 `registered` 账号，命中订阅邮件后标记 `plus_active` |
 | 获取验证码 | `POST /replacement-accounts/:id/fetch-sms-code` | 实时返回验证码，不入库 |
 | 获取 JSON | `POST /replacement-accounts/:id/fetch-json` | 保存 JSON 原文 |
 | 注册 OpenAI | `POST /replacement-accounts/:id/register` | 启动注册自动化子进程，邮箱验证码走 POST 内部接口 |

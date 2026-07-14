@@ -109,6 +109,7 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
     '/replace-2fa',
     '/login-2fa',
     '/healthcheck-banned',
+    '/check-plus-status',
     '/status',
   ]) {
     assert.match(appJs, new RegExp(endpoint.replaceAll('/', '\\/')));
@@ -116,6 +117,7 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
 
   assert.match(html, /一键补号/);
   assert.match(html, /一键验活/);
+  assert.match(html, /查询 Plus 状态/);
   assert.match(html, /新增账号/);
   assert.match(html, /name="password"/);
   assert.match(appJs, /获取验证码/);
@@ -126,6 +128,9 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(appJs, /一键验活/);
   assert.match(appJs, /healthcheckBannedAccounts/);
   assert.match(appJs, /\/replacement-accounts\/healthcheck-banned/);
+  assert.match(appJs, /checkPlusStatusAccounts/);
+  assert.match(appJs, /\/replacement-accounts\/check-plus-status/);
+  assert.match(appJs, /只查询.*已注册/);
   assert.match(appJs, /状态已更新/);
   assert.match(appJs, /删除账号/);
 });

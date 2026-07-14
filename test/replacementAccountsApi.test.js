@@ -400,6 +400,71 @@ This means your account can no longer be used.`,
   }
 });
 
+test('POST /replacement-accounts/check-plus-status updates only registered accounts', async () => {
+  const { app, replacementAccounts } = createTestContext(successfulServices(), {
+    accounts: {
+      listAccounts() {
+        return [];
+      },
+      getAccountByGmailEmail(email) {
+        return email === 'receiver@gmail.com'
+          ? { id: 99, gmail_email: 'receiver@gmail.com', gmail_app_password: 'abcdefghijklmnop' }
+          : null;
+      },
+    },
+    mailService: {
+      async fetchMessages(account, options) {
+        assert.equal(account.gmail_email, 'receiver@gmail.com');
+        assert.equal(options.limit, 30);
+        if (options.targetEmail === 'receiver+plus@gmail.com') {
+          return [{
+            subject: "You've successfully subscribed to ChatGPT Plus.",
+            toAddresses: ['receiver+plus@gmail.com'],
+            bodyText: 'ChatGPT Plus Subscription The OpenAI Team',
+          }];
+        }
+        if (options.targetEmail === 'receiver+clean@gmail.com') return [];
+        throw new Error('IMAP temporary failure');
+      },
+    },
+  });
+  const plus = replacementAccounts.createAccount({
+    email: 'receiver+plus@gmail.com',
+    status: 'registered',
+  });
+  const clean = replacementAccounts.createAccount({
+    email: 'receiver+clean@gmail.com',
+    status: 'registered',
+  });
+  const failed = replacementAccounts.createAccount({
+    email: 'receiver+failed@gmail.com',
+    status: 'registered',
+  });
+  const ignored = replacementAccounts.createAccount({
+    email: 'receiver+ignored@gmail.com',
+    status: 'plus_active',
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', '/replacement-accounts/check-plus-status');
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.result.checked, 3);
+    assert.equal(response.body.result.plus, 1);
+    assert.equal(response.body.result.registered, 1);
+    assert.equal(response.body.result.failed, 1);
+    assert.equal(replacementAccounts.getAccount(plus.id).status, 'plus_active');
+    assert.equal(replacementAccounts.getAccount(clean.id).status, 'registered');
+    assert.equal(replacementAccounts.getAccount(failed.id).status, 'registered');
+    assert.equal(replacementAccounts.getAccount(ignored.id).status, 'plus_active');
+    assert.match(replacementAccounts.getAccount(failed.id).last_error, /Plus 状态查询失败/);
+  } finally {
+    await server.close();
+  }
+});
+
 test('replacement account action APIs update status and call injected services', async () => {
   const { app, replacementAccounts } = createTestContext();
   const created = replacementAccounts.createAccount({
