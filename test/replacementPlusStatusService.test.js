@@ -31,6 +31,10 @@ function createGmailAccount(accounts, gmailEmail = 'receiver@gmail.com') {
   });
 }
 
+function emailApi(email) {
+  return `https://mail.example.test/code?email=${encodeURIComponent(email)}`;
+}
+
 function plusMessage(recipient) {
   return {
     subject: "You've successfully subscribed to ChatGPT Plus.",
@@ -61,15 +65,29 @@ test('messageIndicatesChatGptPlusSubscription matches the approved OpenAI Plus e
   );
 });
 
+test('messageIndicatesChatGptPlusSubscription matches HTML entities from the email API', () => {
+  assert.equal(messageIndicatesChatGptPlusSubscription({
+    subject: 'ChatGPT - Your new plan',
+    toAddresses: ['registered@example.com'],
+    bodyHtml: '<p>You&#39;ve successfully subscribed to ChatGPT Plus.</p><p>ChatGPT Plus Subscription</p><p>The OpenAI Team</p>',
+  }, 'registered@example.com'), true);
+});
+
 test('runPlusStatusCheck only checks registered accounts and updates matching accounts', async () => {
   const { accounts, replacementAccounts } = createRepos();
   const mailbox = createGmailAccount(accounts);
   const plus = replacementAccounts.createAccount({
     email: 'receiver+plus@gmail.com',
+    email_code_api: emailApi('receiver+plus@gmail.com'),
     status: 'registered',
   });
   const clean = replacementAccounts.createAccount({
     email: 'receiver+clean@gmail.com',
+    email_code_api: emailApi('receiver+clean@gmail.com'),
+    status: 'registered',
+  });
+  const skipped = replacementAccounts.createAccount({
+    email: 'receiver+no-api@gmail.com',
     status: 'registered',
   });
   const alreadyPlus = replacementAccounts.createAccount({
@@ -81,30 +99,38 @@ test('runPlusStatusCheck only checks registered accounts and updates matching ac
   const result = await runPlusStatusCheck({
     accounts,
     replacementAccounts,
-    mailService: {
+    emailApiService: {
       async fetchMessages(account, options) {
-        calls.push([account.gmail_email, options]);
+        calls.push([account.email_code_api, options]);
         if (options.targetEmail === plus.email) return [plusMessage(plus.email)];
         if (options.targetEmail === clean.email) return [];
         throw new Error(`unexpected target ${options.targetEmail}`);
+      },
+    },
+    mailService: {
+      async fetchMessages() {
+        throw new Error('IMAP should not be called');
       },
     },
     icloudCodeDefaultGmailAccount: mailbox.gmail_email,
   });
 
   assert.equal(result.checked, 2);
+  assert.equal(result.skipped, 1);
   assert.equal(result.plus, 1);
   assert.equal(result.registered, 1);
   assert.equal(result.failed, 0);
+  assert.deepEqual(result.skippedAccounts.map((item) => item.email), [skipped.email]);
   assert.equal(replacementAccounts.getAccount(plus.id).status, 'plus_active');
   assert.equal(replacementAccounts.getAccount(clean.id).status, 'registered');
+  assert.equal(replacementAccounts.getAccount(skipped.id).status, 'registered');
   assert.equal(replacementAccounts.getAccount(alreadyPlus.id).status, 'plus_active');
   assert.deepEqual(
-    calls.map(([gmail, options]) => [gmail, options.readLocation, options.limit, options.targetEmail])
-      .sort((left, right) => left[3].localeCompare(right[3])),
+    calls.map(([apiUrl, options]) => [apiUrl, options.limit, options.targetEmail])
+      .sort((left, right) => left[2].localeCompare(right[2])),
     [
-      ['receiver@gmail.com', 'inbox', 30, clean.email],
-      ['receiver@gmail.com', 'inbox', 30, plus.email],
+      [emailApi(clean.email), 30, clean.email],
+      [emailApi(plus.email), 30, plus.email],
     ],
   );
 });
@@ -114,15 +140,21 @@ test('runPlusStatusCheck records failures without changing registered status', a
   createGmailAccount(accounts);
   const failed = replacementAccounts.createAccount({
     email: 'receiver+failed@gmail.com',
+    email_code_api: emailApi('receiver+failed@gmail.com'),
     status: 'registered',
   });
 
   const result = await runPlusStatusCheck({
     accounts,
     replacementAccounts,
+    emailApiService: {
+      async fetchMessages() {
+        throw new Error('EMAIL API temporary failure');
+      },
+    },
     mailService: {
       async fetchMessages() {
-        throw new Error('IMAP temporary failure');
+        throw new Error('IMAP should not be called');
       },
     },
   });
@@ -132,7 +164,7 @@ test('runPlusStatusCheck records failures without changing registered status', a
   assert.equal(result.registered, 0);
   assert.equal(result.failed, 1);
   assert.equal(replacementAccounts.getAccount(failed.id).status, 'registered');
-  assert.match(replacementAccounts.getAccount(failed.id).last_error, /Plus 状态查询失败：IMAP temporary failure/);
+  assert.match(replacementAccounts.getAccount(failed.id).last_error, /Plus 状态查询失败：EMAIL API temporary failure/);
   assert.deepEqual(result.failedAccounts.map((item) => item.email), [failed.email]);
 });
 
@@ -141,6 +173,7 @@ test('runPlusStatusCheck emits account progress events', async () => {
   const mailbox = createGmailAccount(accounts);
   const account = replacementAccounts.createAccount({
     email: 'receiver+progress@gmail.com',
+    email_code_api: emailApi('receiver+progress@gmail.com'),
     status: 'registered',
   });
   const events = [];
@@ -148,9 +181,14 @@ test('runPlusStatusCheck emits account progress events', async () => {
   await runPlusStatusCheck({
     accounts,
     replacementAccounts,
-    mailService: {
+    emailApiService: {
       async fetchMessages() {
         return [plusMessage(account.email)];
+      },
+    },
+    mailService: {
+      async fetchMessages() {
+        throw new Error('IMAP should not be called');
       },
     },
     icloudCodeDefaultGmailAccount: mailbox.gmail_email,

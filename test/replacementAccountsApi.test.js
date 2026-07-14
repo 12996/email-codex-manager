@@ -376,9 +376,22 @@ This means your account can no longer be used.`,
         }];
       },
     },
+    replacementEmailApiService: {
+      async fetchMessages(account, options) {
+        assert.equal(account.email, 'receiver+sold@gmail.com');
+        assert.equal(options.limit, 5);
+        return [{
+          subject: 'Important update about your ChatGPT account',
+          bodyText: `We’re writing with an important update about your ChatGPT account associated with ${options.targetEmail}.
+Your account has been deactivated because recent activity violated our Terms and Usage Policies.
+This means your account can no longer be used.`,
+        }];
+      },
+    },
   });
   const created = replacementAccounts.createAccount({
     email: 'receiver+sold@gmail.com',
+    email_code_api: 'https://mail.example.test/code?sold',
     status: 'sold',
   });
   replacementAccounts.createAccount({
@@ -427,17 +440,35 @@ test('POST /replacement-accounts/check-plus-status updates only registered accou
         throw new Error('IMAP temporary failure');
       },
     },
+    replacementEmailApiService: {
+      async fetchMessages(account, options) {
+        assert.equal(account.email_code_api.startsWith('https://mail.example.test/code?'), true);
+        assert.equal(options.limit, 30);
+        if (options.targetEmail === 'receiver+plus@gmail.com') {
+          return [{
+            subject: "You've successfully subscribed to ChatGPT Plus.",
+            toAddresses: ['receiver+plus@gmail.com'],
+            bodyText: 'ChatGPT Plus Subscription The OpenAI Team',
+          }];
+        }
+        if (options.targetEmail === 'receiver+clean@gmail.com') return [];
+        throw new Error('EMAIL API temporary failure');
+      },
+    },
   });
   const plus = replacementAccounts.createAccount({
     email: 'receiver+plus@gmail.com',
+    email_code_api: 'https://mail.example.test/code?plus',
     status: 'registered',
   });
   const clean = replacementAccounts.createAccount({
     email: 'receiver+clean@gmail.com',
+    email_code_api: 'https://mail.example.test/code?clean',
     status: 'registered',
   });
   const failed = replacementAccounts.createAccount({
     email: 'receiver+failed@gmail.com',
+    email_code_api: 'https://mail.example.test/code?failed',
     status: 'registered',
   });
   const ignored = replacementAccounts.createAccount({
@@ -493,9 +524,33 @@ test('replacement status batch APIs stream account progress when requested', asy
         }];
       },
     },
+    replacementEmailApiService: {
+      async fetchMessages(account, options) {
+        assert.equal(account.email_code_api.startsWith('https://mail.example.test/code?'), true);
+        if (options.targetEmail === 'receiver+plus@gmail.com') {
+          return [{
+            subject: "You've successfully subscribed to ChatGPT Plus.",
+            toAddresses: ['receiver+plus@gmail.com'],
+            bodyText: 'ChatGPT Plus Subscription The OpenAI Team',
+          }];
+        }
+        return [{
+          subject: 'Important update about your ChatGPT account',
+          bodyText: `This message concerns ${options.targetEmail}. Your account has been deactivated because recent activity violated our Terms and Usage Policies.`,
+        }];
+      },
+    },
   });
-  replacementAccounts.createAccount({ email: 'receiver+plus@gmail.com', status: 'registered' });
-  replacementAccounts.createAccount({ email: 'receiver+banned@gmail.com', status: 'for_sale' });
+  replacementAccounts.createAccount({
+    email: 'receiver+plus@gmail.com',
+    email_code_api: 'https://mail.example.test/code?plus',
+    status: 'registered',
+  });
+  replacementAccounts.createAccount({
+    email: 'receiver+banned@gmail.com',
+    email_code_api: 'https://mail.example.test/code?banned',
+    status: 'for_sale',
+  });
   const server = await startTestServer(app);
 
   async function stream(path) {

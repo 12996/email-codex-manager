@@ -1,4 +1,5 @@
-import { deriveMainGmailAccount } from './imapService.js';
+import { fetchReplacementEmailMessages } from './replacementEmailApiService.js';
+import { htmlToText } from './verificationCodeService.js';
 
 const PLUS_STATUS_CHECK_LIMIT = 30;
 const PLUS_STATUS_NOTE = 'Plus 状态查询命中订阅邮件';
@@ -22,56 +23,65 @@ export function messageIndicatesChatGptPlusSubscription(message, targetEmail) {
 }
 
 export async function runPlusStatusCheck({
-  accounts,
   replacementAccounts,
-  mailService,
-  icloudCodeDefaultGmailAccount = '',
+  emailApiService = { fetchMessages: fetchReplacementEmailMessages },
   onProgress,
 } = {}) {
   const candidates = listCandidates(replacementAccounts);
+  const queryable = candidates.filter(hasEmailCodeApi);
+  const skipped = candidates.filter((account) => !hasEmailCodeApi(account));
   reportProgress(onProgress, {
     type: 'start',
     operation: 'check-plus-status',
     total: candidates.length,
-    message: `开始查询 Plus 状态，共 ${candidates.length} 个已注册账号`,
+    checked: queryable.length,
+    skipped: skipped.length,
+    message: `开始查询 Plus 状态：已注册 ${candidates.length} 个，已配置 email_code_api ${queryable.length} 个，跳过 ${skipped.length} 个`,
   });
   const result = {
-    checked: candidates.length,
+    checked: queryable.length,
+    skipped: skipped.length,
     plus: 0,
     registered: 0,
     failed: 0,
     plusAccounts: [],
     registeredAccounts: [],
     failedAccounts: [],
+    skippedAccounts: skipped.map((account) => ({ id: account.id, email: account.email })),
   };
 
-  for (const [index, account] of candidates.entries()) {
+  for (const account of skipped) {
+    reportProgress(onProgress, {
+      type: 'account-result',
+      operation: 'check-plus-status',
+      id: account.id,
+      email: account.email,
+      outcome: 'skipped',
+      status: account.status,
+      message: '跳过查询：未配置 email_code_api',
+    });
+  }
+
+  for (const [index, account] of queryable.entries()) {
     reportProgress(onProgress, {
       type: 'account-start',
       operation: 'check-plus-status',
       index: index + 1,
-      total: candidates.length,
+      total: queryable.length,
       id: account.id,
       email: account.email,
-      message: `开始查询（${index + 1}/${candidates.length}）`,
+      message: `开始查询（${index + 1}/${queryable.length}）`,
     });
     try {
-      const mailboxEmail = mailboxEmailForAccount(account.email, icloudCodeDefaultGmailAccount);
-      const mailbox = accounts.getAccountByGmailEmail(deriveMainGmailAccount(mailboxEmail));
-      if (!mailbox) {
-        throw new Error(`未配置状态查询收件箱：${mailboxEmail}`);
-      }
-
       reportProgress(onProgress, {
         type: 'account-step',
         operation: 'check-plus-status',
         id: account.id,
         email: account.email,
-        message: `正在读取收件箱：${mailboxEmail}`,
+        message: `正在读取邮箱 API：${displayEmailApi(account.email_code_api)}`,
       });
 
-      const messages = (await mailService.fetchMessages(mailbox, {
-        readLocation: 'inbox',
+      const messages = (await emailApiService.fetchMessages(account, {
         limit: PLUS_STATUS_CHECK_LIMIT,
         targetEmail: account.email,
       })) || [];
@@ -153,22 +163,14 @@ function listCandidates(replacementAccounts) {
     .filter((account) => isPlusStatusCheckEligibleStatus(account.status));
 }
 
-function mailboxEmailForAccount(email, icloudCodeDefaultGmailAccount) {
-  const normalized = normalizeEmail(email);
-  if (normalized.endsWith('@icloud.com')) {
-    const mailbox = normalizeEmail(icloudCodeDefaultGmailAccount);
-    if (!mailbox) throw new Error('未配置 iCloud 状态查询 Gmail 收件箱');
-    return mailbox;
-  }
-  return deriveMainGmailAccount(normalized);
-}
-
 function normalizeMessageText(message) {
   return [
     message?.subject,
     message?.preview,
     message?.bodyText,
     message?.bodyHtml,
+    htmlToText(message?.bodyHtml),
+    message?.body,
   ].join('\n')
     .replace(/[’]/g, "'")
     .replace(/\s+/g, ' ')
@@ -180,6 +182,7 @@ function messageRecipients(message) {
     ...(message?.toAddresses || []),
     ...(message?.ccAddresses || []),
     ...(message?.deliveredToAddresses || []),
+    ...(message?.recipients || []),
   ]
     .map(normalizeEmail)
     .filter(Boolean);
@@ -187,6 +190,21 @@ function messageRecipients(message) {
 
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function hasEmailCodeApi(account) {
+  return Boolean(String(account?.email_code_api || '').trim());
+}
+
+function displayEmailApi(apiUrl) {
+  try {
+    const url = new URL(String(apiUrl));
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return String(apiUrl || '').trim();
+  }
 }
 
 function reportProgress(onProgress, event) {

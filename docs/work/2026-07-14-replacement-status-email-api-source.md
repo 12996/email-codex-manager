@@ -1,0 +1,34 @@
+# 2026-07-14 补号状态检查使用账号邮箱 API
+
+- 状态：done
+- 目标：Plus 状态查询和一键验活按补号账号自己的 `email_code_api` 读取邮件；没有 API 的账号直接跳过。
+- 修改文件：
+  - `src/replacementEmailApiService.js`
+  - `src/replacementPlusStatusService.js`
+  - `src/accountHealthcheckService.js`
+  - `src/server.js`
+  - `web/app.js`
+  - `test/replacementEmailApiService.test.js`
+  - `test/replacementPlusStatusService.test.js`
+  - `test/accountHealthcheckService.test.js`
+  - `test/replacementAccountsApi.test.js`
+  - `docs/project/api.md`
+  - `docs/changes/CHG-080-replacement-status-email-api-source.md`
+- 当前实现：
+  - 账号配置 `email_code_api` 时使用 GET 请求，不再读取共享 IMAP 收件箱。
+  - 支持用户提供的 JSON 完整邮件响应，归一化为现有状态匹配所需的邮件结构。
+  - 没有 `email_code_api` 的账号输出“跳过查询”，不调用 IMAP、不改变状态。
+  - API 失败或只返回验证码时计入失败，不回退 IMAP。
+  - 进度日志显示具体账号的邮箱 API 来源，汇总显示跳过数量。
+- 真实 API 验证：
+  - `http://5.253.38.136:8080/code?email=reflex-fire-4z@icloud.com` 返回 `subject`、`body`、`received_at` 等完整邮件字段。
+  - 归一化后的邮件可识别 `You've successfully subscribed to ChatGPT Plus` 文案。
+- 验证结果：
+  - API 邮件归一化、Plus 状态服务、验活服务专项测试通过。
+  - 批量 JSON/SSE API 回归测试通过。
+  - 全量 JavaScript 测试 `node --test test/*.test.js` 通过，344/344。
+  - `node --check` 通过：`src/replacementEmailApiService.js`、`src/replacementPlusStatusService.js`、`src/accountHealthcheckService.js`、`src/server.js`、`web/app.js`。
+  - `git diff --check` 通过。
+  - 真实邮箱 API 返回 Plus 邮件并被匹配为 `matched: true`；未写入数据库。
+  - `13100` 服务已重启，当前监听进程 PID 为 `42440`。
+- 注意：只配置验证码-only 接口的账号不能用于 Plus/封禁邮件判断；需要接口返回完整邮件内容。

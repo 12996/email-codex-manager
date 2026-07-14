@@ -625,22 +625,22 @@ async function registerAccount(account) {
 }
 
 async function healthcheckBannedAccounts() {
-  if (!confirm('确认对 plus_active、cpa_mounted、for_sale、sold 状态账号执行一键验活？每个账号只检查最近 5 封邮件。')) return;
+  if (!confirm('确认对 plus_active、cpa_mounted、for_sale、sold 状态账号执行一键验活？只查询已配置 email_code_api 的账号，未配置的账号会跳过。')) return;
   await runProgressAction({
     title: '一键验活进度',
     endpoint: '/replacement-accounts/healthcheck-banned',
     activityTitle: '一键验活',
-    formatSummary: (result) => `检测 ${result.checked || 0} 个，新封禁 ${result.banned || 0} 个，未命中 ${result.clean || 0} 个，失败 ${result.failed || 0} 个`,
+    formatSummary: (result) => `检测 ${result.checked || 0} 个，新封禁 ${result.banned || 0} 个，未命中 ${result.clean || 0} 个，跳过 ${result.skipped || 0} 个，失败 ${result.failed || 0} 个`,
   });
 }
 
 async function checkPlusStatusAccounts() {
-  if (!confirm('确认只查询当前“已注册”状态账号的 Plus 状态吗？')) return;
+  if (!confirm('确认只查询当前“已注册”且配置 email_code_api 的账号 Plus 状态吗？未配置的账号会跳过。')) return;
   await runProgressAction({
     title: '查询 Plus 状态进度',
     endpoint: '/replacement-accounts/check-plus-status',
     activityTitle: '查询 Plus 状态',
-    formatSummary: (result) => `查询 ${result.checked || 0} 个，Plus ${result.plus || 0} 个，仍为已注册 ${result.registered || 0} 个，失败 ${result.failed || 0} 个`,
+    formatSummary: (result) => `查询 ${result.checked || 0} 个，Plus ${result.plus || 0} 个，仍为已注册 ${result.registered || 0} 个，跳过 ${result.skipped || 0} 个，失败 ${result.failed || 0} 个`,
   });
 }
 

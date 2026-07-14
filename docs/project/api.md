@@ -1170,11 +1170,11 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 后端行为：
 
 1. 筛选未软删除且状态为 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 的补号账号。
-2. 每个账号读取对应收件箱最近 5 封邮件。
-3. Gmail 和 Gmail plus alias 账号读取主 Gmail 收件箱；iCloud 账号读取 `ICLOUD_CODE_GMAIL_ACCOUNT` 对应 Gmail 收件箱。
+2. 只处理配置了非空 `email_code_api` 的账号；没有配置的账号直接跳过，不读取 IMAP 或默认 Gmail 收件箱。
+3. 对每个可查询账号 GET 请求其 `email_code_api`，读取接口返回的完整邮件内容。
 4. 邮件正文、摘要或主题同时包含目标账号邮箱、`Your account has been deactivated`，以及 `violated our Terms and Usage Policies` 或 `This means your account can no longer be used` 时，判定账号已封禁。
 5. 命中后写入 `status = banned`，并将 `status_note` 写为“一键验活检测到 ChatGPT deactivation 邮件”。
-6. 单个账号 IMAP 失败或收件箱未配置只计入失败结果，不影响其他账号，不会改变该账号状态。
+6. 单个账号邮箱 API 失败或未返回完整邮件只计入失败结果，不影响其他账号，不会改变该账号状态，也不会回退到 IMAP。
 
 成功响应：
 
@@ -1183,6 +1183,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
   "ok": true,
   "result": {
     "checked": 2,
+    "skipped": 1,
     "banned": 1,
     "clean": 1,
     "failed": 0,
@@ -1200,7 +1201,10 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
         "email": "clean@example.com"
       }
     ],
-    "failedAccounts": []
+    "failedAccounts": [],
+    "skippedAccounts": [
+      { "id": 3, "email": "no-api@example.com" }
+    ]
   }
 }
 ```
@@ -1209,8 +1213,8 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 
 - `start`：任务开始和候选账号数量。
 - `account-start`：某个账号开始处理。
-- `account-step`：正在读取收件箱或匹配邮件。
-- `account-result`：该账号命中、未命中或失败；包含 `email`、`outcome`、`status` 和 `message`。
+- `account-step`：正在读取邮箱 API 或匹配邮件。
+- `account-result`：该账号命中、未命中、跳过或失败；包含 `email`、`outcome`、`status` 和 `message`。
 - `complete`：任务完成，`result` 字段与普通 JSON 响应相同。
 - `error`：服务级错误。
 
@@ -1220,14 +1224,21 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 
 后端行为：
 
-1. Gmail 和 Gmail plus alias 账号读取主 Gmail 收件箱；iCloud 账号读取 `ICLOUD_CODE_GMAIL_ACCOUNT` 对应 Gmail 收件箱。
-2. 每个账号读取收件箱最近 30 封邮件，并把 `targetEmail` 传给邮件读取服务。
+1. 只查询未软删除且当前状态为 `registered`、并配置非空 `email_code_api` 的账号；没有配置的账号直接跳过，不读取 IMAP 或默认 Gmail 收件箱。
+2. 每个可查询账号 GET 请求自己的 `email_code_api`，读取接口返回的完整邮件内容；`targetEmail` 用于目标收件人校验。
 3. 主题、预览、正文或 HTML 同时包含 `You've successfully subscribed to ChatGPT Plus`、`ChatGPT Plus Subscription` 和 `The OpenAI Team` 时，判定为 Plus 订阅邮件。
 4. 如果邮件包含收件人地址，则还必须包含目标账号邮箱，避免共享 iCloud 收件箱串号。
 5. 命中后写入 `status = plus_active`、`status_updated_at` 和 `status_note = Plus 状态查询命中订阅邮件`，并清空 `last_error`。
 6. 未命中时状态保持 `registered`。
-7. 单个账号 IMAP 失败或收件箱未配置时状态保持 `registered`，并将失败原因写入 `last_error`；单个失败不影响其他账号。
-8. `email_code_api` 仍只用于验证码流程，本接口不把它当作完整邮件来源。
+7. 单个账号邮箱 API 失败或未返回完整邮件时状态保持 `registered`，并将失败原因写入 `last_error`；单个失败不影响其他账号，也不回退到 IMAP。
+8. 没有 `email_code_api` 的账号状态保持 `registered`，计入 `skipped`，不计入 `checked`。
+
+邮箱 API 响应要求：
+
+- 请求方式为 `GET`，URL 使用补号账号行中保存的完整 `email_code_api`，系统不会再为该 URL 拼接邮箱参数。
+- 响应可以是完整邮件 JSON 对象、邮件数组、HTML 或纯文本；JSON 对象至少应包含 `subject`、`body`、`bodyHtml`、`bodyText`、`html`、`text`、`content` 中的一个字段。
+- 例如：`{"email":"user@icloud.com","subject":"ChatGPT - Your new plan","received_at":"2026-07-14T10:23:21Z","body":"<html>...</html>"}`。
+- 只有 `{ "code": "123456" }` 这类验证码-only 响应不能用于 Plus 状态判断，会计入失败，不会回退到 IMAP。
 
 成功响应：
 
@@ -1236,6 +1247,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
   "ok": true,
   "result": {
     "checked": 2,
+    "skipped": 1,
     "plus": 1,
     "registered": 1,
     "failed": 0,
@@ -1250,7 +1262,10 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
     "registeredAccounts": [
       { "id": 2, "email": "clean@example.com" }
     ],
-    "failedAccounts": []
+    "failedAccounts": [],
+    "skippedAccounts": [
+      { "id": 3, "email": "no-api@example.com" }
+    ]
   }
 }
 ```

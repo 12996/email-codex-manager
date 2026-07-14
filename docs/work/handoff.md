@@ -2,13 +2,22 @@
 
 状态：active
 
+## 2026-07-14 补号状态检查使用账号邮箱 API
+
+- 来源工作日志：`docs/work/2026-07-14-replacement-status-email-api-source.md`
+- change：`docs/changes/CHG-080-replacement-status-email-api-source.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：Plus 状态查询和一键验活现在只使用每个补号账号自己的 `email_code_api`。没有配置 API 的账号直接跳过，不读取 IMAP、`ICLOUD_CODE_GMAIL_ACCOUNT` 或其他共享收件箱；API 请求失败或只返回验证码时计入失败且不回退。
+- 验证：真实 `/code?email=...` 接口已确认返回完整邮件并命中 Plus 文案；共享 API 归一化、Plus/验活服务、JSON/SSE API 测试已通过。全量 JavaScript 测试 `node --test test/*.test.js` 通过 344/344；相关 `node --check` 和 `git diff --check` 通过；`13100` 已重启，当前 PID `42440`。
+- 下一步：在 `/replacement-ui` 点击两个按钮确认日志显示对应账号 API 和跳过信息；没有 `email_code_api` 的账号应显示跳过，不应出现 IMAP 收件箱日志。
+- PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
+
 ## 2026-07-14 补号状态查询实时进度窗口
 
 - 来源工作日志：`docs/work/2026-07-14-replacement-healthcheck-progress-window.md`
 - change：`docs/changes/CHG-079-replacement-healthcheck-progress-window.md`，状态 `implemented`，尚未合并到 PRD。
-- 当前进展：一键验活和查询 Plus 状态现在支持 SSE 实时进度；页面点击后立即打开“执行进度”窗口，逐个输出开始查询、读取邮箱、命中/未命中/失败，完成后保留汇总。原有 JSON API 保持兼容。Plus 命中仍更新为 `plus_active`，封禁命中仍更新为 `banned`。
+- 当前进展：一键验活和查询 Plus 状态现在支持 SSE 实时进度；页面点击后立即打开“执行进度”窗口，逐个输出开始查询、读取邮箱 API、跳过、命中/未命中/失败，完成后保留汇总。原有 JSON API 保持兼容。Plus 命中仍更新为 `plus_active`，封禁命中仍更新为 `banned`。
 - 验证：服务进度事件测试、API JSON/SSE 测试和前端静态测试已通过；全量 JavaScript 测试 `node --test test/*.test.js` 通过 340/340；相关 `node --check` 和 `git diff --check` 通过。
-- 风险：关闭进度窗口不会取消后端任务；真实 IMAP 查询依赖 Gmail App Password 和 iCloud 默认 Gmail 配置。
+- 风险：关闭进度窗口不会取消后端任务；状态检查现在依赖账号自己的 `email_code_api` 返回完整邮件。
 - 下一步：重启正在运行的 13100 服务后，在页面点击两个按钮验证实时日志。
 - PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
 
@@ -16,9 +25,9 @@
 
 - 来源工作日志：`docs/work/2026-07-14-replacement-plus-status-check.md`
 - change：`docs/changes/CHG-078-replacement-plus-status-check.md`，状态 `implemented`，尚未合并到 PRD。
-- 当前进展：新增 `POST /replacement-accounts/check-plus-status` 和 `src/replacementPlusStatusService.js`，只查询 `registered` 状态账号最近 30 封 inbox 邮件；同时匹配 `You've successfully subscribed to ChatGPT Plus`、`ChatGPT Plus Subscription`、`The OpenAI Team`，命中后更新为 `plus_active`。未命中保持 `registered`，失败保持 `registered` 并记录 `last_error`。补号管理页新增“查询 Plus 状态”按钮。
+- 当前进展：新增 `POST /replacement-accounts/check-plus-status` 和 `src/replacementPlusStatusService.js`，只查询 `registered` 且配置邮箱 API 的账号；同时匹配 `You've successfully subscribed to ChatGPT Plus`、`ChatGPT Plus Subscription`、`The OpenAI Team`，命中后更新为 `plus_active`。未命中保持 `registered`，无 API 的账号跳过，失败保持 `registered` 并记录 `last_error`。补号管理页新增“查询 Plus 状态”按钮。
 - 验证：Plus 状态专项、仓储、API、前端组合测试通过 78/78；全量 JavaScript 测试 `node --test test/*.test.js` 通过 337/337；相关 JS `node --check` 和 `git diff --check` 通过。
-- 风险：真实查询依赖 Gmail App Password；iCloud 账号依赖 `ICLOUD_CODE_GMAIL_ACCOUNT`。用户提供的 `/code?email=...` 属于验证码接口，不作为完整订阅邮件来源。
+- 风险：真实查询依赖每个账号的 `email_code_api` 返回完整订阅邮件；只返回 6 位验证码的接口不能用于状态判断。
 - 下一步：重启正在运行的 13100 服务后，在 `http://localhost:13100/replacement-ui` 点击“查询 Plus 状态”做真实邮箱验收。
 - PRD 合并提醒：当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
 
@@ -35,7 +44,7 @@
 
 - 来源工作日志：`docs/work/2026-07-10-banned-email-healthcheck-button.md`
 - change：`docs/changes/CHG-076-banned-email-healthcheck-button.md`，状态 `implemented`，尚未合并到 PRD。
-- 当前进展：补号管理页已新增“一键验活”按钮；后端新增 `POST /replacement-accounts/healthcheck-banned`。接口只检测 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 状态账号，每个账号读取最近 5 封邮件；Gmail plus alias 路由到主 Gmail，iCloud 路由到 `ICLOUD_CODE_GMAIL_ACCOUNT`。邮件同时包含目标邮箱和 ChatGPT deactivation 稳定文案时，账号自动标记为 `banned`，状态备注写入“一键验活检测到 ChatGPT deactivation 邮件”。
+- 当前进展：补号管理页已新增“一键验活”按钮；后端新增 `POST /replacement-accounts/healthcheck-banned`。接口只检测 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 且配置邮箱 API 的账号；没有 API 的账号跳过。邮件同时包含目标邮箱和 ChatGPT deactivation 稳定文案时，账号自动标记为 `banned`，状态备注写入“一键验活检测到 ChatGPT deactivation 邮件”。
 - 验证：`node --test test\accountHealthcheckService.test.js` 通过 3/3；`node --test test\replacementAccountsApi.test.js` 通过 22/22；`node --test test\replacementAccountsWeb.test.js` 通过 12/12。
 - 待办：用真实后台点击“一键验活”做一次人工验收；当前未合并的 `implemented` change 已超过 5 个，应安排 PRD 基线合并。
 

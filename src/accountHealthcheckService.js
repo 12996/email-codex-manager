@@ -1,4 +1,4 @@
-import { deriveMainGmailAccount } from './imapService.js';
+import { fetchReplacementEmailMessages } from './replacementEmailApiService.js';
 
 const ELIGIBLE_BANNED_HEALTHCHECK_STATUSES = new Set([
   'plus_active',
@@ -19,7 +19,8 @@ export function messageIndicatesChatGptDeactivation(message, targetEmail) {
     message?.bodyHtml,
   ].join('\n').toLowerCase();
 
-  return text.includes(email)
+  const recipients = messageRecipients(message);
+  return (text.includes(email) || recipients.includes(email))
     && text.includes('your account has been deactivated')
     && (
       text.includes('violated our terms and usage policies')
@@ -28,56 +29,65 @@ export function messageIndicatesChatGptDeactivation(message, targetEmail) {
 }
 
 export async function runBannedEmailHealthcheck({
-  accounts,
   replacementAccounts,
-  mailService,
-  icloudCodeDefaultGmailAccount = '',
+  emailApiService = { fetchMessages: fetchReplacementEmailMessages },
   onProgress,
 } = {}) {
   const candidates = listCandidates(replacementAccounts);
+  const queryable = candidates.filter(hasEmailCodeApi);
+  const skipped = candidates.filter((account) => !hasEmailCodeApi(account));
   reportProgress(onProgress, {
     type: 'start',
     operation: 'healthcheck-banned',
     total: candidates.length,
-    message: `开始一键验活，共 ${candidates.length} 个账号`,
+    checked: queryable.length,
+    skipped: skipped.length,
+    message: `开始一键验活：符合状态 ${candidates.length} 个，已配置 email_code_api ${queryable.length} 个，跳过 ${skipped.length} 个`,
   });
   const result = {
-    checked: candidates.length,
+    checked: queryable.length,
+    skipped: skipped.length,
     banned: 0,
     clean: 0,
     failed: 0,
     bannedAccounts: [],
     cleanAccounts: [],
     failedAccounts: [],
+    skippedAccounts: skipped.map((account) => ({ id: account.id, email: account.email })),
   };
 
-  for (const [index, account] of candidates.entries()) {
+  for (const account of skipped) {
+    reportProgress(onProgress, {
+      type: 'account-result',
+      operation: 'healthcheck-banned',
+      id: account.id,
+      email: account.email,
+      outcome: 'skipped',
+      status: account.status,
+      message: '跳过验活：未配置 email_code_api',
+    });
+  }
+
+  for (const [index, account] of queryable.entries()) {
     reportProgress(onProgress, {
       type: 'account-start',
       operation: 'healthcheck-banned',
       index: index + 1,
-      total: candidates.length,
+      total: queryable.length,
       id: account.id,
       email: account.email,
-      message: `开始验活（${index + 1}/${candidates.length}）`,
+      message: `开始验活（${index + 1}/${queryable.length}）`,
     });
     try {
-      const mailboxEmail = mailboxEmailForAccount(account.email, icloudCodeDefaultGmailAccount);
-      const mailbox = accounts.getAccountByGmailEmail(deriveMainGmailAccount(mailboxEmail));
-      if (!mailbox) {
-        throw new Error(`未配置验活收件箱：${mailboxEmail}`);
-      }
-
       reportProgress(onProgress, {
         type: 'account-step',
         operation: 'healthcheck-banned',
         id: account.id,
         email: account.email,
-        message: `正在读取收件箱：${mailboxEmail}`,
+        message: `正在读取邮箱 API：${displayEmailApi(account.email_code_api)}`,
       });
 
-      const messages = await mailService.fetchMessages(mailbox, {
-        readLocation: 'inbox',
+      const messages = await emailApiService.fetchMessages(account, {
         limit: 5,
         targetEmail: account.email,
       });
@@ -155,18 +165,34 @@ function listCandidates(replacementAccounts) {
     .filter((account) => isBannedHealthcheckEligibleStatus(account.status));
 }
 
-function mailboxEmailForAccount(email, icloudCodeDefaultGmailAccount) {
-  const normalized = normalizeEmail(email);
-  if (normalized.endsWith('@icloud.com')) {
-    const mailbox = normalizeEmail(icloudCodeDefaultGmailAccount);
-    if (!mailbox) throw new Error('未配置 iCloud 验活 Gmail 收件箱');
-    return mailbox;
-  }
-  return deriveMainGmailAccount(normalized);
-}
-
 function normalizeEmail(value) {
   return String(value || '').trim().toLowerCase();
+}
+
+function messageRecipients(message) {
+  return [
+    ...(message?.toAddresses || []),
+    ...(message?.ccAddresses || []),
+    ...(message?.deliveredToAddresses || []),
+    ...(message?.recipients || []),
+  ]
+    .map(normalizeEmail)
+    .filter(Boolean);
+}
+
+function hasEmailCodeApi(account) {
+  return Boolean(String(account?.email_code_api || '').trim());
+}
+
+function displayEmailApi(apiUrl) {
+  try {
+    const url = new URL(String(apiUrl));
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    return String(apiUrl || '').trim();
+  }
 }
 
 function reportProgress(onProgress, event) {

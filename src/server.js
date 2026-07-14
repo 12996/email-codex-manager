@@ -24,6 +24,7 @@ import {
   testConnection,
 } from './imapService.js';
 import { createReplacementAccountRepository } from './replacementAccounts.js';
+import { fetchReplacementEmailMessages } from './replacementEmailApiService.js';
 import {
   activationMethodError,
   createReplacementActivationMethodRepository,
@@ -46,6 +47,7 @@ export function createApp({
   }),
   replacementServices = createReplacementServices({ automationRuns: replacementAutomationRuns }),
   mailService = { fetchMessages, testConnection },
+  replacementEmailApiService = { fetchMessages: fetchReplacementEmailMessages },
   cpaCredentialMonitor = null,
   cpaRepairWorker = null,
   icloudCodeDefaultGmailAccount = config.icloudCodeDefaultGmailAccount,
@@ -329,8 +331,7 @@ export function createApp({
     const run = (onProgress) => runBannedEmailHealthcheck({
       accounts,
       replacementAccounts,
-      mailService,
-      icloudCodeDefaultGmailAccount,
+      emailApiService: replacementEmailApiService,
       onProgress,
     });
     if (wantsProgressStream(req)) {
@@ -349,8 +350,7 @@ export function createApp({
     const run = (onProgress) => runPlusStatusCheck({
       accounts,
       replacementAccounts,
-      mailService,
-      icloudCodeDefaultGmailAccount,
+      emailApiService: replacementEmailApiService,
       onProgress,
     });
     if (wantsProgressStream(req)) {
