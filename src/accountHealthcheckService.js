@@ -122,6 +122,7 @@ export async function runBannedEmailHealthcheck({
 
       result.clean += 1;
       result.cleanAccounts.push({ id: account.id, email: account.email });
+      replacementAccounts.recordOperationSuccess?.(account.id);
       reportProgress(onProgress, {
         type: 'account-result',
         operation: 'healthcheck-banned',
@@ -132,6 +133,7 @@ export async function runBannedEmailHealthcheck({
         message: '未命中封禁邮件，状态保持不变',
       });
     } catch (error) {
+      replacementAccounts.recordOperationFailure?.(account.id, '一键验活', error.message || '验活失败');
       result.failed += 1;
       result.failedAccounts.push({
         id: account.id,

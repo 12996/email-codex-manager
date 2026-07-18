@@ -40,6 +40,83 @@ function requireRegisterModuleWithStubs() {
   }
 }
 
+function makeAboutYouPageWithNumericAge() {
+  const ageLocator = {
+    async isVisible() {
+      return true;
+    },
+    async evaluate(fn) {
+      return fn({
+        disabled: false,
+        readOnly: false,
+        type: 'number',
+        name: 'age',
+        id: 'age',
+        placeholder: 'Age',
+        autocomplete: 'off',
+        inputMode: 'numeric',
+        ariaLabel: 'Age',
+        ariaDescription: '',
+        maxLength: -1,
+      });
+    },
+  };
+  const hiddenLocator = {
+    async isVisible() {
+      return false;
+    },
+    async isEnabled() {
+      return false;
+    },
+    async evaluate() {
+      return null;
+    },
+  };
+
+  return {
+    url: () => 'https://auth.openai.com/about-you',
+    title: async () => 'A few details help us set up your account. - OpenAI',
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return 'A few details help us set up your account. Full name Age Finish creating account';
+          },
+        };
+      }
+      if (selector === 'input[inputmode="numeric"]') {
+        return {
+          async count() {
+            return 1;
+          },
+          first() {
+            return ageLocator;
+          },
+          nth() {
+            return ageLocator;
+          },
+        };
+      }
+      return {
+        async count() {
+          return 0;
+        },
+        first() {
+          return hiddenLocator;
+        },
+        nth() {
+          return hiddenLocator;
+        },
+      };
+    },
+    async textContent() {
+      return 'A few details help us set up your account. Full name Age Finish creating account';
+    },
+    async waitForTimeout() {},
+    async waitForLoadState() {},
+  };
+}
+
 test('registration email verification uses POST latest API and does not log code', async () => {
   const { fetchRegistrationEmailVerificationCodeOnce } = requireRegisterModuleWithStubs();
   const calls = [];
@@ -195,13 +272,8 @@ test('registration success saves access token file named by email without loggin
     now: () => '2026-06-24T00:00:00.000Z',
   });
 
-  assert.equal(require('node:path').basename(result.path), 'user+tag@example.com.json');
-  assert.deepEqual(JSON.parse(require('node:fs').readFileSync(result.path, 'utf8')), {
-    email: 'user+tag@example.com',
-    access_token: 'secret-access-token',
-    created_at: '2026-06-24T00:00:00.000Z',
-    source: 'chatgpt_api_auth_session',
-  });
+  assert.equal(require('node:path').basename(result.path), 'user+tag@example.com.txt');
+  assert.equal(require('node:fs').readFileSync(result.path, 'utf8'), 'secret-access-token');
   assert.equal(logs.some((line) => line.includes('secret-access-token')), false);
   assert.equal(logs.some((line) => line.includes(result.path)), true);
 });
@@ -540,6 +612,39 @@ test('findVisibleOtpSelector ignores readonly email text input and selects edita
 
   const selector = await findVisibleOtpSelector(page, 1);
   assert.equal(selector, ':nth-match(input[type="text"], 2)');
+});
+
+test('about-you age input is not classified as an OTP input', async () => {
+  const { classifyRegistrationPage, findVisibleOtpSelector } = requireRegisterModuleWithStubs();
+  const page = makeAboutYouPageWithNumericAge();
+
+  assert.equal(await findVisibleOtpSelector(page, 1), '');
+  const state = await classifyRegistrationPage(page, { passwordSubmitted: true, timeoutMs: 100 });
+  assert.equal(state.state, 'profile');
+});
+
+test('waitForOtpInputReady stops when the profile page is already reached', async () => {
+  const { waitForOtpInputReady } = requireRegisterModuleWithStubs();
+  const page = makeAboutYouPageWithNumericAge();
+
+  await assert.rejects(
+    () => waitForOtpInputReady(page, async () => false, async () => false, 1000),
+    /OTP_ALREADY_COMPLETED/
+  );
+});
+
+test('initial OTP wait treats an already reached profile page as completed', async () => {
+  const { waitForOtpStageOrCompleted } = requireRegisterModuleWithStubs();
+  const page = makeAboutYouPageWithNumericAge();
+
+  const result = await waitForOtpStageOrCompleted(
+    page,
+    async () => false,
+    async () => false,
+    1000,
+  );
+
+  assert.equal(result, 'already-completed');
 });
 
 test('findVisiblePasswordSelector ignores password input that Playwright does not consider enabled', async () => {
@@ -1237,6 +1342,17 @@ test('submitRegistrationPassword clears existing input before typing database pa
           },
         };
       }
+      if (selector === 'button[type="submit"]') {
+        return {
+          first() {
+            return this;
+          },
+          async waitFor() {},
+          async click() {
+            clicks.push(['submit.click']);
+          },
+        };
+      }
       return {
         async count() {
           return selector === 'input[name="new-password"]' ? 1 : 0;
@@ -1292,6 +1408,137 @@ test('submitRegistrationPassword clears existing input before typing database pa
   assert.deepEqual(clicks, [['input.click'], ['submit.click']]);
 });
 
+test('submitRegistrationPassword treats a detached submit button as completed when page entered OTP', async () => {
+  const { submitRegistrationPassword } = requireRegisterModuleWithStubs();
+  const originalRandom = Math.random;
+  let stage = 'password';
+  let typedValue = '';
+  let locatorClickCount = 0;
+
+  const makeLocator = (selector) => {
+    const isPassword = selector === 'input[name="new-password"]';
+    const isOtp = selector.includes('one-time-code')
+      || selector.includes('inputmode="numeric"')
+      || selector === 'input[name="code"]'
+      || selector === 'input[type="tel"]'
+      || selector === 'input[type="text"]';
+    const locator = {
+      async count() {
+        return (isPassword && stage === 'password') || (isOtp && stage === 'otp') ? 1 : 0;
+      },
+      first() {
+        return locator;
+      },
+      async waitFor() {
+        if (!await locator.isVisible()) throw new Error('not visible');
+      },
+      async isVisible() {
+        if (isPassword) return stage === 'password';
+        if (isOtp) return stage === 'otp';
+        return false;
+      },
+      async isEnabled() {
+        return true;
+      },
+      async evaluate(fn) {
+        if (isPassword) {
+          return fn({
+            disabled: false,
+            readOnly: false,
+            type: 'password',
+            name: 'new-password',
+            value: typedValue,
+            getAttribute(name) {
+              return name === 'type' ? 'password' : '';
+            },
+          });
+        }
+        if (isOtp && stage === 'otp') {
+          return fn({
+            disabled: false,
+            readOnly: false,
+            type: 'text',
+            name: 'code',
+            maxLength: 6,
+            getAttribute(name) {
+              return name === 'autocomplete' ? 'one-time-code' : '';
+            },
+          });
+        }
+        return false;
+      },
+      async click() {},
+      async fill(value) {
+        typedValue = String(value);
+      },
+      async type(char) {
+        typedValue += char;
+      },
+    };
+    return locator;
+  };
+
+  const submitLocator = {
+    first() {
+      return submitLocator;
+    },
+    async waitFor() {},
+    async hover() {},
+    async click() {
+      locatorClickCount += 1;
+      stage = 'otp';
+      throw new Error('elementHandle.click: Element is not attached to the DOM');
+    },
+  };
+
+  const page = {
+    url() {
+      return stage === 'otp'
+        ? 'https://auth.openai.com/email-verification'
+        : 'https://auth.openai.com/create-account/password';
+    },
+    async title() {
+      return stage === 'otp' ? 'Check your inbox - OpenAI' : 'Create password - OpenAI';
+    },
+    locator(selector) {
+      if (selector === 'body') {
+        return {
+          async textContent() {
+            return stage === 'otp' ? 'Check your inbox Code Continue' : 'Create your password';
+          },
+        };
+      }
+      if (selector === 'button[type="submit"]') return submitLocator;
+      return makeLocator(selector);
+    },
+    async textContent() {
+      return stage === 'otp' ? 'Check your inbox Code Continue' : 'Create your password';
+    },
+    async waitForSelector() {
+      return {
+        async hover() {},
+        async click() {
+          stage = 'otp';
+          throw new Error('elementHandle.click: Element is not attached to the DOM');
+        },
+      };
+    },
+    async waitForTimeout() {},
+  };
+
+  try {
+    Math.random = () => -1;
+    const result = await submitRegistrationPassword(page, 'DbPass12!', {
+      logger: { log() {}, warn() {} },
+      timeoutMs: 100,
+    });
+    assert.equal(result, true);
+    assert.equal(locatorClickCount, 1);
+  } finally {
+    Math.random = originalRandom;
+  }
+});
+
 test('submitRegistrationPassword fills OpenAI login password input before OTP polling', async () => {
   const { submitRegistrationPassword } = requireRegisterModuleWithStubs();
   let value = '';
@@ -1305,6 +1552,15 @@ test('submitRegistrationPassword fills OpenAI login password input before OTP po
           async textContent() {
             return 'Enter your password';
           },
+        };
+      }
+      if (selector === 'button[type="submit"]') {
+        return {
+          first() {
+            return this;
+          },
+          async waitFor() {},
+          async click() {},
         };
       }
       return {

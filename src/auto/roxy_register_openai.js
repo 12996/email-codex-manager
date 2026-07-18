@@ -109,7 +109,7 @@ function registerWarn(logger, step, message, details = '') {
 function safeRegistrationTokenFileName(email) {
     const normalized = String(email || '').trim().toLowerCase();
     const safe = normalized.replace(/[<>:"/\\|?*\x00-\x1F]/g, '_').replace(/^\.+$/, '_');
-    return `${safe || 'unknown-email'}.json`;
+    return `${safe || 'unknown-email'}.txt`;
 }
 
 function saveRegistrationAccessTokenFile(options = {}) {
@@ -127,15 +127,9 @@ function saveRegistrationAccessTokenFile(options = {}) {
         || DEFAULT_REGISTRATION_TOKEN_OUTPUT_DIR;
     fs.mkdirSync(outputRootDir, { recursive: true });
     const filePath = path.join(outputRootDir, safeRegistrationTokenFileName(email));
-    const payload = {
-        email,
-        access_token: accessToken,
-        created_at: typeof options.now === 'function' ? options.now() : new Date().toISOString(),
-        source: 'chatgpt_api_auth_session'
-    };
-    fs.writeFileSync(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+    fs.writeFileSync(filePath, accessToken, 'utf8');
     registerLog(options.logger || console, 'registration-token', 'action=saved', `path=${filePath}`);
-    return { path: filePath, payload };
+    return { path: filePath };
 }
 
 function maskSensitive(value) {
@@ -646,8 +640,21 @@ async function humanFillInput(page, selector, text, options = {}) {
     return await locator.evaluate((el) => String(el.value || '').length).catch(() => null);
 }
 
-async function humanClick(page, selector) {
-    const element = await page.waitForSelector(selector, { visible: true });
+async function humanClick(page, selector, options = {}) {
+    const timeout = Number(options.timeoutMs || 30000);
+    if (typeof page.locator === 'function') {
+        const locator = page.locator(selector);
+        const target = typeof locator.first === 'function' ? locator.first() : locator;
+        await target.waitFor({ state: 'visible', timeout });
+        if (typeof target.hover === 'function') {
+            await target.hover({ timeout });
+        }
+        await sleep(Math.random() * 500 + 200);
+        await target.click({ timeout });
+        return;
+    }
+
+    const element = await page.waitForSelector(selector, { visible: true, timeout });
     await element.hover();
     await sleep(Math.random() * 500 + 200);
     await element.click();
@@ -830,8 +837,9 @@ const PASSWORD_INPUT_SELECTORS = [
 const MAX_OTP_RETRIES = 5;
 const OTP_RETRY_EXCEEDED_ERROR = `验证码重试超过 ${MAX_OTP_RETRIES} 次，需要重新上号`;
 const OTP_REFETCH_AFTER_RECOVERY = 'OTP_REFETCH_AFTER_RECOVERY';
+const OTP_ALREADY_COMPLETED = 'OTP_ALREADY_COMPLETED';
 
-async function isUsableOtpInput(locator, selector) {
+async function isUsableOtpInput(locator) {
     const visible = await locator.isVisible().catch(() => false);
     if (!visible) return false;
 
@@ -859,12 +867,6 @@ async function isUsableOtpInput(locator, selector) {
     if (meta.disabled || meta.readOnly) return false;
     if (['hidden', 'email', 'password', 'search'].includes(meta.type)) return false;
 
-    const selectorText = String(selector || '').toLowerCase();
-    if (selectorText.includes('one-time-code') || selectorText.includes('inputmode="numeric"') || selectorText.includes("inputmode='numeric'")) {
-        return true;
-    }
-    if (meta.type === 'tel' || /numeric|decimal/i.test(meta.inputMode)) return true;
-
     const marker = [
         meta.name,
         meta.id,
@@ -873,7 +875,11 @@ async function isUsableOtpInput(locator, selector) {
         meta.ariaLabel,
         meta.ariaDescription
     ].join(' ').toLowerCase();
+    if (meta.autocomplete === 'one-time-code') {
+        return true;
+    }
     if (/otp|code|verification|verify|security|验证码|代码/.test(marker)) return true;
+    if (meta.type === 'tel' && meta.maxLength > 0 && meta.maxLength <= 8) return true;
     if ((meta.type === 'text' || !meta.type) && meta.maxLength > 0 && meta.maxLength <= 8) return true;
 
     return false;
@@ -956,6 +962,10 @@ async function fetchRegistrationEmailVerificationCode(page, email, options = {},
 }
 
 async function findVisibleOtpSelector(page, timeout = 30000) {
+    const currentUrl = String(page.url?.() || '');
+    if (currentUrl.includes('/about-you')) {
+        return '';
+    }
     const deadline = Date.now() + timeout;
 
     while (Date.now() < deadline) {
@@ -967,7 +977,7 @@ async function findVisibleOtpSelector(page, timeout = 30000) {
             const count = Math.min(Math.max(0, Number(matchedCount) || 0), 10);
             for (let index = 0; index < count; index += 1) {
                 const candidate = index === 0 || typeof locator.nth !== 'function' ? locator.first() : locator.nth(index);
-                if (await isUsableOtpInput(candidate, selector)) {
+                if (await isUsableOtpInput(candidate)) {
                     return index === 0 ? selector : `:nth-match(${selector}, ${index + 1})`;
                 }
             }
@@ -1138,6 +1148,10 @@ async function classifyRegistrationPage(page, options = {}) {
         return { state: 'captcha', evidence };
     }
 
+    if (evidence.url.includes('/about-you')) {
+        return { state: 'profile', evidence };
+    }
+
     const passwordSelector = await findVisiblePasswordSelector(page, timeoutMs).catch(() => '');
     if (passwordSelector && !isEmailVerificationUrl(evidence.url)) {
         const state = evidence.url.includes('/log-in/password') || /enter your password/i.test(evidence.bodySnippet)
@@ -1301,7 +1315,38 @@ async function submitRegistrationPassword(page, registrationPassword, options = 
     const filledLength = await humanFillInput(page, passwordSelector, registrationPassword, options);
     logger.log?.(`🔒 [Password] 密码输入框已写入 len=${filledLength ?? 'unknown'} expectedLen=${String(registrationPassword || '').length}`);
     await sleep(Math.random() * 1000 + 500);
-    await humanClick(page, 'button[type="submit"]');
+
+    const beforeClickState = await classifyRegistrationPage(page, {
+        passwordSubmitted: true,
+        timeoutMs: Math.min(Number(options.timeoutMs || 1000), 1000)
+    }).catch(() => ({ state: 'unknown', evidence: {} }));
+    const beforeClickUrl = String(beforeClickState.evidence?.url || page.url?.() || '');
+    const passwordSubmissionAlreadyAdvanced = ['otp', 'profile', 'chatgpt-session'].includes(beforeClickState.state)
+        || (beforeClickState.state === 'unknown' && isEmailVerificationUrl(beforeClickUrl));
+    if (passwordSubmissionAlreadyAdvanced) {
+        logger.warn?.(`⚠️ [Password] 页面已离开密码阶段，跳过重复点击：state=${beforeClickState.state} URL=${visibleUrlForLog(beforeClickUrl)}`);
+        return true;
+    }
+    if (!['password-login', 'password-create'].includes(beforeClickState.state)) {
+        throw new Error(`密码提交前页面状态已变化：state=${beforeClickState.state} URL=${visibleUrlForLog(beforeClickUrl)}`);
+    }
+
+    try {
+        await humanClick(page, 'button[type="submit"]', { timeoutMs: Number(options.timeoutMs || 30000) });
+    } catch (error) {
+        const afterClickState = await classifyRegistrationPage(page, {
+            passwordSubmitted: true,
+            timeoutMs: Math.min(Number(options.timeoutMs || 1000), 1000)
+        }).catch(() => ({ state: 'unknown', evidence: {} }));
+        const afterClickUrl = String(afterClickState.evidence?.url || page.url?.() || '');
+        const clickCompletedDuringNavigation = ['otp', 'profile', 'chatgpt-session'].includes(afterClickState.state)
+            || (afterClickState.state === 'unknown' && isEmailVerificationUrl(afterClickUrl));
+        if (clickCompletedDuringNavigation) {
+            logger.warn?.(`⚠️ [Password] 点击期间页面已进入下一阶段，忽略旧元素错误：state=${afterClickState.state} URL=${visibleUrlForLog(afterClickUrl)}`);
+            return true;
+        }
+        throw error;
+    }
     logger.log?.('✅ [密码] 密码设置完成，正在进入验证码阶段...');
     return true;
 }
@@ -1324,6 +1369,9 @@ async function waitForOtpInputReady(page, recoverOperationTimeout, recoverConnec
 
     while (Date.now() < deadline) {
         const pageState = await classifyRegistrationPage(page, { passwordSubmitted: true, timeoutMs: 500 }).catch(() => ({ state: 'unknown' }));
+        if (pageState.state === 'profile' || pageState.state === 'chatgpt-session') {
+            throw new Error(OTP_ALREADY_COMPLETED);
+        }
         if (pageState.state === 'otp') {
             return pageState.otpSelector || await findVisibleOtpSelector(page, 2000);
         }
@@ -1346,6 +1394,9 @@ async function waitForOtpInputReady(page, recoverOperationTimeout, recoverConnec
 
             await page.waitForTimeout(1200);
             const settledState = await classifyRegistrationPage(page, { passwordSubmitted: true, timeoutMs: 500 }).catch(() => ({ state: 'unknown' }));
+            if (settledState.state === 'profile' || settledState.state === 'chatgpt-session') {
+                throw new Error(OTP_ALREADY_COMPLETED);
+            }
             if (settledState.state === 'otp') {
                 return settledState.otpSelector || await findVisibleOtpSelector(page, 2000);
             }
@@ -1416,6 +1467,24 @@ async function waitForOtpInputReady(page, recoverOperationTimeout, recoverConnec
 
     const bodyText = String(await page.textContent('body', { timeout: 3000 }).catch(() => '') || '').slice(0, 500);
     throw new Error(`未找到可见的验证码输入框，页面片段: ${bodyText}`);
+}
+
+async function waitForOtpStageOrCompleted(page, recoverOperationTimeout, recoverConnectionClosed, timeout = 45000, options = {}) {
+    try {
+        await waitForOtpInputReady(
+            page,
+            recoverOperationTimeout,
+            recoverConnectionClosed,
+            timeout,
+            options,
+        );
+        return 'ready';
+    } catch (error) {
+        if (error?.message === OTP_ALREADY_COMPLETED) {
+            return 'already-completed';
+        }
+        throw error;
+    }
 }
 
 // 模块级标记：合并页是否已经把姓名/年龄/生日填过；用于 Step 6 跳过重复填写。
@@ -1891,6 +1960,9 @@ async function submitOtpWithRetry(page, email, maxAttempts = MAX_OTP_RETRIES, op
                 ? await waitForOtpInput()
                 : await findVisibleOtpSelector(page, 30000);
         } catch (error) {
+            if (error && error.message === OTP_ALREADY_COMPLETED) {
+                return lastCode;
+            }
             if (error && error.message === OTP_REFETCH_AFTER_RECOVERY) {
                 if (attempt < maxAttempts) {
                     console.warn(`🔑 [OTP] 页面恢复后需要重新拉取验证码，准备重试 (${attempt}/${maxAttempts})...`);
@@ -1914,6 +1986,14 @@ async function submitOtpWithRetry(page, email, maxAttempts = MAX_OTP_RETRIES, op
         lastCode = code;
         if (beforeAttempt) {
             await beforeAttempt(attempt);
+        }
+
+        const beforeOtpFillState = await classifyRegistrationPage(page, {
+            passwordSubmitted: true,
+            timeoutMs: 300
+        }).catch(() => ({ state: 'unknown' }));
+        if (beforeOtpFillState.state === 'profile' || beforeOtpFillState.state === 'chatgpt-session') {
+            return code;
         }
 
         console.log(`🔑 [OTP] 第 ${attempt} 次提交验证码: [redacted-code]`);
@@ -2409,12 +2489,11 @@ async function runRegistrationFlow() {
             return true;
         };
 
-        await waitForOtpInputReady(page, recoverOperationTimeout, recoverConnectionClosed, 30000, {
+        const otpStage = await waitForOtpStageOrCompleted(page, recoverOperationTimeout, recoverConnectionClosed, 30000, {
             handlePasswordPage: handlePasswordPageDuringOtp,
             refetchAfterPassword: false,
             recoverPasswordPage: false
         });
-        await sleep(Math.random() * 1500 + 1000);
         const fetchCodeFn = async (excludeCode, pollOpts) => fetchRegistrationEmailVerificationCode(page, email, {
             maxRetries: pollOpts.maxRetries,
             codePollMaxAttempts: pollOpts.maxRetries,
@@ -2426,14 +2505,19 @@ async function runRegistrationFlow() {
             logger: console
         }, excludeCode);
 
-        await submitOtpWithRetry(page, email, MAX_OTP_RETRIES, {
-            fetchCode: fetchCodeFn,
-            beforeAttempt: async () => recoverOperationTimeout(),
-            waitForOtpInput: async () => waitForOtpInputReady(page, recoverOperationTimeout, recoverConnectionClosed, 45000, {
-                handlePasswordPage: handlePasswordPageDuringOtp,
-                refetchAfterPassword: true
-            })
-        });
+        if (otpStage === 'already-completed') {
+            console.log('🔑 [Step 5] 已检测到验证码阶段完成，当前已进入后续页面，跳过重复获取和提交验证码。');
+        } else {
+            await sleep(Math.random() * 1500 + 1000);
+            await submitOtpWithRetry(page, email, MAX_OTP_RETRIES, {
+                fetchCode: fetchCodeFn,
+                beforeAttempt: async () => recoverOperationTimeout(),
+                waitForOtpInput: async () => waitForOtpInputReady(page, recoverOperationTimeout, recoverConnectionClosed, 45000, {
+                    handlePasswordPage: handlePasswordPageDuringOtp,
+                    refetchAfterPassword: true
+                })
+            });
+        }
 
         console.log("📝 [Step 6] 正在完善个人资料（如果需要）...");
         await page.waitForTimeout(3000);
@@ -2727,6 +2811,7 @@ module.exports = {
     submitRegistrationPassword,
     advanceEmailVerificationToPassword,
     waitForOtpInputReady,
+    waitForOtpStageOrCompleted,
     waitForOtpSubmitResult,
     submitOtpWithRetry,
     enableChatGptTotpMfa,

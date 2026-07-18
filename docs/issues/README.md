@@ -18,3 +18,6 @@
 | issue-010 | 短信 API 直连访问受限导致 2FA 补号拿不到手机验证码 | resolved | `issue-010-sms-api-direct-request-region-restricted.md` |
 | issue-011 | Roxy 2FA 邮箱提交后阶段识别竞态 | resolved | `issue-011-roxy-2fa-post-email-stage-race.md` |
 | issue-012 | Roxy 2FA session 登录状态判定风险 | resolved | `issue-012-roxy-2fa-session-state-guard.md` |
+| issue-013 | Roxy 注册密码提交阶段元素脱离 DOM | resolved | `issue-013-roxy-registration-password-click-detached.md` |
+| issue-014 | Roxy /about-you 年龄输入框被误识别为 OTP | resolved | `issue-014-roxy-about-you-age-misclassified-as-otp.md` |
+| issue-015 | 补号协议注册外部邮箱验证码 API 不可达 | active | `issue-015-replacement-protocol-email-api-unreachable.md` |

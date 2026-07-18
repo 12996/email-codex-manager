@@ -49,3 +49,30 @@ Roxy OpenAI 注册流程中，OTP 提交后曾把通用 Continue 点击函数返
 - See Also: CHG-080
 
 ---
+
+## [LRN-20260717-001] correction
+
+**Logged**: 2026-07-17T00:00:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+协议注册同一账号的失败重试必须复用首次准备好的 Roxy 指纹和 IP，不应每次重试重新刷新环境。
+
+### Details
+批量协议注册按选中账号串行执行时，账号切换才刷新 Roxy profile、指纹和出口 IP；同一账号的失败重试应保持同一浏览器上下文/代理环境，只重新启动注册子流程。此前方案把每次完整调用都视为重新准备 Roxy，需要修正为“账号级准备一次、尝试级复用”。
+
+### Suggested Action
+将 Roxy 准备与协议子进程执行拆开：每个账号开始时执行一次 close/clear/random/open/CDP，最多三次尝试共享同一个 CDP endpoint；最终失败后再为下一个账号重新准备 Roxy。对 create_account 已成功后的失败仍需避免重复创建。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/replacementServices.js`, `src/server.js`, `web/app.js`
+- Tags: protocol-registration, retry, roxy, fingerprint, proxy, batch
+- Pattern-Key: protocol_registration.retry_reuses_roxy_context
+- Recurrence-Count: 1
+- First-Seen: 2026-07-17
+- Last-Seen: 2026-07-17
+
+---

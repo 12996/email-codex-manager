@@ -38,6 +38,7 @@
 | `ROXY_2FA_LOGIN_BROWSER_*` / `ROXY_2FA_LOGIN_CDP_ENDPOINT` | 2FA 登录动作专用 Roxy 窗口或 CDP | 注册、登录、补号分窗口时可选 | 空 |
 | `ROXY_KEEP_OPEN` | Roxy 调试/上线运行策略：`1` 保留窗口，`0` 流程结束关闭窗口 | 否 | `1` |
 | `ROXY_HEADLESS` | Roxy 是否无头运行；`auto` 表示按 `ROXY_KEEP_OPEN` 推导 | 否 | `auto` |
+| `ROXY_EMAIL_OTP_PROTOCOL` | OAuth 邮箱验证码提交方式；`1` 在 Roxy 页面上下文 POST，`0` 或空值使用 DOM 流程 | 否 | `0` |
 | `CPA_URL` | CPA 管理接口基础地址 | 使用 CPA 上传/监控时必填 | `http://localhost:8317` |
 | `CPA_MANAGEMENT_KEY` | CPA 管理接口密钥 | 使用 CPA 上传/监控时必填 | 空 |
 | `CPA_HEALTH_MONITOR_ENABLED` | 是否启动 CPA 自动健康监控 | 否 | `false` |
@@ -119,6 +120,18 @@ ROXY_REPLACE_2FA_BROWSER_SORT_NUM=617-11
 ```
 
 动作级窗口变量优先于全局 `ROXY_BROWSER_DIR_ID` / `ROXY_BROWSER_SORT_NUM` / `ROXY_BROWSER_WINDOW_NAME`。当动作级窗口变量存在且未配置动作级 `*_CDP_ENDPOINT` 时，子进程会清除全局 `ROXY_CDP_ENDPOINT`，避免所有动作误复用同一个已打开窗口。
+
+补号列表的“协议注册”动作使用独立的 Roxy 目标，默认窗口序号 `3`、名称 `test`，并在启动协议进程前刷新缓存和随机指纹：
+
+```env
+ROXY_PROTOCOL_BROWSER_DIR_ID=
+ROXY_PROTOCOL_BROWSER_SORT_NUM=3
+ROXY_PROTOCOL_BROWSER_WINDOW_NAME=test
+ROXY_PROTOCOL_ENSURE_CLOSED=1
+PROTOCOL_PYTHON_PATH=F:\anaconda\anaconda3\envs\tilian\python.exe
+```
+
+协议注册固定按当前补号行传入 `REPLACEMENT_ACCOUNT_ID`，强制 `ROXY_CDP_ENABLED=1`，并以单线程执行 `src/auto/protocol_registration/main.py`。共享 profile 不支持并行协议注册。
 
 ## RoxyBrowser 参数获取
 

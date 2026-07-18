@@ -95,3 +95,9 @@
 | 2026-07-14 | Roxy 2FA 邮箱提交后阶段判定竞态修复 | done | `2026-07-14-roxy-2fa-stage-detection-guard.md` |
 | 2026-07-15 | Roxy 2FA ChatGPT session 状态判定加固 | done | `2026-07-15-roxy-2fa-session-state-guard.md` |
 | 2026-07-15 | 补号状态查询邮箱 API 日志映射修正 | done | `2026-07-15-replacement-status-api-log-mapping.md` |
+| 2026-07-16 | Roxy run 507 失败诊断 | done | `2026-07-16-roxy-run-507-diagnosis.md` |
+| 2026-07-16 | Roxy run 508 OTP/资料页误判诊断与修复 | done | `2026-07-16-roxy-run-508-otp-age-misclassification.md` |
+| 2026-07-16 | Roxy run 511 OTP 终态消费与注册实机验收 | done | `2026-07-16-roxy-run-511-otp-completion-and-e2e.md` |
+| 2026-07-16 | 补号操作失败不占用账号状态 | done | `2026-07-16-replacement-operation-failure-display.md` |
+| 2026-07-17 | Roxy OAuth 邮箱验证码协议提交 | done | `2026-07-17-roxy-email-otp-protocol.md` |
+| 2026-07-17 | 补号列表协议注册操作 | done | `2026-07-17-replacement-protocol-registration.md` |

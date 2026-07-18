@@ -926,7 +926,7 @@ SQLite 表：`replacement_accounts`
 | `json_payload` | 最近一次获取的 JSON 原文 |
 | `json_fetched_at` | 最近一次 JSON 获取时间 |
 | `last_replace_at` | 最近一次成功补号时间 |
-| `last_error` | 最近一次 JSON 或补号错误 |
+| `last_error` | 最近一次操作错误；内容带有操作前缀，状态失败不写入账号状态 |
 | `remark` | 管理员备注 |
 | `public_code_enabled` | 是否允许使用公开 GET 接口获取该邮箱验证码，`1` 为允许，默认 `0` |
 | `public_code_key` | 公开 GET 接口使用的随机访问 key；创建补号账号时自动生成，也可手动覆盖为不可猜测字符串 |
@@ -934,7 +934,7 @@ SQLite 表：`replacement_accounts`
 | `created_at` | 创建时间 |
 | `updated_at` | 更新时间 |
 
-验证码不入库；SMS 原始响应不入库；补号失败不增加 `replacement_count`，但会递增 `consecutive_replace_failures`。连续补号失败达到 5 次时，账号保持或改为 `failed` 并写入熔断字段；补号成功会清零连续失败计数和熔断字段。`remark` 仅用于人工标注来源或用途，不参与公开验证码接口的权限判断。
+验证码不入库；SMS 原始响应不入库；补号失败不增加 `replacement_count`，但会递增 `consecutive_replace_failures`。连续补号失败达到 5 次时，账号保持原业务状态并写入熔断字段；补号成功会清零连续失败计数和熔断字段。`failed` 不是补号账号状态，操作失败原因复用 `last_error` 展示。`remark` 仅用于人工标注来源或用途，不参与公开验证码接口的权限判断。
 
 管理员不能在普通编辑表单中直接修改连续失败和熔断字段；解除熔断必须使用专用接口，避免误清系统字段。
 
@@ -951,9 +951,10 @@ SQLite 表：`replacement_accounts`
 | `sold` | 已售出 | 已出售账号 |
 | `banned` | 账号封禁 | 账号本身被封禁；不等同熔断 |
 | `replacing` | 处理中 | 系统自动状态，不允许手动设置 |
-| `failed` | 失败 | 自动化失败或手动标记失败 |
 
-兼容旧状态输入：`pending -> for_sale`、`active -> plus_active`、`replaced -> cpa_mounted`。
+兼容旧状态输入：`pending -> for_sale`、`active -> plus_active`、`replaced -> cpa_mounted`、`failed -> banned`。历史数据库中的 `failed` 行启动时统一迁移为 `banned`。
+
+补号、注册、2FA 登录、JSON 获取、Plus 查询和一键验活等操作失败时，不修改账号业务状态。失败原因写入现有错误字段，状态旁显示简短红字（如“补号失败”或“查询 Plus 失败”）；不新增操作记录字段。
 
 ### 通用错误响应
 
@@ -981,6 +982,9 @@ SQLite 表：`replacement_accounts`
 | `REPLACE_NOT_CONFIGURED` | 502 | 自动补号适配器尚未配置 |
 | `REPLACE_2FA_NOT_CONFIGURED` | 502 | 2FA 补号适配器尚未配置 |
 | `REGISTER_FAILED` | 502 | OpenAI 注册自动化失败 |
+| `PROTOCOL_REGISTER_FAILED` | 502 | 协议注册或 Roxy 指纹刷新失败 |
+| `PROTOCOL_REGISTER_NOT_CONFIGURED` | 502 | 协议注册适配器尚未配置 |
+| `PROTOCOL_REGISTER_BUSY` | 409 | 共享 Roxy profile 已有协议注册任务运行 |
 | `NOTIFICATION_NOT_FOUND` | 404 | 通知不存在 |
 
 ### GET `/replacement-accounts`
@@ -1081,7 +1085,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 
 ### PATCH `/replacement-accounts/:id/status`
 
-手动修改状态。允许状态：`unregistered`、`registered`、`pending_activation`、`plus_active`、`cpa_mounted`、`for_sale`、`sold`、`banned`、`failed`。`replacing` 是系统自动状态，不允许手动设置。
+手动修改状态。允许状态：`unregistered`、`registered`、`pending_activation`、`plus_active`、`cpa_mounted`、`for_sale`、`sold`、`banned`。`replacing` 是系统自动状态，不允许手动设置；传入旧状态 `failed` 时按 `banned` 处理。
 
 请求体：
 
@@ -1113,7 +1117,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
   "ok": true,
   "account": {
     "id": 7,
-    "status": "failed",
+    "status": "unregistered",
     "status_note": "管理员手动解除熔断",
     "consecutive_replace_failures": 0,
     "circuit_breaker_at": null,
@@ -1333,20 +1337,17 @@ src/auto/roxy_register_openai.js
 5. 若账号配置 `email_code_api`，后端向子进程注入 `REGISTRATION_EMAIL_CODE_API_URL`，注册脚本优先 GET 该外部接口获取邮箱验证码；该规则对 Gmail 和 iCloud 一致。
 6. 若账号未配置 `email_code_api`，注册脚本按邮箱域名选择本地 POST 验证码接口：iCloud 使用 `/api/icloud-verification-code/latest`，其他邮箱使用 `/api/verification-code/latest`，请求体均为 `{ "account": "<email>" }`。
 7. 邮箱验证码提取会先移除 HTML `script/style` 和标签，再匹配独立 6 位数字，避免 CSS 色值误匹配；JSON payload 支持 `code`、`otp`、`verification_code`、`verificationCode` 等字段。
-8. 注册成功后，脚本会从 `https://chatgpt.com/api/auth/session` 读取 `accessToken`，并保存到本地注册产物目录；默认文件为 `src/auto/product_files/registration/<email>.json`，文件名直接使用补号邮箱号。
+8. 注册成功后，脚本会从 `https://chatgpt.com/api/auth/session` 读取 `accessToken`，并将纯 token 值保存到本地注册产物目录；默认文件为 `src/auto/product_files/registration/<email>.txt`，文件名直接使用补号邮箱号。
 9. 默认继续在同一个 Roxy/ChatGPT 页面上下文中启用 TOTP MFA：调用 `/backend-api/accounts/mfa/enroll` 获取 `secret`，本地生成当前 TOTP code，再调用 `/backend-api/accounts/mfa/user/activate_enrollment` 激活。成功后后端会把返回的 `secret` 写入该补号账号的 `codex_2fa` 字段，供后续“2FA补号”使用。
 10. 日志写入 `data/automation-logs/registration-<id>-<timestamp>.log`，包含 `step=...` 阶段日志。日志只记录注册 token 文件保存路径和 MFA 是否成功，不记录验证码、Cookie、access token、TOTP secret 或代理密码明文。
 
-注册成功后的 access token 文件：
+注册成功后的 access token 文件内容：
 
-```json
-{
-  "email": "jregkolpig+s2@gmail.com",
-  "access_token": "eyJ...",
-  "created_at": "2026-06-25T00:00:00.000Z",
-  "source": "chatgpt_api_auth_session"
-}
+```text
+eyJ...
 ```
+
+实际产物为纯文本，不包含 JSON 字段。
 
 保存目录可通过环境变量覆盖：
 
@@ -1400,6 +1401,38 @@ ROXY_REGISTER_ENABLE_MFA=0
 }
 ```
 
+### POST `/replacement-accounts/:id/register-protocol`
+
+按当前补号列表行启动协议注册，不调用旧的 DOM 注册脚本。后端先使用 RoxyBrowser 目标窗口完成 close（可配置跳过）、本地/服务端缓存清理、随机指纹、重新开窗和 CDP 地址读取，再在 `tilian` Python 环境中执行 `src/auto/protocol_registration/main.py --count 1 --workers 1`。
+
+协议子进程使用当前账号 ID 获取邮箱和验证码，环境变量包括：
+
+- `OTP_PROVIDER=replacement`、`EMAIL_SOURCE=replacement`
+- `REPLACEMENT_ACCOUNT_ID=<当前账号 ID>`
+- `ROXY_CDP_ENABLED=1` 和刷新后的 `ROXY_CDP_ENDPOINT`
+
+协议注册默认使用 Roxy 窗口序号 `3`、名称 `test`，可通过 `ROXY_PROTOCOL_BROWSER_DIR_ID`、`ROXY_PROTOCOL_BROWSER_SORT_NUM`、`ROXY_PROTOCOL_BROWSER_WINDOW_NAME` 覆盖。共享 Roxy profile 只允许一个协议注册任务运行，第二个并行请求返回 `PROTOCOL_REGISTER_BUSY`。
+
+成功后将账号状态更新为 `registered`，并将纯 `access_token` 值以 `<email>.txt` 写入 `src/auto/product_files/registration`；可通过 `REGISTRATION_TOKEN_OUTPUT_DIR` 覆盖产物目录。失败只在 `last_error` 写入“协议注册失败”，不改变原业务状态。运行记录和 stdout/stderr 仍通过 `replacement_automation_runs` 提供。
+
+成功响应结构与 `/register` 一致：
+
+```json
+{
+  "ok": true,
+  "account": {},
+  "run": { "id": 12, "status": "succeeded" }
+}
+```
+
+前端实时日志：
+
+- 当请求头包含 `Accept: text/event-stream` 时，接口返回 SSE，而不是等待协议子进程结束后一次性返回 JSON。
+- 事件包括 `start`、`protocol-step`、`protocol-log`、`account-result`、`complete` 和 `error`。
+- `protocol-log` 携带 `stream=stdout|stderr` 及当前文本块；后台仍同步写入现有运行日志文件。
+- `/replacement-ui` 只在当前页面的“当前协议注册日志”面板中临时展示这些事件，不写入浏览器历史或“最近操作记录”。刷新页面或下一次启动时清空。
+- 不带 SSE 请求头的客户端继续使用上面的 JSON 响应格式。
+
 ### POST `/replacement-accounts/:id/replace`
 
 执行自动补号。自动化运行时代码位于：
@@ -1423,7 +1456,7 @@ src/auto/roxy_oauth_login.js
 3. 调用 `replacementServices.replaceAccount(account)`。
 4. 默认适配器启动子进程调用 `src/auto/roxy_oauth_login.js`，并把补号账号字段写入子进程 env，完成 RoxyBrowser 开窗、OpenAI/Codex OAuth 登录、邮箱验证码、手机验证码和 token 导出。
 5. 自动化成功后，后端将账号标记为 `cpa_mounted` 并增加成功次数。
-6. 自动化失败后，后端将账号标记为 `failed` 并记录错误。
+6. 自动化失败后，后端恢复操作开始前的业务状态，并在 `last_error` 写入带“补号失败”前缀的错误。
 
 自动化脚本需要的数据来源：
 
@@ -1437,9 +1470,10 @@ src/auto/roxy_oauth_login.js
 | Roxy API 地址 | `.env` / 运行配置 | `ROXY_API_BASE_URL` 或 `ROXY_API_PORT`，由子进程继承，不来自补号表。 |
 | Roxy API Token | `.env` / 运行配置 | `ROXY_API_TOKEN`，不来自补号表。 |
 | Roxy 工作区 | `.env` / 运行配置 | `ROXY_WORKSPACE_ID`，不来自补号表。 |
-| Roxy 窗口定位 | `.env` / 运行配置 | 默认使用 `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者之一；也可按动作覆盖：注册用 `ROXY_REGISTER_BROWSER_*`，普通补号用 `ROXY_REPLACE_BROWSER_*`，2FA 补号用 `ROXY_REPLACE_2FA_BROWSER_*`，2FA 登录用 `ROXY_2FA_LOGIN_BROWSER_*`。 |
+| Roxy 窗口定位 | `.env` / 运行配置 | 默认使用 `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者之一；也可按动作覆盖：注册用 `ROXY_REGISTER_BROWSER_*`，协议注册用 `ROXY_PROTOCOL_BROWSER_*`（默认 `3/test`），普通补号用 `ROXY_REPLACE_BROWSER_*`，2FA 补号用 `ROXY_REPLACE_2FA_BROWSER_*`，2FA 登录用 `ROXY_2FA_LOGIN_BROWSER_*`。 |
 | 复用 CDP | `.env` / 运行配置 | 默认使用 `ROXY_CDP_ENDPOINT`；动作级可用 `ROXY_REGISTER_CDP_ENDPOINT`、`ROXY_REPLACE_CDP_ENDPOINT`、`ROXY_REPLACE_2FA_CDP_ENDPOINT`、`ROXY_2FA_LOGIN_CDP_ENDPOINT`。配置动作级窗口但未配置动作级 CDP 时，会清除全局 `ROXY_CDP_ENDPOINT`。 |
 | 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`；补号账号未配置 `email_code_api` 时留空并按邮箱域名自动选择本地接口：iCloud 使用 `http://127.0.0.1:${PORT}/api/icloud-verification-code/latest`，其他邮箱使用 `/api/verification-code/latest`。 |
+| OAuth 邮箱验证码提交 | `.env` / 运行配置 | `ROXY_EMAIL_OTP_PROTOCOL=1` 时，在同一 Roxy 页面上下文 POST `/api/accounts/email-otp/validate`，成功后按响应的 `continue_url` 导航；HTTP 4xx 直接失败，不重复提交 DOM；页面上下文不可用或网络异常时回退 DOM。 |
 | 后台 Cookie | `.env` / 运行配置 | `ADMIN_AUTH_COOKIE`；非本机调用邮箱验证码接口时使用。 |
 | 浏览器关闭/有头无头策略 | `.env` / 运行配置 | `ROXY_KEEP_OPEN`、`ROXY_HEADLESS`、`ROXY_ENSURE_CLOSED`。`ROXY_HEADLESS=auto` 时，`ROXY_KEEP_OPEN=1` 默认有头并保留窗口，`ROXY_KEEP_OPEN=0` 默认无头并关闭窗口。 |
 | 代理提示 | `.env` / 运行配置 | `ROXY_PROXY`；当前 token 请求阶段仅记录提示，浏览器代理由 Roxy 窗口自身配置决定。 |
@@ -1503,8 +1537,8 @@ src/auto/roxy_oauth_login.js
 
 失败时：
 
-- `status = failed`
-- `last_error = 错误信息`
+- `status` 恢复为操作开始前的业务状态，不写入 `failed`
+- `last_error = 补号失败：错误信息`
 - `replacement_count` 不变
 
 ### POST `/replacement-accounts/:id/replace-2fa`
@@ -1531,7 +1565,7 @@ src/auto/roxy_2fa_auth_login.js
 4. 自动化成功后，worker 读取 `src/auto/product_files/cpa/<email>.json` 并上传为 `codex-<email>-plus.json`。
 5. 上传后复查 CPA auth file；同邮箱任一凭证健康即通过。
 6. 上传和复查均成功后，后端将账号标记为 `cpa_mounted` 并增加成功次数。
-7. 自动化、上传或复查失败后，后端将账号标记为 `failed` 并记录错误。
+7. 自动化、上传或复查失败后，后端恢复操作开始前的业务状态，并在 `last_error` 写入带“2FA补号失败”前缀的错误。
 
 2FA 补号脚本额外使用的数据来源：
 
@@ -1597,7 +1631,7 @@ CPA_HEALTH_MONITOR_INTERVAL_MS=600000
 5. 匹配到且账号未处于 `replacing`/`banned` 且未熔断时，加入单并发补号队列并触发队列执行；`banned` 账号跳过原因为 `account_banned`，`circuit_breaker_at` 非空账号跳过原因为 `account_circuit_breaker`。
 6. 自动补号运行日志会写入 `step=cpa-trigger`，记录触发补号的 CPA provider、email、status、unavailable、disabled、reasons 和截断后的 `status_message`，用于排查为什么本次执行补号。
 7. 补号子进程成功后，上传本地 `src/auto/product_files/cpa/<email>.json` 到 CPA，并再次检查该邮箱凭证是否恢复健康；同一邮箱任一凭证健康即复查通过。
-8. 同一账号连续补号失败达到 5 次时，账号状态为 `failed`，并写入 `circuit_breaker_at` / `circuit_breaker_reason`；后续 CPA 监控按 `account_circuit_breaker` 跳过，并创建站内通知提醒管理员。
+8. 同一账号连续补号失败达到 5 次时，账号保持原业务状态，并写入 `circuit_breaker_at` / `circuit_breaker_reason`；后续 CPA 监控按 `account_circuit_breaker` 跳过，并创建站内通知提醒管理员。
 
 成功响应示例：
 
@@ -1833,6 +1867,7 @@ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS=30
 | 获取验证码 | `POST /replacement-accounts/:id/fetch-sms-code` | 实时返回验证码，不入库 |
 | 获取 JSON | `POST /replacement-accounts/:id/fetch-json` | 保存 JSON 原文 |
 | 注册 OpenAI | `POST /replacement-accounts/:id/register` | 启动注册自动化子进程，邮箱验证码走 POST 内部接口 |
+| 协议注册 | `POST /replacement-accounts/:id/register-protocol` | 刷新 Roxy 指纹后启动 `tilian` 协议注册，成功标记 `registered` |
 | 自动补号 | `POST /replacement-accounts/:id/replace` | 成功后补号次数加一 |
 | 2FA补号 | `POST /replacement-accounts/:id/replace-2fa` | 启动密码 + 2FA 补号自动化，成功后补号次数加一 |
 | 查看补号日志 | `GET /replacement-automation-runs` / `GET /replacement-automation-runs/:id` | 查看运行记录和 stdout/stderr |

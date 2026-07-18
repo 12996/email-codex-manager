@@ -1,15 +1,21 @@
 import { spawn } from 'node:child_process';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { codedError } from './replacementAccounts.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const nodeRequire = createRequire(import.meta.url);
 const DEFAULT_ROXY_OAUTH_SCRIPT = join(__dirname, 'auto', 'roxy_oauth_login.js');
 const DEFAULT_ROXY_2FA_AUTH_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_auth_login.js');
 const DEFAULT_ROXY_2FA_LOGIN_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_login.js');
 const DEFAULT_ROXY_REGISTER_SCRIPT = join(__dirname, 'auto', 'roxy_register_openai.js');
+const DEFAULT_PROTOCOL_PROJECT_DIR = join(__dirname, 'auto', 'protocol_registration');
+const DEFAULT_PROTOCOL_MAIN_PATH = join(DEFAULT_PROTOCOL_PROJECT_DIR, 'main.py');
+const DEFAULT_PROTOCOL_PYTHON_PATH = 'F:\\anaconda\\anaconda3\\envs\\tilian\\python.exe';
+const DEFAULT_REGISTRATION_TOKEN_OUTPUT_DIR = join(__dirname, 'auto', 'product_files', 'registration');
 const DEFAULT_LOG_DIR = join(__dirname, '..', 'data', 'automation-logs');
 const activeChildren = new Map();
 const ROXY_TARGET_ENV_KEYS = [
@@ -28,6 +34,11 @@ export function createReplacementServices({
   twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
   twoFaLoginScriptPath = DEFAULT_ROXY_2FA_LOGIN_SCRIPT,
   registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
+  protocolPythonPath,
+  protocolProjectPath,
+  protocolMainPath,
+  prepareProtocolRoxyImpl,
+  roxyClientFactory,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
@@ -39,6 +50,11 @@ export function createReplacementServices({
     twoFaScriptPath,
     twoFaLoginScriptPath,
     registerScriptPath,
+    protocolPythonPath,
+    protocolProjectPath,
+    protocolMainPath,
+    prepareProtocolRoxyImpl,
+    roxyClientFactory,
     baseEnv,
     automationRuns,
     logDir,
@@ -107,6 +123,16 @@ export function createReplacementServices({
       return defaultAutomation.registerAccount(account);
     },
 
+    async registerProtocolAccount(account, options) {
+      if (automation?.registerProtocolAccount) {
+        return automation.registerProtocolAccount(account, options);
+      }
+      if (!defaultAutomation?.registerProtocolAccount) {
+        throw codedError('PROTOCOL_REGISTER_NOT_CONFIGURED', 'protocol registration is not configured');
+      }
+      return defaultAutomation.registerProtocolAccount(account, options);
+    },
+
     stopReplacementRun(runId) {
       return stopReplacementRun(runId);
     },
@@ -119,6 +145,11 @@ export function createRoxyOAuthChildProcessAutomation({
   scriptPath = DEFAULT_ROXY_OAUTH_SCRIPT,
   twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
   twoFaLoginScriptPath = DEFAULT_ROXY_2FA_LOGIN_SCRIPT,
+  protocolPythonPath,
+  protocolProjectPath,
+  protocolMainPath,
+  prepareProtocolRoxyImpl,
+  roxyClientFactory,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
@@ -130,6 +161,11 @@ export function createRoxyOAuthChildProcessAutomation({
     twoFaScriptPath,
     twoFaLoginScriptPath,
     registerScriptPath: DEFAULT_ROXY_REGISTER_SCRIPT,
+    protocolPythonPath,
+    protocolProjectPath,
+    protocolMainPath,
+    prepareProtocolRoxyImpl,
+    roxyClientFactory,
     baseEnv,
     automationRuns,
     logDir,
@@ -143,10 +179,17 @@ export function createRoxyChildProcessAutomation({
   twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
   twoFaLoginScriptPath = DEFAULT_ROXY_2FA_LOGIN_SCRIPT,
   registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
+  protocolPythonPath = normalizeOptional(process.env.PROTOCOL_PYTHON_PATH) || DEFAULT_PROTOCOL_PYTHON_PATH,
+  protocolProjectPath = normalizeOptional(process.env.PROTOCOL_PROJECT_PATH) || DEFAULT_PROTOCOL_PROJECT_DIR,
+  protocolMainPath = normalizeOptional(process.env.PROTOCOL_MAIN_PATH) || join(protocolProjectPath, 'main.py'),
+  prepareProtocolRoxyImpl = prepareProtocolRoxy,
+  roxyClientFactory = createDefaultProtocolRoxyClient,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
 } = {}) {
+  let protocolRegistrationInFlight = false;
+
   return {
     replaceAccount(account, options = {}) {
       const email = normalizeRequired(account?.email, 'REPLACE_FAILED', 'replacement account email is required');
@@ -289,6 +332,78 @@ export function createRoxyChildProcessAutomation({
       });
     },
 
+    registerProtocolAccount(account, options = {}) {
+      if (protocolRegistrationInFlight) {
+        return Promise.reject(codedError('PROTOCOL_REGISTER_BUSY', 'protocol registration is already running for the shared Roxy profile'));
+      }
+
+      const email = normalizeRequired(account?.email, 'PROTOCOL_REGISTER_FAILED', 'protocol registration account email is required');
+      const accountId = normalizeRequired(account?.id, 'PROTOCOL_REGISTER_FAILED', 'protocol registration account id is required');
+      if (!/^\d+$/.test(accountId)) {
+        return Promise.reject(codedError('PROTOCOL_REGISTER_FAILED', 'protocol registration account id is invalid'));
+      }
+
+      protocolRegistrationInFlight = true;
+      return (async () => {
+        notifyAutomationLog(options?.onLog, {
+          type: 'step',
+          step: 'prepare-roxy',
+          message: '正在准备 Roxy 浏览器环境',
+        });
+        const env = buildProtocolRegistrationEnv({
+          baseEnv,
+          account,
+          email,
+          accountId,
+        });
+        const prepared = await prepareProtocolRoxyImpl({
+          env,
+          account,
+          clientFactory: roxyClientFactory,
+        });
+        notifyAutomationLog(options?.onLog, {
+          type: 'step',
+          step: 'roxy-ready',
+          message: 'Roxy 指纹、IP 和 CDP 已准备完成',
+        });
+        const cdpEndpoint = normalizeRequired(
+          prepared?.cdpEndpoint,
+          'PROTOCOL_REGISTER_FAILED',
+          'Roxy CDP endpoint is unavailable after fingerprint refresh',
+        );
+        env.ROXY_CDP_ENDPOINT = cdpEndpoint;
+        env.ROXY_CDP_PREPARE = '0';
+
+        return runChildProcess({
+          spawnImpl,
+          command: protocolPythonPath,
+          args: [protocolMainPath, '--count', '1', '--workers', '1'],
+          cwd: protocolProjectPath,
+          env,
+          account: { ...account, email },
+          automationRuns,
+          logDir,
+          kind: 'protocol-registration',
+          failureCode: 'PROTOCOL_REGISTER_FAILED',
+          envSummaryKeys: [
+            'OTP_PROVIDER',
+            'EMAIL_SOURCE',
+            'REPLACEMENT_ACCOUNT_ID',
+            'ROXY_CDP_ENABLED',
+            'REGISTRATION_RESULT_JSON',
+            'ROXY_CDP_ENDPOINT',
+            'REGISTRATION_EMAIL_CODE_API_URL',
+            'REGISTRATION_TOKEN_OUTPUT_DIR',
+            ...ROXY_TARGET_ENV_KEYS,
+          ],
+          onLog: options?.onLog,
+          cpaTriggerDetails: options?.cpaTriggerDetails,
+        });
+      })().finally(() => {
+        protocolRegistrationInFlight = false;
+      });
+    },
+
     registerAccount(account) {
       const email = normalizeRequired(account?.email, 'REGISTER_FAILED', 'registration account email is required');
       const emailCodeApi = normalizeEmailCodeApiForAccount(account);
@@ -353,6 +468,66 @@ function applyActionRoxyTargetEnv(env, prefix) {
   return env;
 }
 
+function buildProtocolRegistrationEnv({ baseEnv, account, email, accountId }) {
+  const env = {
+    ...baseEnv,
+    OTP_PROVIDER: 'replacement',
+    EMAIL_SOURCE: 'replacement',
+    REPLACEMENT_ACCOUNT_ID: accountId,
+    ROXY_CDP_ENABLED: '1',
+    REGISTRATION_RESULT_JSON: '1',
+    REGISTRATION_TOKEN_OUTPUT_DIR:
+      normalizeOptional(baseEnv.REGISTRATION_TOKEN_OUTPUT_DIR) || DEFAULT_REGISTRATION_TOKEN_OUTPUT_DIR,
+    ROXY_PROTOCOL_BROWSER_SORT_NUM: normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_SORT_NUM) || '3',
+    ROXY_PROTOCOL_BROWSER_WINDOW_NAME: normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_WINDOW_NAME) || 'test',
+    ROXY_REGISTER_EMAIL: email,
+    ...(normalizeOptional(account?.email_code_api)
+      ? { REGISTRATION_EMAIL_CODE_API_URL: normalizeOptional(account.email_code_api) }
+      : {}),
+  };
+
+  delete env.ROXY_CDP_ENDPOINT;
+  delete env.ROXY_PROTOCOL_CDP_ENDPOINT;
+  return applyActionRoxyTargetEnv(env, 'ROXY_PROTOCOL');
+}
+
+function createDefaultProtocolRoxyClient(env) {
+  const { RoxyBrowserClient } = nodeRequire('./auto/roxy-browser-client.cjs');
+  return new RoxyBrowserClient({
+    apiBaseUrl: normalizeOptional(env.ROXY_API_BASE_URL) || undefined,
+    apiPort: normalizeOptional(env.ROXY_API_PORT) || undefined,
+    token: normalizeOptional(env.ROXY_API_TOKEN),
+    workspaceId: Number(env.ROXY_WORKSPACE_ID || 0),
+    dirId: normalizeOptional(env.ROXY_BROWSER_DIR_ID),
+    windowName: normalizeOptional(env.ROXY_BROWSER_WINDOW_NAME),
+    windowSortNum: normalizeOptional(env.ROXY_BROWSER_SORT_NUM),
+  });
+}
+
+async function prepareProtocolRoxy({ env, clientFactory = createDefaultProtocolRoxyClient }) {
+  const client = await clientFactory(env);
+  await client.resolveDirId();
+
+  if (String(env.ROXY_PROTOCOL_ENSURE_CLOSED ?? env.ROXY_ENSURE_CLOSED ?? '1') !== '0') {
+    try {
+      await client.closeBrowser();
+    } catch (error) {
+      // Roxy reports an error when the target is already closed; preparation can continue.
+      console.warn(`[protocol-registration] close Roxy window ignored: ${error.message || error}`);
+    }
+  }
+
+  await client.clearLocalCache();
+  await client.clearServerCache();
+  await client.randomFingerprint();
+  await client.openBrowser();
+  const connection = await client.getConnectionInfo();
+  return {
+    cdpEndpoint: connection?.ws,
+    dirId: client.dirId,
+  };
+}
+
 function normalizeEmailCodeApiForAccount(account) {
   return normalizeOptional(account?.email_code_api);
 }
@@ -361,6 +536,7 @@ function runChildProcess({
   spawnImpl,
   command,
   args,
+  cwd,
   env,
   account,
   automationRuns,
@@ -368,6 +544,7 @@ function runChildProcess({
   kind = 'replacement',
   failureCode = 'REPLACE_FAILED',
   envSummaryKeys = [],
+  onLog,
   cpaTriggerDetails = '',
 }) {
   return new Promise((resolve, reject) => {
@@ -388,6 +565,7 @@ function runChildProcess({
 
     const child = spawnImpl(command, args, {
       env,
+      ...(cwd ? { cwd } : {}),
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
@@ -408,20 +586,55 @@ function runChildProcess({
     let stdout = '';
     let stderr = '';
     let stopRequested = false;
+    let stdoutLogRemainder = '';
+    let stderrLogRemainder = '';
+
+    const forwardChildLog = (stream, text) => {
+      const previousRemainder = stream === 'stdout' ? stdoutLogRemainder : stderrLogRemainder;
+      const combined = previousRemainder + text;
+      const newlineIndex = combined.lastIndexOf('\n');
+      if (newlineIndex < 0) {
+        if (stream === 'stdout') stdoutLogRemainder = combined;
+        else stderrLogRemainder = combined;
+        return;
+      }
+
+      const completeText = combined.slice(0, newlineIndex + 1);
+      if (stream === 'stdout') stdoutLogRemainder = combined.slice(newlineIndex + 1);
+      else stderrLogRemainder = combined.slice(newlineIndex + 1);
+
+      const safeText = sanitizeLogText(completeText);
+      writeLog(logPath, safeText);
+      notifyAutomationLog(onLog, {
+        type: 'log',
+        stream,
+        text: safeText,
+      });
+    };
+
+    const flushChildLogRemainders = () => {
+      if (stdoutLogRemainder) {
+        forwardChildLog('stdout', '\n');
+      }
+      if (stderrLogRemainder) {
+        forwardChildLog('stderr', '\n');
+      }
+    };
 
     writeStepLog(logPath, 'stream-output', 'attached stdout and stderr log listeners');
     child.stdout?.on('data', (chunk) => {
       const text = String(chunk);
       stdout += text;
-      writeLog(logPath, text);
+      forwardChildLog('stdout', text);
     });
     child.stderr?.on('data', (chunk) => {
       const text = String(chunk);
       stderr += text;
-      writeLog(logPath, text);
+      forwardChildLog('stderr', text);
     });
     writeStepLog(logPath, 'wait-child', 'waiting for automation child process to finish');
     child.on('error', (error) => {
+      flushChildLogRemainders();
       if (run?.id) {
         activeChildren.delete(run.id);
         automationRuns.markFailed?.(run.id, { errorMessage: error.message });
@@ -437,6 +650,7 @@ function runChildProcess({
       }
     });
     child.on('close', (exitCode) => {
+      flushChildLogRemainders();
       if (run?.id) {
         activeChildren.delete(run.id);
       }
@@ -458,7 +672,9 @@ function runChildProcess({
         });
         return;
       }
-      const details = stderr || stdout || `child process exited with code ${exitCode}`;
+      const details = sanitizeLogText(
+        stderr || stdout || `child process exited with code ${exitCode}`,
+      );
       if (run?.id) {
         if (stopRequested) {
           automationRuns?.markStopped?.(run.id, { exitCode, errorMessage: 'Stopped by user' });
@@ -472,6 +688,15 @@ function runChildProcess({
       reject(codedError(failureCode, details.trim()));
     });
   });
+}
+
+function notifyAutomationLog(onLog, event) {
+  if (typeof onLog !== 'function') return;
+  try {
+    onLog(event);
+  } catch {
+    // A disconnected or faulty live-log consumer must not affect the child process.
+  }
 }
 
 function parseChildResult(stdout) {
@@ -581,8 +806,8 @@ function sanitizeLogText(text) {
     .replace(/(refresh[_-]?token["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
     .replace(/(id[_-]?token["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
     .replace(/(proxyPassword["']?\s*[:=]\s*["']?)[^"',\s]+/gi, '$1[redacted]')
-    .replace(/("secret"\s*:\s*")[A-Z2-7]{16,}(")/g, '$1[redacted-secret]$2')
-    .replace(/\b(secret=)[A-Z2-7]{16,}\b/gi, '$1[redacted-secret]')
+    .replace(/(["'](?:secret|totp_secret)\s*["']?\s*:\s*["'])[A-Z2-7]{16,}(["'])/gi, '$1[redacted-secret]$2')
+    .replace(/\b(secret(?:\s+已获取)?\s*[:=]\s*)[A-Z2-7]{16,}\b/gi, '$1[redacted-secret]')
     .replace(/\b(code=)\d{6}\b/gi, '$1[redacted-code]')
     .replace(/(验证码[:：]?\s*)\d{6}/g, '$1[redacted-code]')
     .replace(/(verification code[:：]?\s*)\d{6}/gi, '$1[redacted-code]')

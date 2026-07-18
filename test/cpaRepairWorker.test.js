@@ -258,7 +258,7 @@ test('repair worker creates notification when replacement failure triggers circu
         return {
           id,
           email: 'user@example.com',
-          status: 'failed',
+          status: 'for_sale',
           consecutive_replace_failures: 5,
           circuit_breaker_at: '2026-06-07T00:00:00.000Z',
           circuit_breaker_reason: '连续补号失败 5 次，自动熔断',
@@ -272,10 +272,10 @@ test('repair worker creates notification when replacement failure triggers circu
     },
   });
 
-  const result = await worker.repair({ account: { id: 7, email: 'user@example.com' } });
+  const result = await worker.repair({ account: { id: 7, email: 'user@example.com', status: 'for_sale' } });
 
   assert.equal(result.ok, false);
-  assert.equal(result.account.status, 'failed');
+  assert.equal(result.account.status, 'for_sale');
   assert.deepEqual(notifications, [{
     type: 'cpa_repair_circuit_breaker',
     severity: 'critical',

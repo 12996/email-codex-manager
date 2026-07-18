@@ -416,6 +416,7 @@ export function createApp({
 
     try {
       const code = await replacementServices.fetchSmsCode(account.sms_api);
+      replacementAccounts.recordSmsSuccess(account.id);
       res.json({ ok: true, code });
     } catch (error) {
       replacementAccounts.recordSmsFailure(account.id, error.message);
@@ -463,13 +464,14 @@ export function createApp({
       return;
     }
 
+    const previousStatus = account.status;
     replacementAccounts.markReplacementStarted(account.id);
     try {
       const result = await replacementServices.replaceAccount(account);
       const updated = replacementAccounts.markReplacementSuccess(account.id);
       res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
     } catch (error) {
-      const updated = replacementAccounts.markReplacementFailure(account.id, error.message);
+      const updated = replacementAccounts.markReplacementFailure(account.id, error.message, previousStatus, '补号');
       notifyCircuitBreaker(adminNotifications, updated);
       sendApiError(res, error, { account: updated });
     }
@@ -498,13 +500,14 @@ export function createApp({
       return;
     }
 
+    const previousStatus = account.status;
     replacementAccounts.markReplacementStarted(account.id);
     try {
       const result = await replacementServices.replaceAccountWith2FA(account);
       const updated = replacementAccounts.markReplacementSuccess(account.id);
       res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
     } catch (error) {
-      const updated = replacementAccounts.markReplacementFailure(account.id, error.message);
+      const updated = replacementAccounts.markReplacementFailure(account.id, error.message, previousStatus, '2FA补号');
       notifyCircuitBreaker(adminNotifications, updated);
       sendApiError(res, error, { account: updated });
     }
@@ -519,10 +522,11 @@ export function createApp({
 
     try {
       const result = await replacementServices.loginAccountWith2FA(account);
+      replacementAccounts.recordOperationSuccess?.(account.id);
       const updated = replacementAccounts.getAccount(account.id) || account;
       res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
     } catch (error) {
-      const updated = replacementAccounts.getAccount(account.id) || account;
+      const updated = replacementAccounts.recordOperationFailure(account.id, '2FA登录', error.message);
       sendApiError(res, error, { account: updated });
     }
   });
@@ -540,7 +544,71 @@ export function createApp({
       const updated = replacementAccounts.markRegistrationSuccess(account.id, { codex_2fa: mfaSecret });
       res.json({ ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) });
     } catch (error) {
-      const updated = replacementAccounts.getAccount(account.id) || account;
+      const updated = replacementAccounts.recordOperationFailure(account.id, '注册', error.message);
+      sendApiError(res, error, { account: updated });
+    }
+  });
+
+  app.post('/replacement-accounts/:id/register-protocol', requireAuth, async (req, res) => {
+    const account = replacementAccounts.getAccount(req.params.id);
+    if (!account) {
+      res.status(404).json(errorBody('ACCOUNT_NOT_FOUND', 'replacement account not found'));
+      return;
+    }
+
+    const execute = async (onProgress) => {
+      const liveLog = typeof onProgress === 'function'
+        ? (event) => onProgress(toProtocolLogEvent(account, event))
+        : undefined;
+
+      try {
+        const result = await replacementServices.registerProtocolAccount(account, {
+          onLog: liveLog,
+        });
+        const mfaSecret = extractRegistrationMfaSecret(result);
+        const updated = replacementAccounts.markRegistrationSuccess(account.id, { codex_2fa: mfaSecret });
+        onProgress?.({
+          type: 'account-result',
+          operation: 'protocol-registration',
+          accountId: account.id,
+          email: account.email,
+          outcome: 'success',
+          message: '协议注册完成，账号状态已更新为 registered',
+        });
+        return { ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) };
+      } catch (error) {
+        const updated = replacementAccounts.recordOperationFailure(account.id, '协议注册', error.message);
+        error.account = updated;
+        onProgress?.({
+          type: 'account-result',
+          operation: 'protocol-registration',
+          accountId: account.id,
+          email: account.email,
+          outcome: 'failed',
+          message: error.message || '协议注册失败',
+        });
+        throw error;
+      }
+    };
+
+    if (wantsProgressStream(req)) {
+      await streamProgressResponse(res, async (send) => {
+        send({
+          type: 'start',
+          operation: 'protocol-registration',
+          accountId: account.id,
+          email: account.email,
+          message: `开始协议注册：${account.email}`,
+        });
+        return execute(send);
+      });
+      return;
+    }
+
+    try {
+      res.json(await execute());
+    } catch (error) {
+      const updated = error.account || replacementAccounts.getAccount(account.id) || account;
       sendApiError(res, error, { account: updated });
     }
   });
@@ -722,6 +790,17 @@ function markAccountError(accounts, accountId, error) {
 
 function wantsProgressStream(req) {
   return String(req.headers.accept || '').includes('text/event-stream');
+}
+
+function toProtocolLogEvent(account, event = {}) {
+  const { type: eventType, ...details } = event;
+  return {
+    ...details,
+    type: eventType === 'log' ? 'protocol-log' : 'protocol-step',
+    operation: 'protocol-registration',
+    accountId: account.id,
+    email: account.email,
+  };
 }
 
 async function streamProgressResponse(res, run) {
@@ -954,6 +1033,7 @@ function inferErrorCode(error) {
 function statusForApiError(code) {
   if (code === 'EMAIL_DUPLICATE') return 409;
   if (code === 'ACTIVATION_METHOD_DUPLICATE') return 409;
+  if (code === 'PROTOCOL_REGISTER_BUSY') return 409;
   if (code === 'ACCOUNT_NOT_FOUND') return 404;
   if (code === 'NOTIFICATION_NOT_FOUND') return 404;
   if (
@@ -962,6 +1042,8 @@ function statusForApiError(code) {
     || code === 'REPLACE_FAILED'
     || code === 'REPLACE_NOT_CONFIGURED'
     || code === 'REGISTER_FAILED'
+    || code === 'PROTOCOL_REGISTER_FAILED'
+    || code === 'PROTOCOL_REGISTER_NOT_CONFIGURED'
     || code === 'RUN_NOT_ACTIVE'
     || code === 'RUN_STOP_FAILED'
   ) {

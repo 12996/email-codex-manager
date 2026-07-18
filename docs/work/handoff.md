@@ -2,6 +2,57 @@
 
 状态：active
 
+## 2026-07-17 补号列表协议注册操作
+
+- 来源工作日志：`docs/work/2026-07-17-replacement-protocol-registration.md`
+- change：`docs/changes/CHG-087-replacement-protocol-registration-action.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：补号列表操作菜单已增加“协议注册”；后端新增 `POST /replacement-accounts/:id/register-protocol`，按当前行账号刷新 Roxy `3/test` profile 后启动 `tilian` 协议项目单次注册，并通过 `REPLACEMENT_ACCOUNT_ID` 固定邮箱。成功取得 access token 后以纯文本写入 `src/auto/product_files/registration/<email>.txt`，共享 profile 使用 single-flight，失败只记录操作错误，不改变业务状态。
+- 验证：Node 全量 370/370、Python 全量 37/37 通过；`13100` 服务正在监听，账号查询正常。
+- 实机结果：账号 `178` 已进入 OpenAI OTP 阶段，但其外部 `email_code_api` 从 Windows 和 Roxy 页面上下文均超时，账号保持 `unregistered`。详见 `docs/issues/issue-015-replacement-protocol-email-api-unreachable.md` 和 `data/automation-logs/protocol-registration-178-2026-07-17T07-48-18-539Z.log`。
+- 下一步：确认账号邮箱 API 可达或更换可用 `email_code_api` 后，使用共享 Roxy `3/test` profile 单线程重新执行一次真实流程；不要并行触发。
+
+## 2026-07-17 Roxy OAuth 邮箱验证码协议提交
+
+- 来源工作日志：`docs/work/2026-07-17-roxy-email-otp-protocol.md`
+- change：`docs/changes/CHG-086-roxy-email-otp-protocol-submit.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：新增可选 `ROXY_EMAIL_OTP_PROTOCOL=1`；邮箱验证码在同一 Roxy 页面上下文 POST 验证，成功后处理 `continue_url`；HTTP 4xx 不再重复提交 DOM，页面上下文不可用或网络异常时回退旧流程。
+- 验证：OAuth、2FA OAuth、2FA ChatGPT session 测试合计 107/107 通过；语法检查和 `git diff --check` 通过。
+- 使用：在 `.env` 中设置 `ROXY_EMAIL_OTP_PROTOCOL=1` 后运行 OAuth/2FA OAuth 流程；未设置或为 `0` 时保持原 DOM 流程。
+
+## 2026-07-16 补号操作失败不占用账号状态
+
+- 来源工作日志：`docs/work/2026-07-16-replacement-operation-failure-display.md`
+- change：`docs/changes/CHG-085-replacement-operation-failure-not-status.md`，状态 `implemented`，尚未合并到 PRD。
+- 当前进展：历史 `failed` 账号统一迁移为 `banned`；补号、2FA 补号、注册、Plus 查询和一键验活失败时保留业务状态，状态旁显示简短红色操作失败提示，不新增数据库字段。
+- 迁移记录：原始 `failed` 行为账号 ID `4`、`17`、`22`、`46`、`64`、`65`、`66`、`76`。
+- 验证：专项测试、全量 JavaScript 测试、语法检查和 `git diff --check` 已通过；13100 服务已重启并确认数据库无原始 `status='failed'`。
+
+## 2026-07-16 Roxy run 511 OTP 终态消费与注册实机验收
+
+- 来源工作日志：`docs/work/2026-07-16-roxy-run-511-otp-completion-and-e2e.md`
+- change：`docs/changes/CHG-084-roxy-about-you-otp-state-guard.md`，状态 `implemented`，尚未合并到 PRD。
+- issue：`docs/issues/issue-014-roxy-about-you-age-misclassified-as-otp.md`，状态 `resolved`。
+- 当前进展：run `510` 暴露了前置 OTP 等待未消费 `OTP_ALREADY_COMPLETED` 的遗漏；已新增 `waitForOtpStageOrCompleted()`，主流程在已到 profile/session 时跳过重复 OTP 并继续资料页。
+- 实机验证：run `511` 成功完成 `/about-you`、ChatGPT 主站、Session 和 MFA，账号 `105` 状态为 `registered`；Roxy 保持打开并已回到 ChatGPT 主页面。
+- 自动验证：`node --test test/roxyRegisterOpenai.test.js` 32/32；`node --check src/auto/roxy_register_openai.js` 和 `git diff --check` 通过。
+- 运行日志：`data/automation-logs/registration-105-2026-07-16T04-00-03-559Z.log`。
+
+## 2026-07-16 Roxy run 508 OTP/资料页误判修复
+
+- 来源工作日志：`docs/work/2026-07-16-roxy-run-508-otp-age-misclassification.md`
+- change：`docs/changes/CHG-084-roxy-about-you-otp-state-guard.md`，状态 `implemented`，尚未合并到 PRD。
+- issue：`docs/issues/issue-014-roxy-about-you-age-misclassified-as-otp.md`，状态 `resolved`。
+- 当前进展：run `508` 已完成邮箱验证码后进入 `/about-you`，旧状态机把 Age 的 `inputmode=numeric` 当成 OTP；现已收紧 OTP 语义、优先识别 profile，并在 OTP 等待/填码前增加终态短路。后续 run `510` 又发现主流程未消费终态信号，已由 run `511` 修复并完成实机验收。
+- 验证：`node --test test/roxyRegisterOpenai.test.js` 32/32 通过；run `511` 已成功注册 account `105`。
+
+## 2026-07-16 Roxy run 507 注册失败诊断
+
+- 来源工作日志：`docs/work/2026-07-16-roxy-run-507-diagnosis.md`
+- issue：`docs/issues/issue-013-roxy-registration-password-click-detached.md`，状态 `resolved`。
+- 当前进展：已连接用户保留的 Roxy `gpt` 窗口。确认 run `507` 是 account `105` 的注册流程，不是 `roxy_2fa_login.js`；`humanClick()` 已改用 Locator，密码提交前后增加阶段复查。
+- 实机验证：手动 `Resend email` 后提交新验证码，页面已进入 `https://auth.openai.com/about-you`；未关闭 Roxy。
+- 自动验证：`node --test test/roxyRegisterOpenai.test.js` 29/29、相关 `node --check` 和 `git diff --check` 通过。
+
 ## 2026-07-15 补号状态查询邮箱 API 日志映射修正
 
 - 来源工作日志：`docs/work/2026-07-15-replacement-status-api-log-mapping.md`
@@ -349,7 +400,7 @@
 
 - 来源工作日志：`docs/work/2026-06-25-registration-token-output-and-list-empty-state.md`
 - change：`docs/changes/CHG-046-registration-token-output-and-list-empty-state.md`，状态 `merged`，已合并到 PRD-003。
-- 当前进展：OpenAI 注册自动化在成功读取 `chatgpt.com/api/auth/session` 的 `accessToken` 后，会保存 `src/auto/product_files/registration/<email>.json`；文件名默认使用补号邮箱号，仅替换 Windows 不允许的文件名字符。注册日志只输出 token 文件路径，不输出 token 明文。`/accounts` 页面改为复用统一 sidebar，补号日志入口在邮箱账号页可见；邮箱账号列表和补号日志列表在无数据或筛选无结果时显示空态行。
+- 当前进展：OpenAI 注册自动化在成功读取 `chatgpt.com/api/auth/session` 的 `accessToken` 后，会保存纯 token 值到 `src/auto/product_files/registration/<email>.txt`；文件名默认使用补号邮箱号，仅替换 Windows 不允许的文件名字符。注册日志只输出 token 文件路径，不输出 token 明文。`/accounts` 页面改为复用统一 sidebar，补号日志入口在邮箱账号页可见；邮箱账号列表和补号日志列表在无数据或筛选无结果时显示空态行。
 - 验证：`node --test test\roxyRegisterOpenai.test.js` 通过，4/4 pass；`node --test test\replacementAccountsWeb.test.js` 通过，10/10 pass。
 - 待办：重启当前 `node src/server.js` 服务后，前端页面和注册子进程新逻辑才会在 13100 端口生效。
 

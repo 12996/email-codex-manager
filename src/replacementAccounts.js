@@ -4,6 +4,7 @@ const LEGACY_STATUS_MAP = new Map([
   ['pending', 'for_sale'],
   ['active', 'plus_active'],
   ['replaced', 'cpa_mounted'],
+  ['failed', 'banned'],
 ]);
 const MANUAL_STATUSES = new Set([
   'unregistered',
@@ -14,7 +15,6 @@ const MANUAL_STATUSES = new Set([
   'for_sale',
   'sold',
   'banned',
-  'failed',
 ]);
 const SYSTEM_STATUSES = new Set([...MANUAL_STATUSES, 'replacing']);
 const REPLACEMENT_FAILURE_BREAKER_THRESHOLD = 5;
@@ -314,14 +314,30 @@ export function createReplacementAccountRepository(db) {
     },
 
     recordPlusStatusCheckFailure(id, errorMessage) {
+      return this.recordOperationFailure(id, 'Plus 状态查询', errorMessage);
+    },
+
+    recordOperationFailure(id, operationLabel, errorMessage) {
       const existing = assertAccountExists(this.getAccount(id));
       const now = new Date().toISOString();
-      const message = normalizeErrorMessage(errorMessage) || '未知错误';
+      const operation = normalizeOptional(operationLabel) || '操作';
+      const message = `${operation}失败：${normalizeErrorMessage(errorMessage)}`;
       db.prepare(`
         UPDATE replacement_accounts
         SET last_error = ?, updated_at = ?
         WHERE id = ?
-      `).run(`Plus 状态查询失败：${message}`, now, existing.id);
+      `).run(message, now, existing.id);
+      return this.getAccount(existing.id);
+    },
+
+    recordOperationSuccess(id) {
+      const existing = assertAccountExists(this.getAccount(id));
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE replacement_accounts
+        SET last_error = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(now, existing.id);
       return this.getAccount(existing.id);
     },
 
@@ -333,6 +349,17 @@ export function createReplacementAccountRepository(db) {
         SET sms_last_error = ?, updated_at = ?
         WHERE id = ?
       `).run(normalizeErrorMessage(errorMessage), now, existing.id);
+      return this.getAccount(existing.id);
+    },
+
+    recordSmsSuccess(id) {
+      const existing = assertAccountExists(this.getAccount(id));
+      const now = new Date().toISOString();
+      db.prepare(`
+        UPDATE replacement_accounts
+        SET sms_last_error = NULL, updated_at = ?
+        WHERE id = ?
+      `).run(now, existing.id);
       return this.getAccount(existing.id);
     },
 
@@ -358,7 +385,7 @@ export function createReplacementAccountRepository(db) {
         UPDATE replacement_accounts
         SET last_error = ?, updated_at = ?
         WHERE id = ?
-      `).run(normalizeErrorMessage(errorMessage), now, existing.id);
+      `).run(`获取 JSON失败：${normalizeErrorMessage(errorMessage)}`, now, existing.id);
       return this.getAccount(existing.id);
     },
 
@@ -413,7 +440,7 @@ export function createReplacementAccountRepository(db) {
       return this.getAccount(existing.id);
     },
 
-    markReplacementFailure(id, errorMessage) {
+    markReplacementFailure(id, errorMessage, previousStatus, operationLabel = '补号') {
       const existing = assertAccountExists(this.getAccount(id));
       const now = new Date().toISOString();
       const nextFailures = Number(existing.consecutive_replace_failures || 0) + 1;
@@ -421,6 +448,8 @@ export function createReplacementAccountRepository(db) {
       const breakerReason = shouldOpenCircuitBreaker
         ? `连续补号失败 ${REPLACEMENT_FAILURE_BREAKER_THRESHOLD} 次，自动熔断`
         : null;
+      const restoredStatus = resolveReplacementFailureStatus(existing.status, previousStatus);
+      const operation = normalizeOptional(operationLabel) || '补号';
       db.prepare(`
         UPDATE replacement_accounts
         SET
@@ -434,14 +463,14 @@ export function createReplacementAccountRepository(db) {
           updated_at = ?
         WHERE id = ?
       `).run(
-        'failed',
+        restoredStatus,
         now,
         breakerReason,
         breakerReason,
         nextFailures,
         shouldOpenCircuitBreaker ? now : null,
         breakerReason,
-        normalizeErrorMessage(errorMessage),
+        `${operation}失败：${normalizeErrorMessage(errorMessage)}`,
         now,
         existing.id,
       );
@@ -512,6 +541,16 @@ function normalizeStatusValue(status) {
 
 function normalizeStoredStatus(status) {
   return normalizeStatusValue(normalizeOptional(status) || 'unregistered');
+}
+
+function resolveReplacementFailureStatus(currentStatus, previousStatus) {
+  const previous = normalizeStoredStatus(previousStatus);
+  if (MANUAL_STATUSES.has(previous)) return previous;
+
+  const current = normalizeStoredStatus(currentStatus);
+  if (MANUAL_STATUSES.has(current)) return current;
+
+  return 'for_sale';
 }
 
 function normalizeAccountRecord(account) {

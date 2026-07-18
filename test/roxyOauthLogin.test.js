@@ -668,6 +668,106 @@ test('openAi_email_code honors configured external email code API for iCloud ema
   ]);
 });
 
+test('openAi_email_code 协议模式在 Roxy 页面上下文提交验证码并处理 continue_url', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
+  const fetchCalls = [];
+  const navigationCalls = [];
+  const previousFetch = globalThis.fetch;
+
+  page.evaluate = async (fn, argument) => fn(argument);
+  page.goto = async (url, options) => navigationCalls.push([url, options]);
+  globalThis.fetch = async (url, options) => {
+    fetchCalls.push([url, options]);
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return { continue_url: '/about-you' };
+      },
+    };
+  };
+
+  try {
+    const result = await openAi_email_code(page, 'target@example.com', {
+      env: { ROXY_EMAIL_OTP_PROTOCOL: '1' },
+      emailOtpInvocationId: 'test-invocation-id',
+      timeoutMs: 100,
+    });
+
+    assert.deepEqual(result, {
+      status: 'email-code-protocol-submitted',
+      email: 'target@example.com',
+      code: '687664',
+      continueUrl: 'https://auth.openai.com/about-you',
+    });
+    assert.equal(fetchCalls.length, 1);
+    assert.equal(fetchCalls[0][0], 'https://auth.openai.com/api/accounts/email-otp/validate');
+    assert.equal(fetchCalls[0][1].method, 'POST');
+    assert.equal(fetchCalls[0][1].credentials, 'include');
+    assert.deepEqual(fetchCalls[0][1].headers, {
+      accept: 'application/json',
+      'content-type': 'application/json',
+      'x-access-flow-invocation-id': 'test-invocation-id',
+    });
+    assert.equal(fetchCalls[0][1].body, JSON.stringify({ code: '687664' }));
+    assert.deepEqual(navigationCalls, [[
+      'https://auth.openai.com/about-you',
+      { waitUntil: 'domcontentloaded', timeout: 100 },
+    ]]);
+    assert.equal(calls.some((call) => call[0] === 'code.fill'), false);
+    assert.equal(calls.some((call) => call[0] === 'continue.click'), false);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test('openAi_email_code 协议模式遇到 HTTP 401 时不再二次提交 DOM 验证码', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
+
+  page.evaluate = async () => ({
+    ok: false,
+    status: 401,
+    data: { error: 'invalid code' },
+  });
+
+  await assert.rejects(
+    openAi_email_code(page, 'target@example.com', {
+      env: { ROXY_EMAIL_OTP_PROTOCOL: '1' },
+      timeoutMs: 100,
+    }),
+    (error) => {
+      assert.equal(error.code, 'OPENAI_EMAIL_OTP_PROTOCOL_FAILED');
+      assert.equal(error.status, 401);
+      return true;
+    },
+  );
+
+  assert.equal(calls.some((call) => call[0] === 'code.fill'), false);
+  assert.equal(calls.some((call) => call[0] === 'continue.click'), false);
+});
+
+test('openAi_email_code 协议模式在页面不支持 evaluate 时回退 DOM 提交', async () => {
+  const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
+  const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');
+
+  const result = await openAi_email_code(page, 'target@example.com', {
+    env: { ROXY_EMAIL_OTP_PROTOCOL: '1' },
+    timeoutMs: 100,
+  });
+
+  assert.deepEqual(result, {
+    status: 'email-code-submitted',
+    email: 'target@example.com',
+    code: '687664',
+  });
+  assert.deepEqual(calls.filter((call) => ['code.fill', 'continue.click'].includes(call[0])), [
+    ['code.fill', '687664'],
+    ['continue.click', { timeout: 100 }],
+  ]);
+});
+
 test('openAi_email_code sends configured admin_auth cookie when fetching email code', async () => {
   const { openAi_email_code } = require('../src/auto/roxy_oauth_login.js');
   const { page, calls } = createOpenAiPageHarness('Enter the code sent to your email. Code Continue');

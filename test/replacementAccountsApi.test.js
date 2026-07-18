@@ -336,7 +336,7 @@ test('replacement account API filters accounts with circuit breaker enabled', as
   const circuitBroken = replacementAccounts.createAccount({ email: 'broken@example.com' });
   for (let index = 0; index < 5; index += 1) {
     replacementAccounts.markReplacementStarted(circuitBroken.id);
-    replacementAccounts.markReplacementFailure(circuitBroken.id, `automation failed ${index + 1}`);
+    replacementAccounts.markReplacementFailure(circuitBroken.id, `automation failed ${index + 1}`, circuitBroken.status, '补号');
   }
   const server = await startTestServer(app);
 
@@ -731,8 +731,8 @@ test('POST /replacement-accounts/:id/replace-2fa returns worker failure with acc
         ok: false,
         account: {
           ...account,
-          status: 'failed',
-          last_error: 'CPA upload failed',
+          status: 'unregistered',
+          last_error: '2FA补号失败：CPA upload failed',
         },
         error: 'CPA upload failed',
       };
@@ -747,8 +747,8 @@ test('POST /replacement-accounts/:id/replace-2fa returns worker failure with acc
 
     assert.equal(response.response.status, 502);
     assert.equal(response.body.error, 'REPLACE_FAILED');
-    assert.equal(response.body.account.status, 'failed');
-    assert.equal(response.body.account.last_error, 'CPA upload failed');
+    assert.equal(response.body.account.status, 'unregistered');
+    assert.equal(response.body.account.last_error, '2FA补号失败：CPA upload failed');
     assert.deepEqual(events, [['cpa-repair', created.id, 'manual', '2fa']]);
   } finally {
     await server.close();
@@ -790,6 +790,7 @@ test('POST /replacement-accounts/:id/login-2fa starts 2fa login automation witho
     codex_2fa: 'JBSWY3DPEHPK3PXP',
     status: 'plus_active',
   });
+  replacementAccounts.recordOperationFailure(created.id, '2FA登录', 'previous login failure');
 
   const server = await startTestServer(app);
   try {
@@ -799,6 +800,7 @@ test('POST /replacement-accounts/:id/login-2fa starts 2fa login automation witho
     assert.equal(response.body.ok, true);
     assert.equal(response.body.account.status, 'plus_active');
     assert.equal(response.body.account.replacement_count, 0);
+    assert.equal(response.body.account.last_error, null);
     assert.equal(response.body.run.id, 808);
     assert.deepEqual(events, [['login-2fa', created.id, 'user@example.com', 'account-password', 'JBSWY3DPEHPK3PXP']]);
   } finally {
@@ -879,6 +881,102 @@ test('POST /replacement-accounts/:id/register starts registration automation', a
     assert.equal(replacementAccounts.getAccount(created.id).status, 'registered');
     assert.deepEqual(response.body.run, { id: 88, status: 'running' });
     assert.deepEqual(events, [['register', created.id, 'user@example.com']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/register-protocol runs protocol registration for the current row', async () => {
+  const events = [];
+  const services = {
+    ...successfulServices(),
+    async registerProtocolAccount(account) {
+      events.push(['register-protocol', account.id, account.email]);
+      return {
+        ok: true,
+        run: { id: 89, status: 'running' },
+        childResult: {
+          registrationMfa: {
+            secret: 'JBSWY3DPEHPK3PXP',
+            enabled: true,
+          },
+        },
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({ email: 'protocol@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/register-protocol`);
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.account.id, created.id);
+    assert.equal(response.body.account.status, 'registered');
+    assert.equal(response.body.account.codex_2fa, 'JBSWY3DPEHPK3PXP');
+    assert.equal(replacementAccounts.getAccount(created.id).codex_2fa, 'JBSWY3DPEHPK3PXP');
+    assert.deepEqual(response.body.run, { id: 89, status: 'running' });
+    assert.deepEqual(events, [['register-protocol', created.id, 'protocol@example.com']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/register-protocol streams current protocol logs when requested', async () => {
+  const services = {
+    ...successfulServices(),
+    async registerProtocolAccount(account, options = {}) {
+      options.onLog?.({ type: 'step', step: 'child-start', message: '协议子进程已启动' });
+      options.onLog?.({ type: 'log', stream: 'stdout', text: '[OTP] waiting\n' });
+      return { ok: true, run: { id: 90, status: 'running' } };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({ email: 'protocol-live@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await fetch(`${server.baseUrl}/replacement-accounts/${created.id}/register-protocol`, {
+      method: 'POST',
+      headers: {
+        accept: 'text/event-stream',
+        cookie: authCookie(),
+      },
+    });
+    const text = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /text\/event-stream/);
+    assert.match(text, /"type":"protocol-step"/);
+    assert.match(text, /"type":"protocol-log"/);
+    assert.match(text, /\[OTP\] waiting/);
+    assert.match(text, /"type":"complete"/);
+    assert.equal(replacementAccounts.getAccount(created.id).status, 'registered');
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/register-protocol records failure without changing account status', async () => {
+  const services = {
+    ...successfulServices(),
+    async registerProtocolAccount() {
+      throw Object.assign(new Error('protocol failed'), { code: 'PROTOCOL_REGISTER_FAILED' });
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({ email: 'protocol-failed@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/register-protocol`);
+
+    assert.equal(response.response.status, 502);
+    assert.equal(response.body.error, 'PROTOCOL_REGISTER_FAILED');
+    assert.equal(response.body.account.status, 'unregistered');
+    assert.match(response.body.account.last_error, /协议注册失败/);
   } finally {
     await server.close();
   }
@@ -1007,13 +1105,37 @@ test('replacement account failure APIs persist errors without incrementing repla
       url: 'https://example.invalid/account.json',
     });
     assert.equal(json.response.status, 502);
-    assert.equal(replacementAccounts.getAccount(created.id).last_error, 'json failed');
+    assert.equal(replacementAccounts.getAccount(created.id).last_error, '获取 JSON失败：json failed');
 
     const replace = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace`);
     assert.equal(replace.response.status, 502);
-    assert.equal(replace.body.account.status, 'failed');
+    assert.equal(replace.body.account.status, 'unregistered');
     assert.equal(replace.body.account.replacement_count, 0);
-    assert.equal(replacementAccounts.getAccount(created.id).last_error, 'replace failed');
+    assert.equal(replacementAccounts.getAccount(created.id).last_error, '补号失败：replace failed');
+  } finally {
+    await server.close();
+  }
+});
+
+test('replacement failure keeps the business status and exposes the operation failure', async () => {
+  const failingServices = {
+    async replaceAccount() {
+      throw Object.assign(new Error('replace failed'), { code: 'REPLACE_FAILED' });
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(failingServices);
+  const created = replacementAccounts.createAccount({
+    email: 'plus-active-replace-failed@example.com',
+    status: 'plus_active',
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace`);
+
+    assert.equal(response.response.status, 502);
+    assert.equal(response.body.account.status, 'plus_active');
+    assert.equal(response.body.account.last_error, '补号失败：replace failed');
   } finally {
     await server.close();
   }
@@ -1042,7 +1164,7 @@ test('direct replacement API creates notification when fifth failure opens circu
     }
 
     assert.equal(lastResponse.response.status, 502);
-    assert.equal(lastResponse.body.account.status, 'failed');
+    assert.equal(lastResponse.body.account.status, 'unregistered');
     assert.equal(adminNotifications.countUnread(), 1);
     assert.match(adminNotifications.listNotifications()[0].message, /user@example.com 连续自动补号失败 5 次/);
     assert.doesNotMatch(adminNotifications.listNotifications()[0].message, /banned/);
@@ -1056,7 +1178,7 @@ test('replacement account API resets circuit breaker fields', async () => {
   const created = replacementAccounts.createAccount({ email: 'user@example.com' });
   for (let index = 0; index < 5; index += 1) {
     replacementAccounts.markReplacementStarted(created.id);
-    replacementAccounts.markReplacementFailure(created.id, `automation failed ${index + 1}`);
+    replacementAccounts.markReplacementFailure(created.id, `automation failed ${index + 1}`, created.status, '补号');
   }
   const server = await startTestServer(app);
 
@@ -1064,7 +1186,7 @@ test('replacement account API resets circuit breaker fields', async () => {
     const response = await jsonRequest(server, 'PATCH', `/replacement-accounts/${created.id}/circuit-breaker/reset`);
 
     assert.equal(response.response.status, 200);
-    assert.equal(response.body.account.status, 'failed');
+    assert.equal(response.body.account.status, 'unregistered');
     assert.equal(response.body.account.status_note, '管理员手动解除熔断');
     assert.equal(response.body.account.consecutive_replace_failures, 0);
     assert.equal(response.body.account.circuit_breaker_at, null);

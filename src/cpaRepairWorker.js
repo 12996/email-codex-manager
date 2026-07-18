@@ -13,6 +13,8 @@ export function createCpaRepairWorker({
 } = {}) {
   return {
     async repair({ account, credential, reasons, mode } = {}) {
+      const previousStatus = account.status;
+      const operationLabel = mode === '2fa' ? '2FA补号' : '补号';
       replacementAccounts.markReplacementStarted(account.id);
       let runLogPath = '';
       const triggerDetails = formatCpaTriggerDetails({ credential, reasons });
@@ -47,7 +49,12 @@ export function createCpaRepairWorker({
         appendRepairLog(runLogPath, 'cpa-success', 'CPA repair 完成', `account_id=${account.id}`);
         return { ok: true, account: updated, ...(replacementResult?.run ? { run: replacementResult.run } : {}) };
       } catch (error) {
-        const updated = replacementAccounts.markReplacementFailure(account.id, error.message);
+        const updated = replacementAccounts.markReplacementFailure(
+          account.id,
+          error.message,
+          previousStatus,
+          operationLabel,
+        );
         notifyCircuitBreaker(adminNotifications, updated);
         appendRepairLog(runLogPath, 'cpa-failure', 'CPA repair 失败', `account_id=${account.id} error=${error.message || error}`);
         return { ok: false, account: updated, error: error.message };

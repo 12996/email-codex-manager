@@ -79,6 +79,20 @@ function initializeSchema(db) {
     WHERE public_code_key IS NOT NULL AND public_code_key != '';
   `);
 
+  const statusMigrationNow = new Date().toISOString();
+  db.prepare(`
+    UPDATE replacement_accounts
+    SET
+      status = 'banned',
+      status_note = CASE
+        WHEN status_note IS NULL OR trim(status_note) = '' THEN '历史失败状态统一迁移为账号封禁'
+        ELSE status_note
+      END,
+      status_updated_at = COALESCE(status_updated_at, ?),
+      updated_at = ?
+    WHERE status = 'failed'
+  `).run(statusMigrationNow, statusMigrationNow);
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS replacement_activation_methods (
       id INTEGER PRIMARY KEY AUTOINCREMENT,

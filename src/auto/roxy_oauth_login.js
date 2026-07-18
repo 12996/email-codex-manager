@@ -19,6 +19,7 @@ const DEFAULT_POST_EMAIL_STAGE_TIMEOUT_MS = 8000;
 const DEFAULT_POST_EMAIL_STAGE_MAX_RETRIES = 3;
 const DEFAULT_ROXY_WINDOW_WIDTH = 2048;
 const DEFAULT_ROXY_WINDOW_HEIGHT = 1152;
+const EMAIL_OTP_VALIDATE_PATH = '/api/accounts/email-otp/validate';
 const Default_EMAIL='jregkolpig+s4@gmail.com';
 const DEFAULT_PHONE_VERIFICATION_SMS_API_URL = 'https://cdc.smslease.link/adminapi/jsscript/smsInfo/ABC_sms?key=3b7c79633a6a3cd91862eb32e5f3f5cd';
 const EMAIL_SUBTITLE_SELECTOR = 'body > div > div > div._titleBlock_l85du_108 > div > span > div > div._subtitle_7asl0_13';
@@ -528,6 +529,154 @@ async function fillEmailVerificationCodeInput(page, code, timeoutMs, options = {
     }
 }
 
+function isEnabledFlag(value) {
+    return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
+}
+
+function shouldUseEmailOtpProtocol(options = {}) {
+    const configured = options.emailOtpProtocol !== undefined
+        ? options.emailOtpProtocol
+        : options.env?.ROXY_EMAIL_OTP_PROTOCOL ?? process.env.ROXY_EMAIL_OTP_PROTOCOL;
+    return isEnabledFlag(configured);
+}
+
+function resolveEmailOtpValidationUrl(page, options = {}) {
+    const configured = options.emailOtpValidationUrl || options.emailOtpValidateUrl;
+    if (configured) return String(configured).trim();
+
+    const currentUrl = typeof page?.url === 'function' ? String(page.url() || '') : '';
+    try {
+        return new URL(EMAIL_OTP_VALIDATE_PATH, currentUrl || 'https://auth.openai.com/').toString();
+    } catch {
+        return EMAIL_OTP_VALIDATE_PATH;
+    }
+}
+
+function createEmailOtpInvocationId(options = {}) {
+    const configured = String(options.emailOtpInvocationId || '').trim();
+    return configured || crypto.randomUUID();
+}
+
+function resolveEmailOtpContinueUrl(page, continueUrl) {
+    const currentUrl = typeof page?.url === 'function' ? String(page.url() || '') : '';
+    try {
+        return new URL(String(continueUrl), currentUrl || 'https://auth.openai.com/').toString();
+    } catch {
+        throw createAutomationError('OPENAI_EMAIL_OTP_CONTINUE_URL_INVALID', '邮箱验证码协议返回的 continue_url 无效');
+    }
+}
+
+async function submitEmailOtpWithProtocol(page, code, options = {}) {
+    if (typeof page?.evaluate !== 'function') {
+        logConfigured(options, 'openai-email-code', '协议提交不可用，回退 DOM', 'reason=evaluate-unavailable');
+        return null;
+    }
+
+    const timeoutMs = options.timeoutMs || DEFAULT_NAVIGATION_TIMEOUT_MS;
+    const endpoint = resolveEmailOtpValidationUrl(page, options);
+    const invocationId = createEmailOtpInvocationId(options);
+    let result;
+
+    try {
+        result = await withTimeout(
+            page.evaluate(async ({ endpoint: requestUrl, code: requestCode, invocationId: requestInvocationId, timeoutMs: fetchTimeoutMs }) => {
+                const controller = typeof AbortController === 'function' ? new AbortController() : null;
+                const timer = controller && typeof setTimeout === 'function'
+                    ? setTimeout(() => controller.abort(), fetchTimeoutMs)
+                    : null;
+                try {
+                    const response = await fetch(requestUrl, {
+                        method: 'POST',
+                        credentials: 'include',
+                        headers: {
+                            accept: 'application/json',
+                            'content-type': 'application/json',
+                            'x-access-flow-invocation-id': requestInvocationId
+                        },
+                        body: JSON.stringify({ code: requestCode }),
+                        ...(controller ? { signal: controller.signal } : {})
+                    });
+                    let data = null;
+                    try {
+                        data = await response.json();
+                    } catch {
+                        data = null;
+                    }
+                    return {
+                        ok: response.ok,
+                        status: response.status,
+                        data
+                    };
+                } catch (error) {
+                    return {
+                        ok: false,
+                        status: 0,
+                        networkError: String(error?.message || error)
+                    };
+                } finally {
+                    if (timer && typeof clearTimeout === 'function') {
+                        clearTimeout(timer);
+                    }
+                }
+            }, {
+                endpoint,
+                code: String(code),
+                invocationId,
+                timeoutMs
+            }),
+            timeoutMs,
+            () => createAutomationError('OPENAI_EMAIL_OTP_PROTOCOL_TIMEOUT', '邮箱验证码协议请求超时')
+        );
+    } catch (error) {
+        logConfigured(options, 'openai-email-code', '协议提交失败，回退 DOM', `reason=${error?.message || error}`);
+        return null;
+    }
+
+    if (result?.status >= 400 || (result?.ok === false && result?.status > 0)) {
+        throw createAutomationError('OPENAI_EMAIL_OTP_PROTOCOL_FAILED', '邮箱验证码协议提交失败', {
+            status: result.status,
+            apiResult: result.data
+        });
+    }
+
+    if (!result?.ok) {
+        logConfigured(options, 'openai-email-code', '协议提交失败，回退 DOM', `reason=${result?.networkError || 'network-error'}`);
+        return null;
+    }
+
+    const continueUrlValue = result.data?.continue_url || result.data?.continueUrl;
+    if (!continueUrlValue) {
+        throw createAutomationError('OPENAI_EMAIL_OTP_CONTINUE_URL_MISSING', '邮箱验证码协议响应缺少 continue_url', {
+            status: result.status,
+            apiResult: result.data
+        });
+    }
+
+    const continueUrl = resolveEmailOtpContinueUrl(page, continueUrlValue);
+    try {
+        if (typeof page.goto === 'function') {
+            await page.goto(continueUrl, {
+                waitUntil: 'domcontentloaded',
+                timeout: timeoutMs
+            });
+        } else {
+            await page.evaluate(({ url }) => {
+                window.location.assign(url);
+            }, { url: continueUrl });
+        }
+    } catch (error) {
+        const message = String(error?.message || error);
+        if (!/ERR_CONNECTION_ABORTED|ERR_ABORTED/i.test(message)) {
+            throw createAutomationError('OPENAI_EMAIL_OTP_CONTINUE_NAVIGATION_FAILED', '邮箱验证码协议成功后导航 continue_url 失败', {
+                continueUrl,
+                cause: message
+            });
+        }
+    }
+
+    return { continueUrl };
+}
+
 async function fetchEmailVerificationCode(page, email, options) {
     const maxAttempts = normalizePositiveInteger(options.codePollMaxAttempts, DEFAULT_CODE_POLL_MAX_ATTEMPTS);
     let result;
@@ -658,6 +807,19 @@ async function openAi_email_code(page, email, options = {}) {
 
         const nextStage = await detectPostEmailCodeStage(page, options);
         if (nextStage) return nextStage;
+
+        if (shouldUseEmailOtpProtocol(options)) {
+            const protocolResult = await submitEmailOtpWithProtocol(page, code, options);
+            if (protocolResult) {
+                logConfigured(options, 'openai-email-code', '邮箱验证码协议提交完成', 'code=received');
+                return {
+                    status: 'email-code-protocol-submitted',
+                    email: normalizedEmail,
+                    code: String(code),
+                    continueUrl: protocolResult.continueUrl
+                };
+            }
+        }
 
         logConfigured(options, 'openai-email-code', '填写邮箱验证码', 'code=received');
         const fillNextStage = await fillEmailVerificationCodeInput(page, code, timeoutMs, options);

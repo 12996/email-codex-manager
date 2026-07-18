@@ -21,7 +21,6 @@ const statusLabels = {
   for_sale: '待出售',
   sold: '已售出',
   banned: '账号封禁',
-  failed: '失败',
   replacing: '处理中',
 };
 
@@ -34,7 +33,6 @@ const statusOptions = [
   'for_sale',
   'sold',
   'banned',
-  'failed',
 ];
 
 const compactFieldPreviewLength = 6;
@@ -53,6 +51,7 @@ const tableFieldLimits = Object.fromEntries(
 
 const $ = (selector) => document.querySelector(selector);
 let progressActionRunning = false;
+let protocolRegistrationRunning = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
@@ -92,6 +91,7 @@ function bindEvents() {
     state.activity = [];
     renderActivity();
   });
+  $('#clearProtocolLiveLog').addEventListener('click', clearProtocolLiveLog);
   document.querySelectorAll('[data-close]').forEach((button) => {
     button.addEventListener('click', () => button.closest('dialog').close());
   });
@@ -197,6 +197,7 @@ function accountRow(account) {
             <button type="button" data-action="sms" data-id="${account.id}">▣ 获取验证码</button>
             <button type="button" data-action="json" data-id="${account.id}">▣ 获取 JSON</button>
             <button type="button" data-action="register" data-id="${account.id}">✚ 注册</button>
+            <button type="button" data-action="register-protocol" data-id="${account.id}">⇄ 协议注册</button>
             <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
             <button type="button" data-action="replace-2fa" data-id="${account.id}">⟳ 2FA补号</button>
             <button type="button" data-action="login-2fa" data-id="${account.id}">🔑 2FA登录</button>
@@ -222,9 +223,29 @@ function renderStatusSelect(account) {
       <select class="status-select ${escapeHtml(status)}" data-id="${account.id}" aria-label="修改账号状态">
         ${options}
       </select>
+      ${renderOperationFailure(account)}
       ${breakerBadge}
     </div>
   `;
+}
+
+function operationFailureLabel(account) {
+  const lastError = String(account?.last_error || '');
+  if (/2FA补号失败|2FA.*REPLACE_FAILED/i.test(lastError)) return '2FA补号失败';
+  if (/补号失败|REPLACE_FAILED/i.test(lastError)) return '补号失败';
+  if (/查询 Plus失败|Plus 状态查询失败/i.test(lastError)) return '查询 Plus 失败';
+  if (/一键验活失败/i.test(lastError)) return '一键验活失败';
+  if (/协议注册失败|PROTOCOL_REGISTER_FAILED/i.test(lastError)) return '协议注册失败';
+  if (/注册失败|REGISTER_FAILED/i.test(lastError)) return '注册失败';
+  if (/2FA登录失败|LOGIN_2FA_FAILED/i.test(lastError)) return '2FA登录失败';
+  if (/获取 JSON失败|JSON_FETCH_FAILED/i.test(lastError)) return '获取 JSON失败';
+  if (String(account?.sms_last_error || '').trim()) return '获取验证码失败';
+  return lastError.trim() ? '操作失败' : '';
+}
+
+function renderOperationFailure(account) {
+  const label = operationFailureLabel(account);
+  return label ? `<div class="operation-failure">${escapeHtml(label)}</div>` : '';
 }
 
 function renderActivationMethodSelect(account) {
@@ -322,6 +343,7 @@ async function handleAction(action, id, dataset = {}) {
   if (action === 'sms') return fetchSmsCode(account);
   if (action === 'json') return fetchJson(account);
   if (action === 'register') return registerAccount(account);
+  if (action === 'register-protocol') return registerProtocolAccount(account);
   if (action === 'replace') return replaceAccount(account);
   if (action === 'replace-2fa') return replaceAccountWith2FA(account);
   if (action === 'login-2fa') return loginAccountWith2FA(account);
@@ -624,6 +646,28 @@ async function registerAccount(account) {
   }
 }
 
+async function registerProtocolAccount(account) {
+  if (protocolRegistrationRunning) {
+    toast('已有协议注册正在执行');
+    return;
+  }
+
+  protocolRegistrationRunning = true;
+  resetProtocolLiveLog(account);
+  try {
+    await streamProtocolRegistration(account);
+    toast('协议注册已完成，Roxy 指纹已刷新');
+    await loadAccounts();
+  } catch (error) {
+    appendProtocolLiveLog(`执行失败：${error.message}`, 'error');
+    setProtocolLiveSummary('协议注册失败', 'error');
+    toast(error.message);
+    await loadAccounts();
+  } finally {
+    protocolRegistrationRunning = false;
+  }
+}
+
 async function healthcheckBannedAccounts() {
   if (!confirm('确认对 plus_active、cpa_mounted、for_sale、sold 状态账号执行一键验活？只查询已配置 email_code_api 的账号，未配置的账号会跳过。')) return;
   await runProgressAction({
@@ -679,6 +723,17 @@ function showProgressDialog(title) {
 }
 
 async function streamProgress(endpoint) {
+  return streamEventStream(endpoint, handleProgressEvent);
+}
+
+async function streamProtocolRegistration(account) {
+  return streamEventStream(
+    `/replacement-accounts/${account.id}/register-protocol`,
+    handleProtocolLiveEvent,
+  );
+}
+
+async function streamEventStream(endpoint, handleEvent) {
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: {
@@ -704,14 +759,14 @@ async function streamProgress(endpoint) {
     for (const frame of frames) {
       const event = parseProgressFrame(frame);
       if (!event) continue;
-      handleProgressEvent(event);
+      handleEvent(event);
       if (event.type === 'complete') result = event.result;
     }
     if (done) break;
   }
   const lastEvent = parseProgressFrame(buffer);
   if (lastEvent) {
-    handleProgressEvent(lastEvent);
+    handleEvent(lastEvent);
     if (lastEvent.type === 'complete') result = lastEvent.result;
   }
   if (!result) throw new Error('进度流未正常完成');
@@ -753,6 +808,70 @@ function handleProgressEvent(event) {
   }
 }
 
+function handleProtocolLiveEvent(event) {
+  if (event.type === 'start') {
+    $('#protocolLiveAccount').textContent = `当前账号：${event.email}（ID: ${event.accountId}）`;
+    setProtocolLiveSummary(event.message || '协议注册已开始');
+    appendProtocolLiveLog(event.message || '协议注册已开始');
+    return;
+  }
+  if (event.type === 'protocol-step') {
+    setProtocolLiveSummary(event.message || '协议注册处理中');
+    appendProtocolLiveLog(event.message || '协议注册步骤更新');
+    return;
+  }
+  if (event.type === 'protocol-log') {
+    const level = event.stream === 'stderr' ? 'error' : 'muted';
+    appendProtocolLiveLog(event.text || '', level);
+    return;
+  }
+  if (event.type === 'account-result') {
+    const level = event.outcome === 'failed' ? 'error' : 'success';
+    setProtocolLiveSummary(event.message || '协议注册完成', level);
+    appendProtocolLiveLog(event.message || '协议注册完成', level);
+    return;
+  }
+  if (event.type === 'complete') {
+    setProtocolLiveSummary(event.message || '协议注册完成', 'success');
+    appendProtocolLiveLog(event.message || '协议注册完成', 'success');
+    return;
+  }
+  if (event.type === 'error') {
+    setProtocolLiveSummary('协议注册失败', 'error');
+    appendProtocolLiveLog(event.message || '协议注册失败', 'error');
+    throw new Error(event.message || '协议注册失败');
+  }
+}
+
+function resetProtocolLiveLog(account) {
+  $('#protocolLiveAccount').textContent = `当前账号：${account.email}（ID: ${account.id}）`;
+  $('#protocolLiveSummary').textContent = '正在连接服务...';
+  $('#protocolLiveSummary').className = 'muted';
+  $('#protocolLiveLog').innerHTML = '';
+}
+
+function clearProtocolLiveLog() {
+  $('#protocolLiveAccount').textContent = '当前账号：-';
+  $('#protocolLiveSummary').textContent = '暂无当前协议注册任务';
+  $('#protocolLiveSummary').className = 'muted';
+  $('#protocolLiveLog').innerHTML = '';
+}
+
+function setProtocolLiveSummary(message, level = 'muted') {
+  const summary = $('#protocolLiveSummary');
+  summary.textContent = message;
+  summary.className = level === 'muted' ? 'muted' : `protocol-live-summary ${level}`;
+}
+
+function appendProtocolLiveLog(message, level = 'info') {
+  const log = $('#protocolLiveLog');
+  const entry = document.createElement('div');
+  entry.className = `progress-log-entry ${level}`;
+  entry.textContent = `[${new Date().toLocaleTimeString('zh-CN')}] ${message}`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+}
+
 function appendProgressLog(message, level = 'info') {
   const log = $('#progressLog');
   const entry = document.createElement('div');
@@ -765,7 +884,7 @@ function appendProgressLog(message, level = 'info') {
 async function batchReplace() {
   const candidates = selectedAccounts().length
     ? selectedAccounts()
-    : state.accounts.filter((account) => ['banned', 'failed', 'for_sale', 'registered', 'pending_activation', 'plus_active'].includes(account.status));
+    : state.accounts.filter((account) => ['banned', 'for_sale', 'registered', 'pending_activation', 'plus_active'].includes(account.status));
   if (!candidates.length) {
     toast('没有可补号账号');
     return;
@@ -825,7 +944,6 @@ function renderStats() {
   $('#statActive').textContent = counts.plus_active || 0;
   $('#statBanned').textContent = counts.banned || 0;
   $('#statReplaced').textContent = state.accounts.reduce((sum, account) => sum + Number(account.replacement_count || 0), 0);
-  $('#statFailed').textContent = counts.failed || 0;
   renderStatusLegend(counts);
 }
 
@@ -840,9 +958,8 @@ function renderStatusLegend(counts) {
     pending_activation: '#f2a23a',
     unregistered: '#8b9bb4',
     sold: '#7b55e7',
-    failed: '#b8c1ce',
   };
-  const statuses = ['unregistered', 'registered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned', 'failed'];
+  const statuses = ['unregistered', 'registered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned'];
   $('#statusLegend').innerHTML = statuses.map((status) => {
     const count = counts[status] || 0;
     const percent = Math.round((count / total) * 1000) / 10;

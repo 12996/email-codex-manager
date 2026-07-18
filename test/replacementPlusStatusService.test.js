@@ -94,6 +94,7 @@ test('runPlusStatusCheck only checks registered accounts and updates matching ac
     email: 'receiver+existing@gmail.com',
     status: 'plus_active',
   });
+  replacementAccounts.recordPlusStatusCheckFailure(clean.id, 'previous query failure');
   const calls = [];
 
   const result = await runPlusStatusCheck({
@@ -123,6 +124,7 @@ test('runPlusStatusCheck only checks registered accounts and updates matching ac
   assert.deepEqual(result.skippedAccounts.map((item) => item.email), [skipped.email]);
   assert.equal(replacementAccounts.getAccount(plus.id).status, 'plus_active');
   assert.equal(replacementAccounts.getAccount(clean.id).status, 'registered');
+  assert.equal(replacementAccounts.getAccount(clean.id).last_error, null);
   assert.equal(replacementAccounts.getAccount(skipped.id).status, 'registered');
   assert.equal(replacementAccounts.getAccount(alreadyPlus.id).status, 'plus_active');
   assert.deepEqual(

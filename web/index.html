@@ -38,7 +38,6 @@
       <article class="card green"><i>🛡</i><span>Plus 账号</span><strong id="statActive">0</strong><small>状态为开通 plus</small></article>
       <article class="card orange"><i>✚</i><span>已封禁</span><strong id="statBanned">0</strong><small>账号封禁</small></article>
       <article class="card purple"><i>↻</i><span>今日补号成功</span><strong id="statReplaced">0</strong><small>累计成功次数</small></article>
-      <article class="card red"><i>✖</i><span>今日补号失败</span><strong id="statFailed">0</strong><small>状态为 failed</small></article>
     </section>
 
     <section class="panel">
@@ -53,7 +52,6 @@
           <option value="for_sale">待出售</option>
           <option value="sold">已售出</option>
           <option value="banned">账号封禁</option>
-          <option value="failed">失败</option>
           <option value="circuit_breaker">已熔断</option>
         </select>
         <input id="searchInput" type="search" placeholder="搜索邮箱/手机号/备注">
@@ -102,6 +100,18 @@
         <strong id="pageText">第 1 / 1 页</strong>
         <button id="nextPageButton" class="ghost" type="button">下一页</button>
       </div>
+    </section>
+
+    <section id="protocolLivePanel" class="panel protocol-live-panel">
+      <div class="protocol-live-header">
+        <div>
+          <h2>当前协议注册日志</h2>
+          <p id="protocolLiveSummary" class="muted">暂无当前协议注册任务</p>
+        </div>
+        <button id="clearProtocolLiveLog" class="ghost" type="button">清空</button>
+      </div>
+      <p id="protocolLiveAccount" class="muted">当前账号：-</p>
+      <div id="protocolLiveLog" class="protocol-live-log" role="log" aria-live="polite" aria-atomic="false"></div>
     </section>
 
     <section class="dashboard-grid">
@@ -154,7 +164,6 @@
           <option value="for_sale">待出售</option>
           <option value="sold">已售出</option>
           <option value="banned">账号封禁</option>
-          <option value="failed">失败</option>
         </select>
       </label>
       <label>备注 <textarea name="remark" rows="3"></textarea></label>
@@ -192,7 +201,6 @@
           <option value="for_sale">待出售</option>
           <option value="sold">已售出</option>
           <option value="banned">账号封禁</option>
-          <option value="failed">失败</option>
         </select>
       </label>
       <label>状态备注 <textarea name="status_note" rows="3"></textarea></label>

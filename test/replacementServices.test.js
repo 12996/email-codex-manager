@@ -168,6 +168,217 @@ test('registerAccount injects per-account external email code API URL', async ()
   assert.equal(calls[0].options.env.REGISTRATION_EMAIL_CODE_API_URL, 'https://example.invalid/latest-code');
 });
 
+test('protocol registration defaults to the self-contained source under src/auto', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    prepareProtocolRoxyImpl: async () => ({ cdpEndpoint: 'ws://fresh' }),
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.registerProtocolAccount({ id: 41, email: 'protocol-path@example.com' });
+
+  const expectedRoot = join(process.cwd(), 'src', 'auto', 'protocol_registration');
+  assert.equal(calls[0].options.cwd, expectedRoot);
+  assert.equal(calls[0].args[0], join(expectedRoot, 'main.py'));
+});
+
+test('registerProtocolAccount refreshes the selected Roxy profile before spawning tilian protocol', async () => {
+  const calls = [];
+  let preparedEnv;
+  const protocolRoot = join(process.cwd(), 'src', 'auto', 'protocol_registration');
+  const services = createReplacementServices({
+    protocolPythonPath: 'F:/anaconda/anaconda3/envs/tilian/python.exe',
+    protocolProjectPath: protocolRoot,
+    protocolMainPath: join(protocolRoot, 'main.py'),
+    baseEnv: {
+      ROXY_API_BASE_URL: 'http://127.0.0.1:50000',
+      ROXY_API_TOKEN: 'token',
+      ROXY_CDP_ENDPOINT: 'ws://old-profile',
+      ROXY_BROWSER_SORT_NUM: '8',
+      ROXY_REGISTER_BROWSER_SORT_NUM: '8',
+    },
+    prepareProtocolRoxyImpl: async ({ env }) => {
+      preparedEnv = { ...env };
+      return { cdpEndpoint: 'ws://refreshed-profile' };
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.pid = 5173;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.registerProtocolAccount({
+    id: 42,
+    email: ' user@example.com ',
+    email_code_api: 'https://example.invalid/code',
+  });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'F:/anaconda/anaconda3/envs/tilian/python.exe');
+  assert.deepEqual(calls[0].args, [
+    join(protocolRoot, 'main.py'),
+    '--count', '1',
+    '--workers', '1',
+  ]);
+  assert.equal(calls[0].options.cwd, protocolRoot);
+  assert.equal(preparedEnv.ROXY_BROWSER_SORT_NUM, '3');
+  assert.equal(preparedEnv.ROXY_BROWSER_WINDOW_NAME, 'test');
+  assert.equal(calls[0].options.env.OTP_PROVIDER, 'replacement');
+  assert.equal(calls[0].options.env.EMAIL_SOURCE, 'replacement');
+  assert.equal(calls[0].options.env.REPLACEMENT_ACCOUNT_ID, '42');
+  assert.equal(calls[0].options.env.ROXY_CDP_ENABLED, '1');
+  assert.equal(calls[0].options.env.ROXY_CDP_ENDPOINT, 'ws://refreshed-profile');
+  assert.equal(calls[0].options.env.ROXY_CDP_PREPARE, '0');
+  assert.equal(calls[0].options.env.REGISTRATION_RESULT_JSON, '1');
+  assert.equal(calls[0].options.env.REGISTRATION_EMAIL_CODE_API_URL, 'https://example.invalid/code');
+  assert.equal(
+    calls[0].options.env.REGISTRATION_TOKEN_OUTPUT_DIR,
+    join(process.cwd(), 'src', 'auto', 'product_files', 'registration'),
+  );
+});
+
+test('registerProtocolAccount keeps MFA result parseable but redacts it from live and persisted logs', async () => {
+  const secret = 'JBSWY3DPEHPK3PXP';
+  const events = [];
+  const logDir = mkdtempSync(join(tmpdir(), 'gmail-imap-protocol-logs-'));
+  let logPath;
+  const services = createReplacementServices({
+    protocolPythonPath: 'python.exe',
+    protocolProjectPath: 'protocol-project',
+    protocolMainPath: 'protocol-project/main.py',
+    logDir,
+    automationRuns: {
+      createRun(input) {
+        logPath = input.log_path;
+        return { id: 99, ...input };
+      },
+      markSucceeded() {},
+    },
+    prepareProtocolRoxyImpl: async () => ({ cdpEndpoint: 'ws://fresh' }),
+    spawnImpl(command, args, options) {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        const output = `ROXY_REGISTER_RESULT_JSON=${JSON.stringify({
+            registrationMfa: { secret, enabled: true },
+          })}\n`;
+        const splitAt = output.indexOf(secret) + Math.floor(secret.length / 2);
+        child.stdout.emit('data', output.slice(0, splitAt));
+        child.stdout.emit('data', output.slice(splitAt));
+        child.emit('close', 0);
+      });
+      return child;
+    },
+  });
+
+  const result = await services.registerProtocolAccount(
+    { id: 21, email: 'protocol-mfa@example.com' },
+    { onLog: (event) => events.push(event) },
+  );
+
+  assert.equal(result.childResult.registrationMfa.secret, secret);
+  assert.match(result.stdout, new RegExp(secret));
+  const liveText = events
+    .filter((event) => event.type === 'log')
+    .map((event) => event.text)
+    .join('');
+  assert.doesNotMatch(liveText, new RegExp(secret));
+  assert.match(liveText, /\[redacted-secret\]/);
+  assert.doesNotMatch(readFileSync(logPath, 'utf8'), new RegExp(secret));
+  assert.match(readFileSync(logPath, 'utf8'), /\[redacted-secret\]/);
+});
+
+test('registerProtocolAccount performs the Roxy refresh sequence before the protocol child', async () => {
+  const steps = [];
+  const services = createReplacementServices({
+    protocolPythonPath: 'python.exe',
+    protocolProjectPath: 'protocol-project',
+    protocolMainPath: 'protocol-project/main.py',
+    roxyClientFactory: async () => ({
+      dirId: 'dir-3',
+      async resolveDirId() { steps.push('resolve'); },
+      async closeBrowser() { steps.push('close'); },
+      async clearLocalCache() { steps.push('clear-local'); },
+      async clearServerCache() { steps.push('clear-server'); },
+      async randomFingerprint() { steps.push('random-fingerprint'); },
+      async openBrowser() { steps.push('open'); },
+      async getConnectionInfo() {
+        steps.push('connection-info');
+        return { ws: 'ws://fresh' };
+      },
+    }),
+    spawnImpl(command, args) {
+      steps.push('spawn');
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.registerProtocolAccount({ id: 7, email: 'protocol@example.com' });
+
+  assert.deepEqual(steps, [
+    'resolve',
+    'close',
+    'clear-local',
+    'clear-server',
+    'random-fingerprint',
+    'open',
+    'connection-info',
+    'spawn',
+  ]);
+});
+
+test('registerProtocolAccount forwards current preparation and child output to the live log callback', async () => {
+  const events = [];
+  const services = createReplacementServices({
+    protocolPythonPath: 'python.exe',
+    protocolProjectPath: 'protocol-project',
+    protocolMainPath: 'protocol-project/main.py',
+    prepareProtocolRoxyImpl: async () => ({ cdpEndpoint: 'ws://fresh' }),
+    spawnImpl(command, args, options) {
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        child.stdout.emit('data', 'stdout line\n');
+        child.stderr.emit('data', 'stderr line\n');
+        child.emit('close', 0);
+      });
+      return child;
+    },
+  });
+
+  await services.registerProtocolAccount(
+    { id: 8, email: 'live-log@example.com' },
+    { onLog: (event) => events.push(event) },
+  );
+
+  assert.equal(events.some((event) => event.type === 'step'), true);
+  assert.deepEqual(
+    events.filter((event) => event.type === 'log').map(({ stream, text }) => ({ stream, text })),
+    [
+      { stream: 'stdout', text: 'stdout line\n' },
+      { stream: 'stderr', text: 'stderr line\n' },
+    ],
+  );
+});
+
 test('registerAccount injects replacement account password for OpenAI registration', async () => {
   const calls = [];
   const services = createReplacementServices({

@@ -119,6 +119,7 @@ export async function runPlusStatusCheck({
 
       result.registered += 1;
       result.registeredAccounts.push({ id: account.id, email: account.email });
+      replacementAccounts.recordOperationSuccess?.(account.id);
       reportProgress(onProgress, {
         type: 'account-result',
         operation: 'check-plus-status',

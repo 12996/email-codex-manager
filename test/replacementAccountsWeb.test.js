@@ -108,6 +108,7 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
     '/replace',
     '/replace-2fa',
     '/login-2fa',
+    '/register-protocol',
     '/healthcheck-banned',
     '/check-plus-status',
     '/status',
@@ -120,6 +121,9 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(html, /查询 Plus 状态/);
   assert.match(html, /id="progressDialog"/);
   assert.match(html, /执行进度/);
+  assert.match(html, /id="protocolLivePanel"/);
+  assert.match(html, /id="protocolLiveLog"/);
+  assert.ok(html.indexOf('id="protocolLivePanel"') < html.indexOf('快捷操作'));
   assert.match(html, /新增账号/);
   assert.match(html, /name="password"/);
   assert.match(appJs, /获取验证码/);
@@ -127,6 +131,13 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(appJs, /执行补号/);
   assert.match(appJs, /2FA补号/);
   assert.match(appJs, /2FA登录/);
+  assert.match(appJs, /协议注册/);
+  assert.match(appJs, /registerProtocolAccount/);
+  assert.match(appJs, /text\/event-stream/);
+  assert.match(appJs, /protocolLiveLog/);
+  assert.match(appJs, /protocol-log/);
+  assert.match(appJs, /protocol-step/);
+  assert.doesNotMatch(appJs, /addActivity\('协议注册/);
   assert.match(appJs, /一键验活/);
   assert.match(appJs, /healthcheckBannedAccounts/);
   assert.match(appJs, /\/replacement-accounts\/healthcheck-banned/);
@@ -182,7 +193,6 @@ test('replacement frontend exposes new Chinese status filters and inline status 
     ['for_sale', '待出售'],
     ['sold', '已售出'],
     ['banned', '账号封禁'],
-    ['failed', '失败'],
     ['circuit_breaker', '已熔断'],
   ]) {
     assert.match(html, new RegExp(`value="${value}"[^>]*>${label}`));
@@ -201,6 +211,18 @@ test('replacement frontend exposes new Chinese status filters and inline status 
   assert.match(appJs, /params\.set\('circuit_breaker', '1'\)/);
   assert.match(appJs, /已熔断/);
   assert.doesNotMatch(appJs, /value="replacing"/);
+});
+
+test('replacement frontend treats operation failure as a red hint, not an account status', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+  const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');
+  const css = readFileSync(join(process.cwd(), 'web', 'styles.css'), 'utf8');
+
+  assert.doesNotMatch(html, /value="failed"/);
+  assert.doesNotMatch(appJs, /failed:\s*'失败'/);
+  assert.match(appJs, /operationFailureLabel/);
+  assert.match(appJs, /协议注册失败/);
+  assert.match(css, /\.operation-failure/);
 });
 
 test('replacement status inline control is large and color-coded by status', () => {

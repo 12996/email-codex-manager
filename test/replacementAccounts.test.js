@@ -392,11 +392,40 @@ test('legacy replacement account statuses normalize to the new status model', ()
   assert.equal(repo.updateStatus(account.id, { status: 'replaced' }).status, 'cpa_mounted');
 });
 
+test('legacy failed status is treated as banned and cannot persist as an account status', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'legacy-failed@example.com', status: 'failed' });
+
+  assert.equal(account.status, 'banned');
+  assert.equal(repo.updateStatus(account.id, { status: 'failed' }).status, 'banned');
+});
+
+test('replacement failure restores the original business status and records an operation error', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'replace-failed@example.com', status: 'plus_active' });
+
+  repo.markReplacementStarted(account.id);
+  const failed = repo.markReplacementFailure(account.id, 'automation failed', account.status, '补号');
+
+  assert.equal(failed.status, 'plus_active');
+  assert.equal(failed.last_error, '补号失败：automation failed');
+});
+
+test('recordOperationFailure preserves status and prefixes the operation label', () => {
+  const repo = createTestRepository();
+  const account = repo.createAccount({ email: 'operation-failed@example.com', status: 'registered' });
+
+  const updated = repo.recordOperationFailure(account.id, '查询 Plus', '邮箱 API 超时');
+
+  assert.equal(updated.status, 'registered');
+  assert.equal(updated.last_error, '查询 Plus失败：邮箱 API 超时');
+});
+
 test('updateStatus accepts manual business statuses and rejects replacing', () => {
   const repo = createTestRepository();
   const account = repo.createAccount({ email: 'user@example.com' });
 
-  for (const status of ['unregistered', 'registered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned', 'failed']) {
+  for (const status of ['unregistered', 'registered', 'pending_activation', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'banned']) {
     const updated = repo.updateStatus(account.id, {
       status,
       status_note: `manual ${status}`,
@@ -526,11 +555,11 @@ test('markReplacementFailure does not increment replacement_count', () => {
   const account = repo.createAccount({ email: 'user@example.com' });
 
   repo.markReplacementStarted(account.id);
-  const failed = repo.markReplacementFailure(account.id, 'automation failed');
+  const failed = repo.markReplacementFailure(account.id, 'automation failed', account.status, '补号');
 
-  assert.equal(failed.status, 'failed');
+  assert.equal(failed.status, 'unregistered');
   assert.equal(failed.replacement_count, 0);
-  assert.equal(failed.last_error, 'automation failed');
+  assert.equal(failed.last_error, '补号失败：automation failed');
 });
 
 test('markReplacementFailure tracks consecutive failures before circuit breaker threshold', () => {
@@ -540,10 +569,10 @@ test('markReplacementFailure tracks consecutive failures before circuit breaker 
   let updated = account;
   for (let index = 0; index < 4; index += 1) {
     repo.markReplacementStarted(account.id);
-    updated = repo.markReplacementFailure(account.id, `automation failed ${index + 1}`);
+    updated = repo.markReplacementFailure(account.id, `automation failed ${index + 1}`, account.status, '补号');
   }
 
-  assert.equal(updated.status, 'failed');
+  assert.equal(updated.status, 'unregistered');
   assert.equal(updated.consecutive_replace_failures, 4);
   assert.equal(updated.circuit_breaker_at, null);
   assert.equal(updated.circuit_breaker_reason, null);
@@ -556,14 +585,14 @@ test('markReplacementFailure marks failed and opens circuit breaker at fifth con
   let updated = account;
   for (let index = 0; index < 5; index += 1) {
     repo.markReplacementStarted(account.id);
-    updated = repo.markReplacementFailure(account.id, `automation failed ${index + 1}`);
+    updated = repo.markReplacementFailure(account.id, `automation failed ${index + 1}`, account.status, '补号');
   }
 
-  assert.equal(updated.status, 'failed');
+  assert.equal(updated.status, 'unregistered');
   assert.equal(updated.consecutive_replace_failures, 5);
   assert.ok(updated.circuit_breaker_at);
   assert.match(updated.circuit_breaker_reason, /连续补号失败 5 次/);
-  assert.equal(updated.last_error, 'automation failed 5');
+  assert.equal(updated.last_error, '补号失败：automation failed 5');
 });
 
 test('markReplacementSuccess resets consecutive failure counter and circuit breaker fields', () => {
@@ -571,7 +600,7 @@ test('markReplacementSuccess resets consecutive failure counter and circuit brea
   const account = repo.createAccount({ email: 'user@example.com' });
 
   repo.markReplacementStarted(account.id);
-  repo.markReplacementFailure(account.id, 'automation failed');
+  repo.markReplacementFailure(account.id, 'automation failed', account.status, '补号');
   repo.markReplacementStarted(account.id);
   const replaced = repo.markReplacementSuccess(account.id);
 
@@ -586,12 +615,12 @@ test('resetCircuitBreaker clears breaker fields without changing status', () => 
   const account = repo.createAccount({ email: 'user@example.com' });
   for (let index = 0; index < 5; index += 1) {
     repo.markReplacementStarted(account.id);
-    repo.markReplacementFailure(account.id, `automation failed ${index + 1}`);
+    repo.markReplacementFailure(account.id, `automation failed ${index + 1}`, account.status, '补号');
   }
 
   const reset = repo.resetCircuitBreaker(account.id);
 
-  assert.equal(reset.status, 'failed');
+  assert.equal(reset.status, 'unregistered');
   assert.equal(reset.status_note, '管理员手动解除熔断');
   assert.equal(reset.consecutive_replace_failures, 0);
   assert.equal(reset.circuit_breaker_at, null);
