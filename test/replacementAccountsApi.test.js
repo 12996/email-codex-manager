@@ -924,13 +924,51 @@ test('POST /replacement-accounts/:id/register-protocol runs protocol registratio
   }
 });
 
+test('POST /replacement-accounts/:id/register-protocol rejects a child success without activated MFA', async () => {
+  const services = {
+    ...successfulServices(),
+    async registerProtocolAccount() {
+      return {
+        ok: true,
+        childResult: {
+          registrationMfa: null,
+        },
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({ email: 'protocol-no-mfa@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/register-protocol`);
+
+    assert.equal(response.response.status, 502);
+    assert.equal(response.body.error, 'PROTOCOL_REGISTER_FAILED');
+    assert.equal(response.body.account.status, 'unregistered');
+    assert.equal(response.body.account.codex_2fa, null);
+    assert.match(response.body.account.last_error, /协议注册失败/);
+  } finally {
+    await server.close();
+  }
+});
+
 test('POST /replacement-accounts/:id/register-protocol streams current protocol logs when requested', async () => {
   const services = {
     ...successfulServices(),
     async registerProtocolAccount(account, options = {}) {
       options.onLog?.({ type: 'step', step: 'child-start', message: '协议子进程已启动' });
       options.onLog?.({ type: 'log', stream: 'stdout', text: '[OTP] waiting\n' });
-      return { ok: true, run: { id: 90, status: 'running' } };
+      return {
+        ok: true,
+        run: { id: 90, status: 'running' },
+        childResult: {
+          registrationMfa: {
+            secret: 'JBSWY3DPEHPK3PXP',
+            enabled: true,
+          },
+        },
+      };
     },
   };
   const { app, replacementAccounts } = createTestContext(services);
@@ -952,6 +990,7 @@ test('POST /replacement-accounts/:id/register-protocol streams current protocol 
     assert.match(text, /"type":"protocol-step"/);
     assert.match(text, /"type":"protocol-log"/);
     assert.match(text, /\[OTP\] waiting/);
+    assert.match(text, /2FA 已写回数据库/);
     assert.match(text, /"type":"complete"/);
     assert.equal(replacementAccounts.getAccount(created.id).status, 'registered');
   } finally {

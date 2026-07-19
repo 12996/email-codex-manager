@@ -14,6 +14,7 @@ const DEFAULT_ROXY_2FA_LOGIN_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_login.js
 const DEFAULT_ROXY_REGISTER_SCRIPT = join(__dirname, 'auto', 'roxy_register_openai.js');
 const DEFAULT_PROTOCOL_PROJECT_DIR = join(__dirname, 'auto', 'protocol_registration');
 const DEFAULT_PROTOCOL_MAIN_PATH = join(DEFAULT_PROTOCOL_PROJECT_DIR, 'main.py');
+const DEFAULT_PROTOCOL_TWO_FA_MAIN_PATH = join(DEFAULT_PROTOCOL_PROJECT_DIR, 'replacement_2fa.py');
 const DEFAULT_PROTOCOL_PYTHON_PATH = 'F:\\anaconda\\anaconda3\\envs\\tilian\\python.exe';
 const DEFAULT_REGISTRATION_TOKEN_OUTPUT_DIR = join(__dirname, 'auto', 'product_files', 'registration');
 const DEFAULT_LOG_DIR = join(__dirname, '..', 'data', 'automation-logs');
@@ -37,6 +38,9 @@ export function createReplacementServices({
   protocolPythonPath,
   protocolProjectPath,
   protocolMainPath,
+  protocolTwoFaPythonPath,
+  protocolTwoFaProjectPath,
+  protocolTwoFaMainPath,
   prepareProtocolRoxyImpl,
   roxyClientFactory,
   baseEnv = process.env,
@@ -53,6 +57,9 @@ export function createReplacementServices({
     protocolPythonPath,
     protocolProjectPath,
     protocolMainPath,
+    protocolTwoFaPythonPath,
+    protocolTwoFaProjectPath,
+    protocolTwoFaMainPath,
     prepareProtocolRoxyImpl,
     roxyClientFactory,
     baseEnv,
@@ -97,6 +104,9 @@ export function createReplacementServices({
     },
 
     async replaceAccountWith2FA(account, options) {
+      if (isEnabledFlag(options?.protocol) || isEnabledFlag(baseEnv.REPLACEMENT_2FA_PROTOCOL_ENABLED)) {
+        return this.replaceAccountWith2FAProtocol(account, options);
+      }
       if (automation?.replaceAccountWith2FA) {
         return automation.replaceAccountWith2FA(account, options);
       }
@@ -104,6 +114,16 @@ export function createReplacementServices({
         throw codedError('REPLACE_2FA_NOT_CONFIGURED', '2fa replacement automation is not configured');
       }
       return defaultAutomation.replaceAccountWith2FA(account, options);
+    },
+
+    async replaceAccountWith2FAProtocol(account, options) {
+      if (automation?.replaceAccountWith2FAProtocol) {
+        return automation.replaceAccountWith2FAProtocol(account, options);
+      }
+      if (!defaultAutomation?.replaceAccountWith2FAProtocol) {
+        throw codedError('REPLACE_2FA_PROTOCOL_NOT_CONFIGURED', '2fa replacement protocol is not configured');
+      }
+      return defaultAutomation.replaceAccountWith2FAProtocol(account, options);
     },
 
     async loginAccountWith2FA(account, options) {
@@ -148,6 +168,9 @@ export function createRoxyOAuthChildProcessAutomation({
   protocolPythonPath,
   protocolProjectPath,
   protocolMainPath,
+  protocolTwoFaPythonPath,
+  protocolTwoFaProjectPath,
+  protocolTwoFaMainPath,
   prepareProtocolRoxyImpl,
   roxyClientFactory,
   baseEnv = process.env,
@@ -164,6 +187,9 @@ export function createRoxyOAuthChildProcessAutomation({
     protocolPythonPath,
     protocolProjectPath,
     protocolMainPath,
+    protocolTwoFaPythonPath,
+    protocolTwoFaProjectPath,
+    protocolTwoFaMainPath,
     prepareProtocolRoxyImpl,
     roxyClientFactory,
     baseEnv,
@@ -182,6 +208,10 @@ export function createRoxyChildProcessAutomation({
   protocolPythonPath = normalizeOptional(process.env.PROTOCOL_PYTHON_PATH) || DEFAULT_PROTOCOL_PYTHON_PATH,
   protocolProjectPath = normalizeOptional(process.env.PROTOCOL_PROJECT_PATH) || DEFAULT_PROTOCOL_PROJECT_DIR,
   protocolMainPath = normalizeOptional(process.env.PROTOCOL_MAIN_PATH) || join(protocolProjectPath, 'main.py'),
+  protocolTwoFaPythonPath = normalizeOptional(process.env.PROTOCOL_2FA_PYTHON_PATH) || protocolPythonPath,
+  protocolTwoFaProjectPath = normalizeOptional(process.env.PROTOCOL_2FA_PROJECT_PATH) || protocolProjectPath,
+  protocolTwoFaMainPath = normalizeOptional(process.env.PROTOCOL_2FA_MAIN_PATH)
+    || join(protocolTwoFaProjectPath, 'replacement_2fa.py'),
   prepareProtocolRoxyImpl = prepareProtocolRoxy,
   roxyClientFactory = createDefaultProtocolRoxyClient,
   baseEnv = process.env,
@@ -278,6 +308,48 @@ export function createRoxyChildProcessAutomation({
           'ROXY_OAUTH_PASSWORD',
           'ROXY_OAUTH_2FA_CODE',
           'ROXY_OAUTH_TOTP_SECRET',
+          ...ROXY_TARGET_ENV_KEYS,
+        ],
+        cpaTriggerDetails: options?.cpaTriggerDetails,
+      });
+    },
+
+    replaceAccountWith2FAProtocol(account, options = {}) {
+      const accountId = normalizeRequired(account?.id, 'REPLACE_FAILED', 'replacement account id is required');
+      const existingCdpEndpoint = normalizeOptional(baseEnv.ROXY_CDP_ENDPOINT);
+      const env = {
+        ...baseEnv,
+        REPLACEMENT_ACCOUNT_ID: accountId,
+        ROXY_CDP_ENABLED: '1',
+        ROXY_CDP_PREPARE: '0',
+        ROXY_KEEP_OPEN: '1',
+        CPA_OUTPUT_DIR: normalizeOptional(baseEnv.CPA_OUTPUT_DIR)
+          || join(__dirname, 'auto', 'product_files', 'cpa'),
+      };
+      if (!existingCdpEndpoint) {
+        env.ROXY_PROTOCOL_BROWSER_SORT_NUM = normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_SORT_NUM) || '3';
+        env.ROXY_PROTOCOL_BROWSER_WINDOW_NAME = normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_WINDOW_NAME) || 'test';
+        applyActionRoxyTargetEnv(env, 'ROXY_PROTOCOL');
+      }
+
+      return runChildProcess({
+        spawnImpl,
+        command: protocolTwoFaPythonPath,
+        args: [protocolTwoFaMainPath, '--account-id', accountId],
+        cwd: protocolTwoFaProjectPath,
+        env,
+        account,
+        automationRuns,
+        logDir,
+        kind: 'replacement-2fa-protocol',
+        failureCode: 'REPLACE_FAILED',
+        envSummaryKeys: [
+          'REPLACEMENT_ACCOUNT_ID',
+          'ROXY_CDP_ENABLED',
+          'ROXY_CDP_PREPARE',
+          'ROXY_KEEP_OPEN',
+          'SMS_API_PROXY',
+          'CPA_OUTPUT_DIR',
           ...ROXY_TARGET_ENV_KEYS,
         ],
         cpaTriggerDetails: options?.cpaTriggerDetails,
@@ -389,7 +461,10 @@ export function createRoxyChildProcessAutomation({
             'OTP_PROVIDER',
             'EMAIL_SOURCE',
             'REPLACEMENT_ACCOUNT_ID',
+            'ROXY_REGISTER_PASSWORD',
             'ROXY_CDP_ENABLED',
+            'ROXY_IP_CHECK_ENABLED',
+            'ROXY_CDP_ORIGIN_ISOLATION',
             'REGISTRATION_RESULT_JSON',
             'ROXY_CDP_ENDPOINT',
             'REGISTRATION_EMAIL_CODE_API_URL',
@@ -469,18 +544,24 @@ function applyActionRoxyTargetEnv(env, prefix) {
 }
 
 function buildProtocolRegistrationEnv({ baseEnv, account, email, accountId }) {
+  const password = normalizeOptional(account?.password);
   const env = {
     ...baseEnv,
     OTP_PROVIDER: 'replacement',
     EMAIL_SOURCE: 'replacement',
     REPLACEMENT_ACCOUNT_ID: accountId,
     ROXY_CDP_ENABLED: '1',
+    ROXY_IP_CHECK_ENABLED: normalizeOptional(baseEnv.ROXY_IP_CHECK_ENABLED) || '1',
+    // Keep ChatGPT, Auth, and Sentinel pages separate while sharing one context.
+    // A single page lets Sentinel navigation replace the registration password page.
+    ROXY_CDP_ORIGIN_ISOLATION: '1',
     REGISTRATION_RESULT_JSON: '1',
     REGISTRATION_TOKEN_OUTPUT_DIR:
       normalizeOptional(baseEnv.REGISTRATION_TOKEN_OUTPUT_DIR) || DEFAULT_REGISTRATION_TOKEN_OUTPUT_DIR,
     ROXY_PROTOCOL_BROWSER_SORT_NUM: normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_SORT_NUM) || '3',
     ROXY_PROTOCOL_BROWSER_WINDOW_NAME: normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_WINDOW_NAME) || 'test',
     ROXY_REGISTER_EMAIL: email,
+    ...(password ? { ROXY_REGISTER_PASSWORD: password } : {}),
     ...(normalizeOptional(account?.email_code_api)
       ? { REGISTRATION_EMAIL_CODE_API_URL: normalizeOptional(account.email_code_api) }
       : {}),
@@ -488,6 +569,8 @@ function buildProtocolRegistrationEnv({ baseEnv, account, email, accountId }) {
 
   delete env.ROXY_CDP_ENDPOINT;
   delete env.ROXY_PROTOCOL_CDP_ENDPOINT;
+  delete env.ROXY_OAUTH_PASSWORD;
+  if (!password) delete env.ROXY_REGISTER_PASSWORD;
   return applyActionRoxyTargetEnv(env, 'ROXY_PROTOCOL');
 }
 
@@ -763,6 +846,10 @@ function normalizeRequired(value, code, message) {
 function normalizeOptional(value) {
   const normalized = String(value || '').trim();
   return normalized || '';
+}
+
+function isEnabledFlag(value) {
+  return ['1', 'true', 'yes', 'on'].includes(String(value ?? '').trim().toLowerCase());
 }
 
 function normalizeCode(value) {

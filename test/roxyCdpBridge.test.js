@@ -57,3 +57,263 @@ test('Roxy CDP request retries a transient page fetch failure', async () => {
   assert.equal(result.status_code, 200);
   assert.equal(attempts, 2);
 });
+
+test('Roxy CDP keeps separate pages for ChatGPT, Auth, and Sentinel origins', async () => {
+  const pages = [];
+  const createPage = (name) => {
+    let currentUrl = 'about:blank';
+    const page = {
+      name,
+      gotoCalls: [],
+      isClosed: () => false,
+      url: () => currentUrl,
+      async goto(url) {
+        page.gotoCalls.push(url);
+        currentUrl = url;
+        return {
+          status: () => 200,
+          statusText: () => 'OK',
+          url: () => url,
+          headers: () => ({}),
+          text: async () => '',
+        };
+      },
+      async waitForLoadState() {},
+    };
+    pages.push(page);
+    return page;
+  };
+  const context = {
+    async newPage() {
+      return createPage(`page-${pages.length + 1}`);
+    },
+    pages: () => pages,
+  };
+  const bridge = new RoxyCdpBridge();
+  bridge.ensureConnected = async function ensureConnectedForTest() {
+    this.context = context;
+    if (!this.page) {
+      this.page = await context.newPage();
+      this.ownsPage = true;
+    }
+  };
+
+  const chatPage = await bridge.ensureOrigin('https://chatgpt.com/api/auth/providers', 30000);
+  const authPage = await bridge.ensureOrigin('https://auth.openai.com/email-verification', 30000);
+  const sentinelPage = await bridge.ensureOrigin('https://sentinel.openai.com/', 30000);
+  const authAgain = await bridge.ensureOrigin('https://auth.openai.com/api/accounts/email-otp/validate', 30000);
+
+  assert.notEqual(chatPage, authPage);
+  assert.notEqual(authPage, sentinelPage);
+  assert.equal(authAgain, authPage);
+  assert.equal(authPage.gotoCalls.length, 1);
+
+  await bridge.navigate({
+    url: 'https://auth.openai.com/api/accounts/authorize?state=redacted',
+    timeout_ms: 30000,
+  });
+
+  assert.equal(authPage.gotoCalls.at(-1), 'https://auth.openai.com/api/accounts/authorize?state=redacted');
+  assert.equal(sentinelPage.gotoCalls.length, 1);
+});
+
+test('Roxy CDP runs OAuth continue navigation on the ChatGPT page', async () => {
+  const pages = [];
+  const createPage = (name) => {
+    let currentUrl = 'about:blank';
+    const page = {
+      name,
+      gotoCalls: [],
+      isClosed: () => false,
+      url: () => currentUrl,
+      async goto(url) {
+        page.gotoCalls.push(url);
+        currentUrl = url;
+        return {
+          status: () => 200,
+          statusText: () => 'OK',
+          url: () => url,
+          headers: () => ({}),
+          text: async () => '',
+        };
+      },
+      async waitForLoadState() {},
+    };
+    pages.push(page);
+    return page;
+  };
+  const context = {
+    async newPage() {
+      return createPage(`page-${pages.length + 1}`);
+    },
+    pages: () => pages,
+  };
+  const bridge = new RoxyCdpBridge();
+  bridge.ensureConnected = async function ensureConnectedForTest() {
+    this.context = context;
+    if (!this.page) {
+      this.page = await context.newPage();
+      this.ownsPage = true;
+    }
+  };
+
+  const chatPage = await bridge.ensureOrigin('https://chatgpt.com/api/auth/providers', 30000);
+  const authPage = await bridge.ensureOrigin('https://auth.openai.com/email-verification', 30000);
+  const callbackUrl = 'https://auth.openai.com/authorize/continue?code=redacted';
+
+  await bridge.navigate({
+    url: callbackUrl,
+    page_origin: 'https://chatgpt.com',
+    timeout_ms: 30000,
+  });
+
+  assert.equal(chatPage.gotoCalls.at(-1), callbackUrl);
+  assert.equal(authPage.gotoCalls.length, 1);
+});
+
+test('Roxy CDP navigation does not wait for a navigation response body to finish', async () => {
+  const page = {
+    isClosed: () => false,
+    url: () => 'about:blank',
+    async goto(url) {
+      return {
+        status: () => 200,
+        statusText: () => 'OK',
+        url: () => url,
+        headers: () => ({}),
+        text: async () => new Promise(() => {}),
+      };
+    },
+    async waitForLoadState() {},
+  };
+  const context = {
+    async newPage() { return page; },
+    pages: () => [page],
+  };
+  const bridge = new RoxyCdpBridge();
+  bridge.ensureConnected = async function ensureConnectedForTest() {
+    this.context = context;
+    this.page = page;
+  };
+
+  const result = await Promise.race([
+    bridge.navigate({
+      url: 'https://auth.openai.com/oauth/authorize?state=redacted',
+      timeout_ms: 1000,
+    }),
+    new Promise((_, reject) => setTimeout(() => reject(new Error('navigation response body blocked')), 100)),
+  ]);
+
+  assert.equal(result.status_code, 200);
+});
+
+test('Roxy CDP can reuse one page when origin isolation is disabled', async () => {
+  const pages = [];
+  const page = {
+    gotoCalls: [],
+    isClosed: () => false,
+    url: () => page.currentUrl,
+    currentUrl: 'about:blank',
+    async goto(url) {
+      page.gotoCalls.push(url);
+      page.currentUrl = url;
+      return {
+        status: () => 200,
+        statusText: () => 'OK',
+        url: () => url,
+        headers: () => ({}),
+        text: async () => '',
+      };
+    },
+    async waitForLoadState() {},
+  };
+  pages.push(page);
+  const context = {
+    async newPage() {
+      throw new Error('single-page mode should not create another page');
+    },
+    pages: () => pages,
+  };
+  const bridge = new RoxyCdpBridge({ originIsolationEnabled: false });
+  bridge.ensureConnected = async function ensureConnectedForTest() {
+    this.context = context;
+    this.page = page;
+  };
+
+  const chatPage = await bridge.ensureOrigin('https://chatgpt.com/api/auth/providers', 30000);
+  const authPage = await bridge.ensureOrigin('https://auth.openai.com/email-verification', 30000);
+
+  assert.equal(authPage, chatPage);
+  assert.deepEqual(page.gotoCalls, ['https://chatgpt.com/', 'https://auth.openai.com/']);
+});
+
+test('Roxy CDP replaces a closed origin page without refreshing the profile', async () => {
+  let evaluateCalls = 0;
+  const closedPage = {
+    isClosed: () => true,
+    url: () => 'https://chatgpt.com/',
+  };
+  const livePage = {
+    isClosed: () => false,
+    url: () => 'about:blank',
+    async goto() {},
+    async waitForLoadState() {},
+    async evaluate() {
+      evaluateCalls += 1;
+      return {
+        status_code: 200,
+        status_text: 'OK',
+        url: 'https://chatgpt.com/api/auth/providers',
+        headers: {},
+        text: '{}',
+      };
+    },
+  };
+  const context = {
+    pages: () => [closedPage],
+    async newPage() {
+      return livePage;
+    },
+  };
+  const bridge = new RoxyCdpBridge();
+  bridge.browser = {};
+  bridge.context = context;
+  bridge.page = closedPage;
+  bridge.pagesByOrigin.set('https://chatgpt.com', closedPage);
+
+  const result = await bridge.request({
+    url: 'https://chatgpt.com/api/auth/providers',
+    method: 'GET',
+    timeout_ms: 10,
+  });
+
+  assert.equal(result.status_code, 200);
+  assert.equal(evaluateCalls, 1);
+  assert.equal(bridge.page, livePage);
+});
+
+test('Roxy CDP reads the selected profile exit IP without exposing proxy credentials', async () => {
+  const bridge = new RoxyCdpBridge();
+  bridge.roxyClient = {
+    dirId: 'target-profile',
+    windowSortNum: '3',
+    windowName: 'test',
+    async listBrowsers() {
+      return {
+        code: 0,
+        data: {
+          rows: [{
+            dirId: 'target-profile',
+            proxyInfo: {
+              lastIp: '203.0.113.10',
+              proxyUserName: 'private-user',
+              proxyPassword: 'private-password',
+            },
+          }],
+        },
+      };
+    },
+  };
+
+  assert.deepEqual(await bridge.ip(), { ip: '203.0.113.10' });
+});

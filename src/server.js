@@ -566,6 +566,12 @@ export function createApp({
           onLog: liveLog,
         });
         const mfaSecret = extractRegistrationMfaSecret(result);
+        if (!mfaSecret) {
+          throw Object.assign(
+            new Error('协议注册子进程未返回已激活的 2FA secret，拒绝写入 registered'),
+            { code: 'PROTOCOL_REGISTER_FAILED' },
+          );
+        }
         const updated = replacementAccounts.markRegistrationSuccess(account.id, { codex_2fa: mfaSecret });
         onProgress?.({
           type: 'account-result',
@@ -573,7 +579,7 @@ export function createApp({
           accountId: account.id,
           email: account.email,
           outcome: 'success',
-          message: '协议注册完成，账号状态已更新为 registered',
+          message: '协议注册完成，2FA 已写回数据库，账号状态已更新为 registered',
         });
         return { ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) };
       } catch (error) {

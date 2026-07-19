@@ -32,6 +32,7 @@
 | `ROXY_BROWSER_SORT_NUM` | RoxyBrowser 浏览器窗口序号，即窗口列表里的 `sortNum` / `windowSortNum` / `SN` | Roxy 窗口定位三选一 | 空 |
 | `ROXY_BROWSER_WINDOW_NAME` | RoxyBrowser 浏览器窗口名称；名称重复时不建议使用 | Roxy 窗口定位三选一 | 空 |
 | `ROXY_CDP_ENDPOINT` | 已打开 Roxy 窗口的 CDP WebSocket 地址；配置后跳过开窗、清缓存、随机指纹等准备步骤 | 调试复用窗口时可选 | 空 |
+| `ROXY_IP_CHECK_ENABLED` | 协议注册期间通过 `/browser/list` 检查目标 profile 的 `proxyInfo.lastIp`；检测到 sticky 代理换 IP 时立即终止当前 OAuth | 协议注册建议开启；Roxy 版本不返回 `lastIp` 时可暂时关闭 | `1` |
 | `ROXY_REGISTER_BROWSER_*` / `ROXY_REGISTER_CDP_ENDPOINT` | 注册动作专用 Roxy 窗口或 CDP；支持 `BROWSER_DIR_ID`、`BROWSER_SORT_NUM`、`BROWSER_WINDOW_NAME` | 注册、登录、补号分窗口时可选 | 空 |
 | `ROXY_REPLACE_BROWSER_*` / `ROXY_REPLACE_CDP_ENDPOINT` | 普通补号动作专用 Roxy 窗口或 CDP | 注册、登录、补号分窗口时可选 | 空 |
 | `ROXY_REPLACE_2FA_BROWSER_*` / `ROXY_REPLACE_2FA_CDP_ENDPOINT` | 2FA 补号动作专用 Roxy 窗口或 CDP | 注册、登录、补号分窗口时可选 | 空 |
@@ -131,7 +132,7 @@ ROXY_PROTOCOL_ENSURE_CLOSED=1
 PROTOCOL_PYTHON_PATH=F:\anaconda\anaconda3\envs\tilian\python.exe
 ```
 
-协议注册固定按当前补号行传入 `REPLACEMENT_ACCOUNT_ID`，强制 `ROXY_CDP_ENABLED=1`，并以单线程执行 `src/auto/protocol_registration/main.py`。共享 profile 不支持并行协议注册。
+协议注册固定按当前补号行传入 `REPLACEMENT_ACCOUNT_ID`，强制 `ROXY_CDP_ENABLED=1`，并以单线程执行 `src/auto/protocol_registration/main.py`。共享 profile 不支持并行协议注册。CDP 模式默认启用 `ROXY_IP_CHECK_ENABLED=1`：首次请求记录出口 IP，后续请求、导航和 Sentinel 生成前重新读取；IP 变化时立即终止本次注册，不刷新指纹、不继续提交旧 OAuth 状态。
 
 ## RoxyBrowser 参数获取
 

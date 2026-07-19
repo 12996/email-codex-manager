@@ -239,6 +239,8 @@ test('registerProtocolAccount refreshes the selected Roxy profile before spawnin
   assert.equal(calls[0].options.env.EMAIL_SOURCE, 'replacement');
   assert.equal(calls[0].options.env.REPLACEMENT_ACCOUNT_ID, '42');
   assert.equal(calls[0].options.env.ROXY_CDP_ENABLED, '1');
+  assert.equal(calls[0].options.env.ROXY_IP_CHECK_ENABLED, '1');
+  assert.equal(calls[0].options.env.ROXY_CDP_ORIGIN_ISOLATION, '1');
   assert.equal(calls[0].options.env.ROXY_CDP_ENDPOINT, 'ws://refreshed-profile');
   assert.equal(calls[0].options.env.ROXY_CDP_PREPARE, '0');
   assert.equal(calls[0].options.env.REGISTRATION_RESULT_JSON, '1');
@@ -247,6 +249,60 @@ test('registerProtocolAccount refreshes the selected Roxy profile before spawnin
     calls[0].options.env.REGISTRATION_TOKEN_OUTPUT_DIR,
     join(process.cwd(), 'src', 'auto', 'product_files', 'registration'),
   );
+});
+
+test('registerProtocolAccount forces origin isolation for the password-before-OTP flow', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    protocolPythonPath: 'python.exe',
+    protocolProjectPath: 'protocol-project',
+    protocolMainPath: 'protocol-project/main.py',
+    baseEnv: { ROXY_CDP_ORIGIN_ISOLATION: '0' },
+    prepareProtocolRoxyImpl: async () => ({ cdpEndpoint: 'ws://fresh' }),
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.registerProtocolAccount({ id: 44, email: 'protocol-isolation@example.com' });
+
+  assert.equal(calls[0].options.env.ROXY_CDP_ORIGIN_ISOLATION, '1');
+});
+
+test('registerProtocolAccount passes the replacement password to the protocol child without exposing it in logs', async () => {
+  const calls = [];
+  const events = [];
+  const services = createReplacementServices({
+    protocolPythonPath: 'python.exe',
+    protocolProjectPath: 'protocol-project',
+    protocolMainPath: 'protocol-project/main.py',
+    logDir: mkdtempSync(join(tmpdir(), 'gmail-imap-protocol-password-logs-')),
+    baseEnv: { ROXY_OAUTH_PASSWORD: 'stale-global-password' },
+    prepareProtocolRoxyImpl: async () => ({ cdpEndpoint: 'ws://fresh' }),
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.registerProtocolAccount(
+    { id: 43, email: 'protocol-password@example.com', password: 'AccountPass12!' },
+    { onLog: (event) => events.push(event) },
+  );
+
+  assert.equal(calls[0].options.env.ROXY_REGISTER_PASSWORD, 'AccountPass12!');
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_OAUTH_PASSWORD'), false);
+  const liveText = events.map((event) => event.text || event.message || '').join('');
+  assert.doesNotMatch(liveText, /AccountPass12!/);
 });
 
 test('registerProtocolAccount keeps MFA result parseable but redacts it from live and persisted logs', async () => {
@@ -535,6 +591,83 @@ test('replaceAccountWith2FA runs roxy 2fa auth script with password and codex 2f
   assert.equal(calls[0].options.env.ROXY_OAUTH_PASSWORD, 'account-password');
   assert.equal(calls[0].options.env.ROXY_OAUTH_TOTP_SECRET, 'JBSWY3DPEHPK3PXP');
   assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_OAUTH_2FA_CODE'), false);
+});
+
+test('replaceAccountWith2FAProtocol launches the protocol child with independent SMS transport settings', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    protocolTwoFaPythonPath: 'python-protocol.exe',
+    protocolTwoFaProjectPath: 'protocol-project',
+    protocolTwoFaMainPath: 'protocol-project/replacement_2fa.py',
+    baseEnv: {
+      ROXY_CDP_ENDPOINT: 'ws://existing-profile',
+      SMS_API_PROXY: 'http://127.0.0.1:7890',
+    },
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.pid = 9123;
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccountWith2FAProtocol({ id: 111, email: 'user@example.com' });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].command, 'python-protocol.exe');
+  assert.deepEqual(calls[0].args, ['protocol-project/replacement_2fa.py', '--account-id', '111']);
+  assert.equal(calls[0].options.cwd, 'protocol-project');
+  assert.equal(calls[0].options.env.ROXY_CDP_ENABLED, '1');
+  assert.equal(calls[0].options.env.ROXY_CDP_PREPARE, '0');
+  assert.equal(calls[0].options.env.ROXY_KEEP_OPEN, '1');
+  assert.equal(calls[0].options.env.ROXY_CDP_ENDPOINT, 'ws://existing-profile');
+  assert.equal(calls[0].options.env.SMS_API_PROXY, 'http://127.0.0.1:7890');
+});
+
+test('replaceAccountWith2FAProtocol defaults to the shared protocol Roxy target when no CDP endpoint is provided', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    protocolTwoFaPythonPath: 'python-protocol.exe',
+    protocolTwoFaProjectPath: 'protocol-project',
+    protocolTwoFaMainPath: 'protocol-project/replacement_2fa.py',
+    baseEnv: {},
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccountWith2FAProtocol({ id: 112, email: 'user@example.com' });
+
+  assert.equal(calls[0].options.env.ROXY_BROWSER_SORT_NUM, '3');
+  assert.equal(calls[0].options.env.ROXY_BROWSER_WINDOW_NAME, 'test');
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_CDP_ENDPOINT'), false);
+});
+
+test('replaceAccountWith2FA can switch to the protocol child without changing the DOM state machine', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    baseEnv: { REPLACEMENT_2FA_PROTOCOL_ENABLED: '1' },
+    replacementAutomation: {
+      async replaceAccountWith2FA() {
+        calls.push('dom');
+      },
+      async replaceAccountWith2FAProtocol() {
+        calls.push('protocol');
+      },
+    },
+  });
+
+  await services.replaceAccountWith2FA({ id: 111, email: 'user@example.com' });
+
+  assert.deepEqual(calls, ['protocol']);
 });
 
 test('replaceAccountWith2FA injects per-account external email code API for iCloud account when configured', async () => {

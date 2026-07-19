@@ -332,7 +332,7 @@ ECONNREFUSED
 
 **Logged**: 2026-07-18T02:08:00+08:00
 **Priority**: high
-**Status**: in_progress
+**Status**: resolved
 **Area**: integration
 
 ### Summary
@@ -351,7 +351,100 @@ page.evaluate: TypeError: Failed to fetch
 ### Suggested Fix
 对页面上下文中的可恢复网络错误做一次短延迟重试，并记录脱敏 URL、页面 URL、页面关闭状态和错误摘要。
 
+### Resolution
+- **Resolved**: 2026-07-18T12:27:53+08:00
+- **Notes**: bridge 已加入页面瞬断重试、按 origin 隔离 ChatGPT/Auth/Sentinel 页面、页面关闭恢复，以及按 Roxy `proxyInfo.lastIp` 的会话内出口 IP 一致性检查。真实账号 175 流程中出现一次 `Failed to fetch` 后自动恢复并取得 access token；账号状态为 `registered`，token 文件保持纯 token 文本。
+
+## [ERR-20260718-002] protocol-2fa-reauth-401
+
+**Logged**: 2026-07-18T16:48:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: backend
+
+### Summary
+协议注册完成后的 2FA 重认证验证码提交返回 HTTP 401。
+
+### Error
+```text
+Roxy 页面请求失败: HTTP 401 https://auth.openai.com/api/accounts/email-otp/validate
+```
+
+### Context
+- 401 来自 OpenAI Auth，不是本地 `gmail_IMAP` 服务；本地状态回写随后仍成功。
+- CDP 模式下 2FA 的 `_follow_reauth()` 与 `_exchange_new_token()` 使用了页面 `fetch`，没有执行真实页面导航，导致新的 Auth/OAuth state 未建立到对应页面。
+
+### Resolution
+- **Resolved**: 2026-07-18T16:48:00+08:00
+- **Notes**: CDP 模式改为使用 `session.navigate()`；本地 `127.0.0.1:13100` 验证码读取和数据库状态回写继续直连，不经过 Roxy。新增 2FA 导航回归测试并通过。
+
 ### Metadata
 - Reproducible: intermittently
 - Related Files: `src/auto/protocol_registration/scripts/roxy_cdp_bridge.cjs`, `test/roxyCdpBridge.test.js`
 - See Also: ERR-20260717-001
+
+---
+
+## [ERR-20260718-003] protocol-registration-no-fresh-email-otp
+
+**Logged**: 2026-07-18T18:15:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+协议注册已到邮箱验证码阶段，但当前补号邮箱接口没有返回本次请求之后的新验证码。
+
+### Error
+```text
+TimeoutError: 补号邮箱验证码等待超时: 本地验证码接口未返回新的有效验证码
+TimeoutError: 补号邮箱验证码等待超时: 账号邮箱验证码接口未返回有效验证码
+```
+
+### Context
+- 单账号真实测试：补号账号 `169` 使用本地 iCloud 验证码接口；响应只有历史时间戳，按 freshness 规则被拒绝。
+- 单账号真实测试：补号账号 `166` 使用账号级 `email_code_api`；TCP 端口可达，但等待窗口内没有返回可接受的新验证码。
+- 两次测试均保持业务状态为 `unregistered`，只记录 `last_error`，没有写入 access token 或 2FA。
+
+### Suggested Fix
+恢复对应邮箱验证码供应方或为账号配置可达、能返回新邮件时间戳的 `email_code_api`；不要放宽 freshness 检查，否则会把旧验证码提交到 OpenAI。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_registration/core/replacement_client.py`, `src/auto/protocol_registration/core/email_provider.py`
+- See Also: ERR-20260717-002
+
+## [ERR-20260718-004] protocol-registration-invalid-auth-step
+
+**Logged**: 2026-07-18T19:12:21+08:00
+**Priority**: high
+**Status**: in_progress
+**Area**: integration
+
+### Summary
+协议注册在提交 `user/register` 时先后出现 `invalid_auth_step` 和 `invalid_state`，说明密码页阶段的授权状态转换仍未被协议正确复用。
+
+### Error
+```text
+HTTP 400 https://auth.openai.com/api/accounts/user/register
+code=invalid_auth_step
+message=Invalid authorization step.
+
+HTTP 409 https://auth.openai.com/api/accounts/user/register
+code=invalid_state
+message=Your sign-in session is no longer valid. Please start over to continue.
+```
+
+### Context
+- Account: `175`，失败前状态为 `unregistered`，数据库密码已注入（仅确认长度，不记录明文）。
+- `GET /create-account/password` 通过 `page.evaluate(fetch)` 取得响应，但 Roxy 当前文档 URL/授权页面状态没有进入 password step。
+- 改为直接 `session.navigate()` 后 URL 虽进入 `/create-account/password`，但提交注册返回 `invalid_state`；裸页面导航没有复用 email-verification 页的有状态转换。
+- 首个 `chatgpt.com/api/auth/providers` 的 `Failed to fetch` 已被现有 bridge 重试逻辑处理，不是本次最终失败原因。
+
+### Suggested Fix
+先从自动化实际点击/导航行为中确定 email-verification 到 password 的有状态转换（或其准确的内部 continuation 请求），再实现协议复用；在此之前不要对已注册或状态不一致的账号重跑真实流程。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_registration/core/openai_auth.py`, `src/auto/protocol_registration/tests/test_roxy_bridge.py`
+- See Also: `ERR-20260718-001`, `ERR-20260718-002`

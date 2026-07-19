@@ -26,6 +26,29 @@ Roxy OpenAI 注册流程中，OTP 提交后曾把通用 Continue 点击函数返
 
 ---
 
+## [LRN-20260719-001] correction
+
+**Logged**: 2026-07-19T23:15:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+手机号提交后的页面跳转存在延迟，固定短超时不能作为添加手机号失败的依据。
+
+### Details
+2FA 补号脚本日志在 `add-phone` 页面等待超时，但当前 Roxy 页面随后已经进入 `phone-verification`，说明手机号发送实际完成。失败判断必须区分“请求失败”和“状态转换尚未在等待窗口内完成”。
+
+### Suggested Action
+将手机号阶段改为条件等待：持续检查 `phone-verification`、错误提示和网络响应，避免仅用一次固定短超时判定失败；保留实际页面状态和接口状态作为证据。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/roxy_oauth_login.js`, `src/auto/roxy_2fa_auth_login.js`
+- Tags: 2fa, phone-verification, condition-waiting
+
+---
+
 ## [LRN-20260715-001] best_practice
 
 **Logged**: 2026-07-15T01:15:00+08:00
@@ -74,5 +97,56 @@ Roxy OpenAI 注册流程中，OTP 提交后曾把通用 Continue 点击函数返
 - Recurrence-Count: 1
 - First-Seen: 2026-07-17
 - Last-Seen: 2026-07-17
+
+---
+
+## [LRN-20260718-002] best_practice
+
+**Logged**: 2026-07-18T18:15:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: backend
+
+### Summary
+协议注册父服务必须在写入 `registered` 前验证子进程确实返回已激活的 MFA secret。
+
+### Details
+旧子进程曾在 2FA 失败后以退出码 0 返回 `registrationMfa=null`，父服务仍把账号标记为 `registered`，形成“已注册但没有 2FA”的假成功。仅依赖子进程退出码不够，父服务需要校验结构化结果并在缺少 MFA 时保留原业务状态。
+
+### Suggested Action
+协议注册成功路径先提取并校验 `registrationMfa.secret`，再调用 `markRegistrationSuccess`；同时在实时日志中明确提示 2FA 已写回数据库，但不要输出 secret。
+
+### Metadata
+- Source: error
+- Related Files: `src/server.js`, `test/replacementAccountsApi.test.js`
+- Tags: protocol-registration, mfa, persistence, defense-in-depth
+- See Also: ERR-20260718-002
+- Pattern-Key: protocol_registration.require_activated_mfa_before_registered
+- Recurrence-Count: 1
+- First-Seen: 2026-07-18
+- Last-Seen: 2026-07-18
+
+---
+
+## [LRN-20260718-003] correction
+
+**Logged**: 2026-07-18T19:38:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+协议注册问题应优先使用协议层和日志证据诊断，不应在用户指定账号可能已注册时切换到完整 UI 自动化流程。
+
+### Details
+本次为确认 email-verification 到 password 的状态转换，误启动了现有 UI 自动化诊断。诊断只提交了邮箱入口，没有执行密码、OTP、create_account、2FA 或数据库回写；以后应先选择明确的未注册测试账号，或仅使用可控的协议/桥接单元测试。
+
+### Suggested Action
+真实账号端到端测试前先读取并锁定数据库状态；状态为 `registered` 或状态字段与 2FA 不一致时停止，不再触发邮箱提交和页面导航。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/protocol_registration/core/openai_auth.py`, `src/auto/protocol_registration/tests/test_roxy_bridge.py`
+- Tags: protocol-registration, automation-scope, account-state
 
 ---

@@ -1403,13 +1403,17 @@ ROXY_REGISTER_ENABLE_MFA=0
 
 ### POST `/replacement-accounts/:id/register-protocol`
 
-按当前补号列表行启动协议注册，不调用旧的 DOM 注册脚本。后端先使用 RoxyBrowser 目标窗口完成 close（可配置跳过）、本地/服务端缓存清理、随机指纹、重新开窗和 CDP 地址读取，再在 `tilian` Python 环境中执行 `src/auto/protocol_registration/main.py --count 1 --workers 1`。
+按当前补号列表行启动协议注册，不调用旧的 DOM 注册脚本。后端先使用 RoxyBrowser 目标窗口完成 close（可配置跳过）、本地/服务端缓存清理、随机指纹、重新开窗和 CDP 地址读取，再在 `tilian` Python 环境中执行 `src/auto/protocol_registration/main.py --count 1 --workers 1`。协议 bridge 使用同一个 Roxy BrowserContext 下的 ChatGPT、Auth、Sentinel 三个后台页面，分别承载 API Cookie/OAuth 状态、OAuth 注册请求和 Sentinel SDK，不进行可见 DOM 操作。
+
+协议注册顺序固定为：`authorize` → `GET /create-account/password` → Sentinel `username_password_create` → `POST /api/accounts/user/register` 提交当前补号账号的 `username/password` → `GET /api/accounts/email-otp/send` → 邮箱 OTP → `about-you` → OAuth callback/session。密码阶段失败时不会继续取或提交邮箱验证码。
 
 协议子进程使用当前账号 ID 获取邮箱和验证码，环境变量包括：
 
 - `OTP_PROVIDER=replacement`、`EMAIL_SOURCE=replacement`
 - `REPLACEMENT_ACCOUNT_ID=<当前账号 ID>`
 - `ROXY_CDP_ENABLED=1` 和刷新后的 `ROXY_CDP_ENDPOINT`
+- `ROXY_REGISTER_PASSWORD=<当前补号账号 password>`；仅记录环境变量是否设置，不写入日志
+- `ROXY_IP_CHECK_ENABLED=1`（默认）：每次关键 CDP 请求前核对目标 profile 的 `proxyInfo.lastIp`；IP 变化时本次注册立即失败，避免继续复用旧 OAuth state/验证码
 
 协议注册默认使用 Roxy 窗口序号 `3`、名称 `test`，可通过 `ROXY_PROTOCOL_BROWSER_DIR_ID`、`ROXY_PROTOCOL_BROWSER_SORT_NUM`、`ROXY_PROTOCOL_BROWSER_WINDOW_NAME` 覆盖。共享 Roxy profile 只允许一个协议注册任务运行，第二个并行请求返回 `PROTOCOL_REGISTER_BUSY`。
 
@@ -1472,6 +1476,7 @@ src/auto/roxy_oauth_login.js
 | Roxy 工作区 | `.env` / 运行配置 | `ROXY_WORKSPACE_ID`，不来自补号表。 |
 | Roxy 窗口定位 | `.env` / 运行配置 | 默认使用 `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者之一；也可按动作覆盖：注册用 `ROXY_REGISTER_BROWSER_*`，协议注册用 `ROXY_PROTOCOL_BROWSER_*`（默认 `3/test`），普通补号用 `ROXY_REPLACE_BROWSER_*`，2FA 补号用 `ROXY_REPLACE_2FA_BROWSER_*`，2FA 登录用 `ROXY_2FA_LOGIN_BROWSER_*`。 |
 | 复用 CDP | `.env` / 运行配置 | 默认使用 `ROXY_CDP_ENDPOINT`；动作级可用 `ROXY_REGISTER_CDP_ENDPOINT`、`ROXY_REPLACE_CDP_ENDPOINT`、`ROXY_REPLACE_2FA_CDP_ENDPOINT`、`ROXY_2FA_LOGIN_CDP_ENDPOINT`。配置动作级窗口但未配置动作级 CDP 时，会清除全局 `ROXY_CDP_ENDPOINT`。 |
+| 出口 IP 一致性 | `.env` / 运行配置 | `ROXY_IP_CHECK_ENABLED=1` 时，协议 bridge 通过 Roxy `/browser/list` 读取目标 profile 的 `proxyInfo.lastIp`；sticky 代理在注册中途换 IP 会立即终止当前流程。Roxy 版本不提供该字段时可显式设为 `0`，但不再具备换 IP 防护。 |
 | 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`；补号账号未配置 `email_code_api` 时留空并按邮箱域名自动选择本地接口：iCloud 使用 `http://127.0.0.1:${PORT}/api/icloud-verification-code/latest`，其他邮箱使用 `/api/verification-code/latest`。 |
 | OAuth 邮箱验证码提交 | `.env` / 运行配置 | `ROXY_EMAIL_OTP_PROTOCOL=1` 时，在同一 Roxy 页面上下文 POST `/api/accounts/email-otp/validate`，成功后按响应的 `continue_url` 导航；HTTP 4xx 直接失败，不重复提交 DOM；页面上下文不可用或网络异常时回退 DOM。 |
 | 后台 Cookie | `.env` / 运行配置 | `ADMIN_AUTH_COOKIE`；非本机调用邮箱验证码接口时使用。 |
