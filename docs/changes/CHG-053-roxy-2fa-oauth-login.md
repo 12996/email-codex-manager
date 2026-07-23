@@ -1,6 +1,6 @@
 # CHG-053 Roxy 2FA OAuth 登录自动化脚本
 
-状态：implemented
+状态：superseded
 
 创建日期：2026-07-02
 
@@ -14,7 +14,7 @@
 
 - 新增独立脚本 `src/auto/roxy_2fa_auth_login.js`，用于密码 + 2FA MFA OAuth 登录。
 - 继续复用现有 Roxy 连接、手机号补号、手机验证码、Codex consent、callback 捕获、token exchange、失败截图和 CLI runner 能力。
-- 默认 OAuth authorize URL 增加 `prompt=login`，但 CLI 第一个参数仍可覆盖目标 URL。
+- 初版默认 OAuth authorize URL 增加 `prompt=login`，但 CLI 第一个参数仍可覆盖目标 URL；该 URL 约束已由 CHG-090 替代。
 
 ## 验收标准
 
@@ -23,7 +23,7 @@
 - [x] MFA 页可通过 URL `/mfa-challenge/` 或 `Verify your identity / Code` 文案识别，并填写 2FA code。
 - [x] 2FA code 可由显式配置读取，也可由 TOTP secret 本地生成，不新增外部依赖。
 - [x] 状态机支持从 email 页进入 `password -> mfa -> phone-add -> phone-verify -> phone-code -> codex -> callback`，后续阶段复用原 OAuth 状态机。
-- [x] 默认 auth URL 带 `prompt=login`，且 CLI 第一个参数仍可覆盖 target URL。
+- [x] CLI 第一个参数仍可覆盖 target URL；默认 URL 的 `prompt=login` 约束由 CHG-090 替代。
 
 ## 实现记录
 

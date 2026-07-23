@@ -4,6 +4,8 @@
 
 | 日期 | 主要工作 | 状态 | 入口 |
 |---|---|---|---|
+| 2026-07-23 | 协议注册本地服务端口同步 | done | `2026-07-23-protocol-registration-local-port.md` |
+| 2026-07-20 | Gmail-IMAP 协议补号操作、按钮顺序、点击反馈与实时日志 | done | `2026-07-20-protocol-replacement-operation.md` |
 | 2026-05-18 | 文档体系初始化 | done | `2026-05-18-文档体系初始化.md` |
 | 2026-05-19 | 调整文档结构与工作记录规则 | done | `2026-05-19-调整文档结构与工作记录规则.md` |
 | 2026-05-24 | 新增 change 管理规则 | done | `2026-05-24-新增change管理规则.md` |
@@ -101,3 +103,8 @@
 | 2026-07-16 | 补号操作失败不占用账号状态 | done | `2026-07-16-replacement-operation-failure-display.md` |
 | 2026-07-17 | Roxy OAuth 邮箱验证码协议提交 | done | `2026-07-17-roxy-email-otp-protocol.md` |
 | 2026-07-17 | 补号列表协议注册操作 | done | `2026-07-17-replacement-protocol-registration.md` |
+| 2026-07-20 | 独立 CPA 2FA 补号协议真实测试 | done | `2026-07-20-standalone-cpa-auth-test.md` |
+| 2026-07-20 | 协议注册 2FA 回调 401 排查与直接 MFA 修复 | in progress | `2026-07-20-protocol-registration-mfa-direct-flow.md` |
+| 2026-07-20 | 协议 CPA phone-code 阶段补发 add-phone 请求 | done | `2026-07-20-standalone-cpa-auth-test.md` |
+| 2026-07-21 | CPA 临时切换宿主机直连出口 | done | `2026-07-21-cpa-host-direct-egress.md` |
+| 2026-07-21 | CPA 代理切换脚本与使用说明 | done | `2026-07-21-cpa-host-direct-egress.md`、`../project/cpa-proxy-operation.md` |

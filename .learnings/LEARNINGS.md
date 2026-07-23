@@ -150,3 +150,187 @@ Roxy OpenAI 注册流程中，OTP 提交后曾把通用 Continue 点击函数返
 - Tags: protocol-registration, automation-scope, account-state
 
 ---
+
+## [LRN-20260720-004] correction
+
+**Logged**: 2026-07-20T11:00:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+Roxy 2FA OAuth 流程的目标页是代码生成的完整 Codex OAuth authorize URL，不能用 ChatGPT 官网或 Auth 根页替代。
+
+### Details
+`src/auto/oauth_login.js:916-919` 生成完整 `https://auth.openai.com/oauth/authorize?...` 链接；`src/auto/roxy_oauth_login.js:2283-2288` 也把完整 target URL 传给 `page.goto`。`https://auth.openai.com/` 根页不是这条流程的目标页。
+
+### Suggested Action
+真实验证时只使用代码生成的完整 authorize URL，并在导航完成后记录 URL、标题和阶段；不要用官网首页或 Auth 根页作为替代入口。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/oauth_login.js`, `src/auto/roxy_oauth_login.js`, `src/auto/roxy_2fa_auth_login.js`
+- Tags: roxy, codex-oauth, authorize-url, page-state
+
+---
+
+## [LRN-20260720-005] correction
+
+**Logged**: 2026-07-20T11:25:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+手机验证码只能在成功执行 `add-phone/send` 后判断，不能用发送前的 SMS API 查询作为阻塞证据。
+
+### Details
+账号 109 的一次复测在 Auth 首页就因 Roxy 出口 `ERR_CONNECTION_RESET` 终止，实际上没有到达 `add-phone`。此时查询 SMS API 只证明当前没有可读短信，不能证明 OpenAI 没有发送验证码。正确证据链必须记录 `MFA verify -> add-phone/send -> SMS polling -> phone-otp/validate`；此前另一轮完整运行已到达 `add-phone/send`，该轮才有资格判断后续短信轮询结果。
+
+### Suggested Action
+真实 CPA 测试中按阶段记录并验证 `add-phone/send` 的状态后再开始 SMS 轮询；Auth 入口失败时只记录 Auth/Roxy 阻塞，不更新 SMS 结论。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/protocol_cpa_auth.py`, `docs/work/2026-07-20-standalone-cpa-auth-test.md`
+- Tags: cpa-auth, add-phone, sms, evidence-order
+
+---
+
+## [LRN-20260720-006] correction
+
+**Logged**: 2026-07-20T11:35:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+`add-phone/send` 的 4xx 可能表示手机号已经添加，属于可继续的正常分支，不应当作补号流程失败。
+
+### Details
+OpenAI 手机只能添加一次；重复调用 `add-phone/send` 可能返回 400/其他 4xx，但后续仍应继续读取并提交手机验证码。独立 CPA 协议的真实阶段顺序是 `MFA verify -> add-phone/send -> SMS polling -> phone-otp/validate`，不能因 4xx 跳过后续 OTP，也不能因发送前无短信就下结论。
+
+### Suggested Action
+保留 `_send_phone()` 的 4xx continue 逻辑，并在真实日志中将该响应标记为“手机号已存在/继续验证码阶段”，只对 5xx 或其他不可恢复响应终止流程。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/protocol_cpa_auth.py`, `src/auto/test_protocol_cpa_auth.py`
+- Tags: cpa-auth, add-phone, idempotency, sms-otp
+
+---
+
+## [LRN-20260720-007] correction
+
+**Logged**: 2026-07-20T12:00:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+排查 OAuth 入口时必须对比 `oauth_login.js` 生成的完整授权链接，不能把 `https://auth.openai.com/` 根页当成有效测试目标。
+
+### Details
+用户明确指出 `oauth_login.js` 在运行时生成的是带 PKCE/state 参数的 `/oauth/authorize?...` 链接。`roxy_2fa_auth_login.js` 复用同一组 OAuth 参数，但当前额外追加 `prompt=login`。此前把 Auth 根页可达性作为帮助用户验证的条件，偏离了实际流程，也没有先完成 `oauth_login.js` 与 2FA 服务链路的源码对比。
+
+### Suggested Action
+先梳理旧 OAuth 自动化、Roxy 2FA runner 和 `/replace-2fa` worker 的真实调用链，再决定是否保留 `prompt=login` 或实现独立 CPA 协议；在此之前不改协议代码、不启动错误入口。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/oauth_login.js`, `src/auto/roxy_oauth_login.js`, `src/auto/roxy_2fa_auth_login.js`, `src/server.js`, `src/replacementServices.js`
+- Tags: oauth, authorize-url, 2fa-replacement, source-tracing
+
+---
+
+## [LRN-20260720-008] correction
+
+**Logged**: 2026-07-20T17:12:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+协议补号点击后是否打开 Roxy 必须先看子进程的前置字段校验；缺少 `codex_2fa` 时流程会在创建 BrowserSession 前退出。
+
+### Details
+账号 116 的点击请求实际已经进入后端并创建了运行日志，但 `protocol_cpa_replacement.py` 在读取账号时发现 `codex_2fa` 为空，直接返回 `ProtocolReplacementError`，所以 Roxy 没有任何页面动作。前端已有的启动 toast 不能替代具体前置校验错误和运行日志展示。
+
+### Suggested Action
+协议补号按钮应在前端或后端明确显示缺少邮箱、密码、TOTP、手机号或 SMS API 的具体字段；只有通过校验后再期待 Roxy 浏览器打开。协议补号页还应提供当前运行日志或明确跳转到运行日志详情。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/protocol_cpa_replacement.py`, `web/app.js`, `data/automation-logs/replacement-2fa-protocol-116-2026-07-20T09-10-39-175Z.log`
+- Tags: protocol-replacement, preflight-validation, roxy, logs
+
+---
+
+## [LRN-20260720-009] correction
+
+**Logged**: 2026-07-20T17:30:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+协议 endpoint 的 JSON 顶层形状不能默认都是对象；实际运行态必须以响应形状为准。
+
+### Details
+账号 108 已走到 Codex consent，`consent.data` 返回非对象 JSON，旧解析器直接失败；而同文件的 challenge 提取器已经支持数组，说明接口响应形状在不同账号/状态下变化。另一个独立证据是旧服务进程没有执行新 Roxy 刷新步骤，不能把旧日志当作新代码行为。
+
+### Suggested Action
+对每个协议 endpoint 分别定义允许的 JSON 形状；涉及服务重启的验证必须先核对 PID、启动时间和运行日志中的新步骤字段，再开始真实账号测试。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/protocol_cpa_auth.py`, `src/replacementServices.js`, `data/automation-logs/replacement-2fa-protocol-108-2026-07-20T09-25-12-215Z.log`
+- Tags: cpa-auth, consent-data, runtime-version, roxy-refresh
+
+---
+
+## [LRN-20260720-010] correction
+
+**Logged**: 2026-07-20T17:46:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+OpenAI workspace 是账号会话级数据，不能把一个测试账号的组织 ID 放到所有补号账号上。
+
+### Details
+账号 111 的 free personal workspace 与账号 109 的 plus organization workspace 不同。历史真实浏览器录制给出了账号 111 的 workspace/select body；Run 590 的 401 由跨账号复用 OPENAI_WORKSPACE_ID 触发，不是 Roxy 刷新失败。录制还显示 workspace/select 需要 x-access-flow-invocation-id。
+
+### Suggested Action
+所有跨账号 OAuth/CPA 流程在 MFA 后从当前 Auth session 解析允许的 workspace，显式配置值必须先和当前列表匹配；请求头应逐项对比真实浏览器录制。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/protocol_cpa_auth.py`, `src/auto/protocol_registration/core/session.py`, `docs/issues/issue-016-replacement-protocol-workspace-id-collision.md`
+- Tags: cpa-auth, workspace, cross-account, request-headers
+
+---
+
+## [LRN-20260720-011] correction
+
+**Logged**: 2026-07-20T22:00:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+进入 `phone-code` 页面不能推断 `add-phone/send` 已经执行。
+
+### Details
+用户指出协议补号在没有看到手机号绑定/发送请求时就开始等待 SMS。代码中的
+`next_stage != "phone-code"` 条件跳过了 `add-phone/send`；但该接口只会成功绑定一次，
+手机号已存在时的 4xx 仍是可继续分支。流程必须先发送请求，再读取验证码。
+
+### Suggested Action
+所有手机阶段统一调用 `add-phone/send`，记录阶段和返回状态，并用回归测试锁定请求顺序。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/protocol_cpa_auth.py`, `src/auto/test_protocol_cpa_auth.py`
+- Tags: cpa-auth, phone-add, sms, state-machine

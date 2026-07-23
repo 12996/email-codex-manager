@@ -448,3 +448,453 @@ message=Your sign-in session is no longer valid. Please start over to continue.
 - Reproducible: yes
 - Related Files: `src/auto/protocol_registration/core/openai_auth.py`, `src/auto/protocol_registration/tests/test_roxy_bridge.py`
 - See Also: `ERR-20260718-001`, `ERR-20260718-002`
+
+---
+
+## [ERR-20260720-001] cpa-auth-roxy-egress-reset
+
+**Logged**: 2026-07-20T11:25:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+独立 CPA 测试尚未到 `add-phone`，Roxy 出口在 Auth 首次导航阶段重置连接。
+
+### Error
+```text
+page.goto: net::ERR_CONNECTION_RESET at https://auth.openai.com/oauth/authorize
+```
+
+### Context
+- Roxy target: window `3/test`，当前 `proxyInfo.lastIp=220.96.77.3`。
+- 同一出口连续查询稳定；Roxy 标准 close/clear/random/open 准备后出口未改变。
+- 本次运行未提交账号、密码、TOTP 或手机号，因此不能据此判断 SMS API 或 `add-phone` 结果。
+
+### Suggested Fix
+等待或切换到可访问 Auth 的 Roxy 出口后，从干净会话重新运行；只有日志确认 `add-phone/send` 已执行后，才开始判断 SMS 轮询。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_cpa_auth.py`, `src/auto/protocol_registration/scripts/roxy_cdp_bridge.cjs`
+- See Also: `docs/issues/issue-017-roxy-cpa-auth-egress-reset.md`
+
+---
+
+## [ERR-20260720-002] controlled-roxy-test-selected-wrong-profile
+
+**Logged**: 2026-07-20T12:10:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+直接调用 `roxy_2fa_auth_login.run({ env })` 做临时测试时，传入的 `deps.env` 没有同步到 `RoxyBrowserClient` 读取的 `process.env`，导致测试误选了 Roxy `sortNum=8/gpt`，不能作为 `3/test` 证据。
+
+### Error
+```text
+期望目标：dirId=4c83715f6713db30c9baf9bfbc5086d3 / sortNum=3 / test
+实际解析：dirId=36c806d44959e9aa911b77566e93f7a5 / sortNum=8 / gpt
+```
+
+### Context
+- 临时测试通过 `twoFa.run([], { env, buildAuthUrl })` 注入账号和 Roxy 配置。
+- `roxy_oauth_login.js:1496-1497` 使用 `new Client()`；`roxy-browser-client.cjs` 构造函数直接读取 `process.env`，不读取 `deps.env`。
+- 浏览器已被用户关闭；该次错误测试不应作为 `3/test` 的网络结论。
+
+### Suggested Fix
+后续只通过真实子进程环境或显式构造 `RoxyBrowserClient` 传入目标配置；运行前记录解析出的 `dirId/sortNum/windowName`，不匹配目标时立即终止，不导航页面。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/roxy_oauth_login.js`, `src/auto/roxy-browser-client.cjs`, `src/auto/roxy_2fa_auth_login.js`
+- See Also: ERR-20260720-001
+
+---
+
+## [ERR-20260720-003] full-node-test-local-service-smoke-test
+
+**Logged**: 2026-07-20T14:00:00+08:00
+**Priority**: low
+**Status**: pending
+**Area**: tests
+
+### Summary
+仓库根目录直接运行全量 `npm test` 时，独立集成 smoke test 访问未启动的本地服务并失败。
+
+### Error
+```text
+TypeError: fetch failed
+ECONNREFUSED
+test/test-verification-code.mjs
+```
+
+### Context
+- 运行：`npm test`。
+- 391 个 Node 测试中 390 个通过；失败项是 `test/test-verification-code.mjs`，它直接 fetch 本地验证码服务，不是本次 2FA URL 或 worker 改动。
+
+### Suggested Fix
+把该文件从默认单元测试集合中隔离，或在运行全量测试前启动其依赖的本地服务；验证 2FA 改动时使用明确的测试文件列表。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `test/test-verification-code.mjs`
+- See Also: none
+
+---
+
+## [ERR-20260720-004] python-tests-wrong-module-root
+
+**Logged**: 2026-07-20T14:00:00+08:00
+**Priority**: low
+**Status**: pending
+**Area**: tests
+
+### Summary
+从仓库根目录直接调用 Python unittest，未设置项目测试要求的模块根目录，导致 `core` 和 `protocol_cpa_auth` 导入失败。
+
+### Error
+```text
+ModuleNotFoundError: No module named 'core'
+ModuleNotFoundError: No module named 'protocol_cpa_auth'
+```
+
+### Context
+- 运行：`python -m unittest discover -s src\\auto\\protocol_registration\\tests ...` 和 `python -m unittest src.auto.test_protocol_cpa_auth`。
+- 测试源码使用顶层模块导入，必须从对应 `src\\auto` 项目目录运行，或设置 `PYTHONPATH`。
+
+### Suggested Fix
+从 `src\\auto\\protocol_registration` 运行注册协议测试；从 `src\\auto` 运行 CPA 专项测试，或明确设置对应 `PYTHONPATH`。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_registration/tests/`, `src/auto/test_protocol_cpa_auth.py`
+- See Also: none
+
+---
+
+## [ERR-20260720-005] python-tests-system-interpreter-missing-project-deps
+
+**Logged**: 2026-07-20T14:00:30+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+系统 Python 缺少协议测试依赖；项目指定的 `tilian` 环境可以正常运行测试。
+
+### Error
+```text
+ModuleNotFoundError: No module named 'pyotp'
+ModuleNotFoundError: No module named 'curl_cffi'
+```
+
+### Context
+- 在正确工作目录运行系统 Python 后，注册协议测试 39 项中 14 项、CPA 测试 5 项中 1 项因依赖导入失败。
+- 使用 `F:\\anaconda\\anaconda3\\envs\\tilian\\python.exe` 重跑后，注册协议 42/42、CPA 5/5 通过。
+
+### Suggested Fix
+协议项目测试固定使用 `tilian` Python 环境，不要用系统 Python 代替。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_registration/`, `src/auto/test_protocol_cpa_auth.py`
+- See Also: ERR-20260720-004
+
+### Resolution
+- **Resolved**: 2026-07-20T14:00:30+08:00
+- **Notes**: 使用项目指定的 Anaconda `tilian` 环境完成测试。
+
+---
+
+## [ERR-20260720-006] powershell-inline-node-template-literal
+
+**Logged**: 2026-07-20T16:45:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+PowerShell 展开 inline Node 命令中的反引号模板字符串，导致 JavaScript 语法损坏。
+
+### Error
+```text
+SyntaxError: Unexpected token '{'
+```
+
+### Context
+- 使用 `node -e` 递归读取已有 CPA JSON 的 workspace/team 字段。
+- PowerShell 先处理了 JavaScript 模板字面量 `${p}.${k}`，Node 实际收到的代码缺少模板字符串内容。
+
+### Suggested Fix
+避免在 PowerShell 双引号中嵌入 JavaScript 模板字面量；改用字符串拼接、单引号脚本块或独立临时脚本。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/product_files/cpa/19_immoral.bitmap@icloud.com.json`
+- See Also: ERR-20260714-001
+
+### Resolution
+- **Resolved**: 2026-07-20T16:45:00+08:00
+- **Notes**: 后续改用不含模板字面量的 inline Node 命令。
+
+---
+
+## [ERR-20260720-007] powershell-rg-wildcard-path
+
+**Logged**: 2026-07-20T16:47:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+PowerShell 下把 `rg` 的路径参数 `CHG-088*` 当作 Windows 文件系统通配路径处理，导致命令返回路径语法错误。
+
+### Error
+```text
+rg: docs/changes/CHG-088*: 文件名、目录名或卷标语法不正确。 (os error 123)
+```
+
+### Context
+- 在跨目录检索 workspace 解析实现和 change 文档时使用了带通配符的路径参数。
+
+### Suggested Fix
+在 Windows 下先使用精确文件名，或让通配符只出现在 `rg` 的 `--glob` 参数中。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `docs/changes/CHG-088-replacement-protocol-openai-workspace-resolution.md`
+- See Also: none
+
+### Resolution
+- **Resolved**: 2026-07-20T16:47:00+08:00
+- **Notes**: 后续使用精确 change 文件路径检索。
+
+---
+
+## [ERR-20260720-008] powershell-inline-node-cdp-quoting
+
+**Logged**: 2026-07-20T16:50:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+通过 PowerShell 执行 inline Node 的 CDP 检查命令时，括号嵌套错误导致 Node 语法解析失败。
+
+### Error
+```text
+SyntaxError: missing ) after argument list
+```
+
+### Context
+- 尝试读取已打开 Roxy profile 的页面 URL 和标题。
+- 命令包含多层 `JSON.stringify(...map(...))` 和异步 IIFE，实际括号不匹配。
+
+### Suggested Fix
+CDP 诊断命令保持单层循环和简单输出；连接 Roxy 后使用 `browser.disconnect()`，不要调用 `browser.close()`。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/roxy-browser-client.cjs`
+- See Also: ERR-20260714-002
+
+### Resolution
+- **Resolved**: 2026-07-20T16:50:00+08:00
+- **Notes**: 改用简单循环和 CDP detach。
+
+---
+
+## [ERR-20260720-009] playwright-cdp-detach-api
+
+**Logged**: 2026-07-20T16:52:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+当前项目使用的 `playwright-core` CDP Browser 对象没有 `disconnect()` 方法，直接调用会抛出 TypeError。
+
+### Error
+```text
+TypeError: b.disconnect is not a function
+```
+
+### Context
+- 已成功连接 Roxy `617-3/test` 并读取页面；失败发生在诊断命令结束时的 detach 调用。
+- 命令没有调用 `browser.close()`，因此没有主动关闭 Roxy profile。
+
+### Suggested Fix
+只做短命令读取后让 Node 进程自然退出；不要对当前版本对象调用不存在的 `disconnect()`，也不要调用 `browser.close()`。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/roxy-browser-client.cjs`
+- See Also: ERR-20260714-002
+
+### Resolution
+- **Resolved**: 2026-07-20T16:52:00+08:00
+- **Notes**: 后续不调用不存在的 detach 方法。
+
+---
+
+## [ERR-20260720-010] roxy-cdp-auth-probe-timeout
+
+**Logged**: 2026-07-20T16:55:00+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+通过 Roxy `617-3/test` 新建页面访问 Auth 并验证 workspace/select 时，导航或页面请求在 60 秒内未完成。
+
+### Error
+```text
+command timed out after 64037 milliseconds
+```
+
+### Context
+- Roxy profile 已通过 API 打开并取得 CDP endpoint。
+- 直接 Node 请求 Auth 被出口返回 `unsupported_country_region_territory`；Roxy CDP 页面探测未能在超时内完成。
+- 未对账号 109 再次发送手机号或验证码。
+
+### Suggested Fix
+不要依赖当前出口做在线 workspace 探测；优先使用已保存 Auth 会话/Token 中的非敏感组织元数据，或等待用户提供/确认真实 OpenAI workspace ID。
+
+### Metadata
+- Reproducible: unknown
+- Related Files: `src/auto/product_files/cpa/19_immoral.bitmap@icloud.com.json`, `.env`
+- See Also: `docs/issues/issue-016-replacement-protocol-workspace-id-collision.md`
+
+---
+
+## [ERR-20260720-011] cpa-consent-data-array-shape
+
+**Logged**: 2026-07-20T17:30:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: integration
+
+### Summary
+协议 CPA 补号在 `consent.data` 返回数组时被错误判定为 JSON 响应异常。
+
+### Error
+```text
+CpaAuthProtocolError: non-object JSON from https://auth.openai.com/sign-in-with-chatgpt/codex/consent.data
+```
+
+### Context
+- 账号 `108` 的运行已通过登录、TOTP 和手机号验证阶段。
+- `response_json()` 强制要求 `dict`，但 `extract_consent_challenge()` 已有 `list` 分支。
+- 同次日志来自重启前旧 13100 进程，协议补号也没有执行新的 Roxy 刷新步骤。
+
+### Suggested Fix
+只对需要对象字段的接口保留对象校验；`consent.data` 使用允许 `dict/list` 的解析入口，并在子进程启动前完成 Roxy profile 刷新。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_cpa_auth.py`, `src/auto/test_protocol_cpa_auth.py`, `src/replacementServices.js`
+- See Also: `docs/work/2026-07-20-protocol-replacement-operation.md`
+
+### Resolution
+- **Resolved**: 2026-07-20T17:30:00+08:00
+- **Notes**: 已增加数组响应回归测试；CPA 5/5、replacement services 37/37 通过并重启 13100。
+
+---
+
+## [ERR-20260720-012] cpa-workspace-cross-account-401
+
+**Logged**: 2026-07-20T17:46:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: integration
+
+### Summary
+协议补号把账号 109 的 OpenAI organization workspace 用到了账号 111。
+
+### Error
+```text
+CpaAuthProtocolError: workspace/select returned HTTP 401
+```
+
+### Context
+- Run 590 / 账号 111 已经完成登录、TOTP、手机号和 consent.data，且 Roxy CDP 已正确注入。
+- 账号 111 的历史 token 是 free personal account；真实录制的 workspace/select body 使用账号 UUID，而不是账号 109 的 org workspace。
+- 原独立 CPA 请求还缺少录制中出现的 x-access-flow-invocation-id。
+
+### Suggested Fix
+在当前 Auth session 中读取脱敏 workspace 列表，显式值只有属于当前会话时才使用；否则优先 personal workspace，并补齐 workspace/select 的 invocation header。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_cpa_auth.py`, `src/auto/protocol_registration/core/session.py`, `src/auto/protocol_registration/scripts/roxy_cdp_bridge.cjs`
+- See Also: `docs/issues/issue-016-replacement-protocol-workspace-id-collision.md`
+
+### Resolution
+- **Resolved**: 2026-07-20T17:46:00+08:00
+- **Notes**: 已接入 auth_workspaces 动态解析和 invocation header；CPA 6/6、Roxy CDP Node 10/10、Roxy bridge Python 23/23 通过。
+
+---
+
+## [ERR-20260721-001] remote-proxy-change-probe
+
+**Logged**: 2026-07-21T15:05:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: infra
+
+### Summary
+VPS 只读探针首次查询 Docker 无权限，后续验证命令发生 PowerShell/SSH 引号展开，导致一次进程环境探针误读。
+
+### Error
+```text
+permission denied while trying to connect to the Docker API at unix:///var/run/docker.sock
+The term 'systemctl' is not recognized as a name of a cmdlet
+```
+
+### Context
+- SSH 用户 `seal` 无 Docker socket 权限，但 systemd 和目标服务可通过 `sudo -n` 查询/管理。
+- PowerShell 双引号会先展开远程命令中的 `$(...)`；进程环境验证改用 PowerShell 单引号包裹 SSH 命令后通过。
+
+### Suggested Fix
+远程只读探针优先使用 systemd、`ss` 和 `sudo`；包含 `$()` 的 SSH 命令使用 PowerShell 单引号，避免本地展开。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `docs/work/2026-07-21-cpa-host-direct-egress.md`
+
+### Resolution
+- **Resolved**: 2026-07-21T15:10:00+08:00
+- **Notes**: 已完成 CPA 宿主机直连切换并用 systemd 环境、进程环境、服务状态和直连出口 IP 复核。
+
+---
+
+## [ERR-20260721-002] cpa-config-proxy-remained
+
+**Logged**: 2026-07-21T15:23:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: infra
+
+### Summary
+只移除 CLIProxyAPI 的 systemd 代理环境不足以切换到宿主机直连，应用配置仍保留顶层 `proxy-url: http://127.0.0.1:7891`。
+
+### Error
+```text
+proxy-url: http://127.0.0.1:7891
+```
+
+### Context
+- CPA 进程和接口正常，但 `/opt/cliproxyapi/config.yaml` 的应用级代理配置优先于环境变量切换。
+- 配置改为空值并重启后，CPA 新 PID 加载 `proxy-url: ""`，接口 `/` 返回 200，宿主机直连出口 IP 为 `5.253.38.136`。
+
+### Suggested Fix
+切换 CPA 出口时同时检查 systemd 环境变量和应用自身配置；两者都必须明确不含旧代理地址。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `docs/work/2026-07-21-cpa-host-direct-egress.md`, `/opt/cliproxyapi/config.yaml`
+
+### Resolution
+- **Resolved**: 2026-07-21T15:23:00+08:00
+- **Notes**: 已备份并将顶层 `proxy-url` 设为空，重启 CPA 后完成 API、进程环境和直连出口复核。

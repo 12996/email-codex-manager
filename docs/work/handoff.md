@@ -2,6 +2,85 @@
 
 状态：active
 
+## 2026-07-23 协议注册随本地服务端口同步
+
+- 根因：Windows TCP 排除范围包含 `13100`，本机服务已配置为 `PORT=13400`；协议注册 Python 子进程仍默认请求 `http://127.0.0.1:13100/login`，在领取账号前报“补号服务后台登录失败”。
+- 修复：`buildProtocolRegistrationEnv()` 现在显式注入 `REPLACEMENT_API_BASE`，未配置时由父服务 `PORT` 推导；显式外部地址仍优先。
+- 验证：Node 协议注册专项 38/38、tilian Python 邮箱提供方专项 13/13 通过。需要重启 `npm run start:home-proxy` 后再从页面重试。
+
+## 2026-07-21 CPA 临时切换宿主机直连出口
+
+- 已将 VPS-LA 上 `cliproxyapi.service` 的代理环境从 `127.0.0.1:7891` 家宽代理移除，并将 `/opt/cliproxyapi/config.yaml` 顶层 `proxy-url` 设为空，CPA 当前直接使用宿主机默认出口。
+- 当前 CPA PID 为 `6694`，服务状态为 `active`；进程无 `HTTP_PROXY`、`HTTPS_PROXY`、`ALL_PROXY`；`/` 返回 `200`，无 API key 的 `/v1/models` 返回 `401`。
+- `mihomo.service` 和 `127.0.0.1:7891` 保持运行但不再被 CPA 使用；宿主机直连出口 IP 为 `5.253.38.136`。
+- 回滚备份：`/etc/systemd/system/cliproxyapi.service.d/home-proxy.conf.bak-20260721-070307`、`/opt/cliproxyapi/config.yaml.bak-20260721-072159`。恢复两个文件后执行 `sudo systemctl daemon-reload && sudo systemctl restart cliproxyapi.service`。
+- 后续切换使用 `scripts/cpa-proxy-toggle.sh`；说明文档为 `docs/project/cpa-proxy-operation.md`。脚本只改 CPA `config.yaml` 并重启 CPA，不触碰 systemd 代理环境或 mihomo。
+
+## 2026-07-20 协议 CPA phone-code 阶段跳过 add-phone 修复
+
+- 根因：`src/auto/protocol_cpa_auth.py` 原先在 `next_stage == "phone-code"` 时跳过 `add-phone/send`，直接等待 SMS。
+- 修复：`phone-add`、`phone-verify`、`phone-code` 统一先调用 `add-phone/send`；4xx 继续 SMS，500+ 失败；新增阶段日志。
+- 回归：CPA Auth 8/8、CPA replacement 2/2、Python 编译检查通过；issue `docs/issues/issue-019-protocol-cpa-phone-add-request-skipped.md` 已标记 resolved。
+- 已用真实管理接口重跑账号 `76`，Run `612`：`mfa/verify` 返回 `next_stage=sign-in-with-chatgpt-codex-consent`，所以本轮没有进入手机阶段，也没有调用 `add-phone/send` 或 SMS；随后在 `accounts/consent` 失败。该结果证明当前账号这轮不是“跳过 add-phone 后等待 SMS”。
+- 账号 76 数据库虽有手机号字段，但不等于本轮 Auth 已完成手机号绑定；若要实测 `add-phone/send`，必须使用 MFA 返回 `phone-add`/`phone-code` 的账号状态。
+
+## 2026-07-20 协议注册 2FA 回调 401 排查
+
+- 账号 `162`（`seal-heir.3h@icloud.com`）已在注册阶段取得 `accessToken`，但旧 2FA 分支在 `auth.openai.com/api/accounts/email-otp/validate` 返回 HTTP 401；没有进入 `mfa/enroll`。
+- 根因是协议注册仍走 `signin/openai?reauth=password` 的第二次邮箱 OTP 回调；`src/auto/roxy_register_openai.js` 的工作流程是在同一注册态直接执行 `mfa_info -> mfa/enroll -> activate_enrollment -> mfa_info`。
+- 已新增 `CHG-092`：协议注册统一由 `setup_2fa()` 直接复用注册后的 `accessToken`，删除 password re-auth 和邮箱 OTP 分支；`main.py` 显式传入 token。
+- 回归：协议注册 Python 测试 47/47、语法检查通过；账号 162 不重复重跑，待用新的 `unregistered` 账号做真实验证。
+- issue：`docs/issues/issue-018-protocol-registration-mfa-reauth-401.md`，当前仍为 active，表示真实端到端验证尚未完成。
+
+## 2026-07-20 协议补号 consent.data 失败与 Roxy 刷新修复
+
+- 账号 `108` 的一次协议补号已通过登录、TOTP 和手机号阶段，失败点为 `https://auth.openai.com/sign-in-with-chatgpt/codex/consent.data` 的 `non-object JSON`。
+- 根因：该接口在部分状态返回 JSON 数组，旧 `response_json()` 只接受对象；`extract_consent_challenge()` 已支持数组但没有被使用。
+- 同一运行日志还显示 `ROXY_CDP_ENDPOINT=unset` 且无 `prepare-roxy`，说明运行的是重启前旧 13100 进程。现已重启 `start:home-proxy`，当前 `node src/server.js` PID `31040`，启动时间 `17:29:54`。
+- 代码现状：协议补号 spawn 前强制执行 Roxy `close -> clear local -> clear server -> random fingerprint -> open -> connection_info`，子进程复用新 CDP；`consent.data` 支持对象和数组。
+- 验证：CPA Python `5/5`、replacement services `37/37`、Node/Python 语法和 `git diff --check` 通过。账号 108 尚未在修复后重跑。
+
+## 2026-07-20 Run 590 账号 111 workspace 401 修复
+
+- Roxy 刷新已生效，Run 590 的 ROXY_CDP_ENDPOINT=set；失败是 workspace/select HTTP 401。
+- 账号 111 是 free personal account，历史真实录制显示其 workspace 为 7e2e668c-cd6a-4eb6-9a44-297691e39323；原代码错误复用账号 109 的组织 workspace，并遗漏 x-access-flow-invocation-id。
+- 已接入 auth_workspaces：Roxy bridge 从 Auth session cookie 只返回脱敏 workspace 元数据；CPA 选择当前会话中匹配的 workspace，否则优先 personal workspace；workspace/select 补 invocation header。
+- 验证：CPA 6/6、Roxy CDP Node 10/10、Roxy bridge Python 23/23 通过。账号 111 尚未在修复后重跑。
+
+## 2026-07-20 协议补号点击无反应排查
+
+- 根因一：`13100` 曾由旧进程提供服务，未加载 `replace-2fa-protocol` 路由；已重启为 PID `33588`（`2026-07-20 16:25:22`）。
+- 根因二：前端原先只在同步协议请求完成后显示结果，点击后菜单关闭且无即时反馈；`web/app.js` 已增加“协议补号已启动”操作记录和 toast。
+- 验证：`node --test test/replacementAccountsWeb.test.js` 15/15 通过。
+- 配置已写入 `.env`：`OPENAI_WORKSPACE_ID` 使用账号 109 既有 Auth 凭证中的账号级 workspace；协议补号、普通补号和 2FA 登录统一使用 Roxy `617-3/test`（同一 `dirId`）。服务已重启，账号 109 已完成 add-phone/SMS，不要重复触发。
+- 最近点击的账号 `116` 已实际创建协议补号运行记录 `run_id=582`，但因数据库缺少 `codex_2fa` 在打开 Roxy 前退出；该次旧运行使用的是只有启动 toast 的前端。当前代码已补上协议补号实时日志面板；实际重跑仍需先补齐账号 `116` 的 TOTP/2FA secret，或改用已有 `codex_2fa` 的新测试账号。
+
+## 2026-07-20 协议补号实时日志面板
+
+- `web/index.html` 在补号列表后、协议注册日志前新增“当前协议补号日志”。
+- `web/app.js` 的协议补号改用 `Accept: text/event-stream`，并增加独立运行锁、清空、步骤/stdout/stderr/成功/失败状态处理；注册日志状态不复用。
+- `src/server.js` 保留普通 JSON 兼容，同时为协议补号 SSE 转发 worker 子进程日志和 account-result/complete/error 事件。
+- `src/cpaRepairWorker.js` 通过 `onLog` 转发 CPA 读取、上传、健康复查和最终状态步骤；历史运行日志仍写入 `data/automation-logs/`，历史日志页不变。
+- 验证：`replacementAccountsWeb.test.js` 16/16、`replacementAccountsApi.test.js` 36/36、`cpaRepairWorker.test.js` 8/8；`node --check` 和 `git diff --check` 通过。
+
+## 2026-07-20 Gmail-IMAP 协议补号操作
+
+- 工作记录：`docs/work/2026-07-20-protocol-replacement-operation.md`
+- change：`docs/changes/CHG-091-protocol-replacement-action.md`，状态 `implemented`。
+- 已新增独立 `POST /replacement-accounts/:id/replace-2fa-protocol`，调用 `protocol_cpa_replacement.py` -> `protocol_cpa_auth.py`，成功后沿用 CPA 上传、健康复查和 `cpa_mounted` 状态回写。
+- 补号列表操作菜单顺序现在为“协议注册”→“协议补号”→其他操作。
+- 注册状态机、普通补号和 DOM 2FA 补号未修改。
+- 使用前必须配置真实 `OPENAI_WORKSPACE_ID`；不能使用 Roxy workspace `111070`。不要重复测试已完成过 add-phone/SMS 的账号 109。
+
+## 2026-07-20 独立 CPA 2FA 补号协议真实测试
+
+- 来源工作日志：`docs/work/2026-07-20-standalone-cpa-auth-test.md`
+- change：`docs/changes/CHG-089-standalone-cpa-2fa-auth-protocol.md`、`docs/changes/CHG-090-roxy-2fa-authorize-url-match.md`，均为 `implemented`，尚未合并到 PRD。
+- 当前进展：当前目标仍是先调通账号 109 的既有 2FA 补号；不修改注册状态机。Roxy 2FA runner 已与 `oauth_login.js` 复用同形态的完整 `https://auth.openai.com/oauth/authorize?...` URL，不使用 Auth 根页，也不追加 `prompt=login`。Roxy 用户指定窗口为 `3/test`（617-3），`dirId=4c83715f6713db30c9baf9bfbc5086d3`。
+- 自动验证：关联 Node 回归（2FA runner、OAuth runner、CPA worker、replacement services）136/136、注册协议 Python 42/42、CPA 5/5 通过；语法检查和 `git diff --check` 通过。默认 `npm test` 的唯一失败是未启动本地服务的独立 smoke test，不属于本次改动。
+- 实机进展：已在已打开的 `617-3 / 3/test` CDP 上用生产 runner 复跑；目标 `prompt=login=false`，选择账号延迟跳转守卫生效，`workspace/select` 和 `oauth/token` 均 HTTP 200，runner 返回 `oauth-completed`，账号 109 CPA/sub2api 文件存在且 CPA 三类 token 字段非空。此前干净流程已完成 password、TOTP、phone-add、SMS、phone-otp、Codex、callback 和 token exchange。
+- 当前边界：账号 109 的生产 `cpaRepairWorker.repair` 代码路径已验证完成，CPA 上传、`active` 健康复查和数据库 `cpa_mounted` 回写均成功；本次未额外通过 HTTP 管理页面触发。不要把 Roxy workspace `111070` 当作 OpenAI workspace ID，也不要把注册状态机接入 CPA 协议，不要重复触发已完成的 add-phone。
+
 ## 2026-07-17 补号列表协议注册操作
 
 - 来源工作日志：`docs/work/2026-07-17-replacement-protocol-registration.md`

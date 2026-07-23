@@ -21,3 +21,7 @@
 | issue-013 | Roxy 注册密码提交阶段元素脱离 DOM | resolved | `issue-013-roxy-registration-password-click-detached.md` |
 | issue-014 | Roxy /about-you 年龄输入框被误识别为 OTP | resolved | `issue-014-roxy-about-you-age-misclassified-as-otp.md` |
 | issue-015 | 补号协议注册外部邮箱验证码 API 不可达 | active | `issue-015-replacement-protocol-email-api-unreachable.md` |
+| issue-016 | 补号协议混用 Roxy 与 OpenAI workspace ID | fixed | `issue-016-replacement-protocol-workspace-id-collision.md` |
+| issue-017 | Roxy CPA Auth 出口被重置或拒绝 | resolved | `issue-017-roxy-cpa-auth-egress-reset.md` |
+| issue-018 | 协议注册 2FA 重认证回调返回 401 | active | `issue-018-protocol-registration-mfa-reauth-401.md` |
+| issue-019 | 协议 CPA phone-code 阶段跳过 add-phone/send | resolved | `issue-019-protocol-cpa-phone-add-request-skipped.md` |

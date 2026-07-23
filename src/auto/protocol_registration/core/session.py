@@ -19,7 +19,7 @@ class BrowserSession:
     使用 curl_cffi 的 impersonate 功能绕过 Cloudflare TLS 指纹检测。
     """
 
-    def __init__(self, proxy: str = None):
+    def __init__(self, proxy: str = None, roxy_warmup_url: str | None = None):
         """
         初始化会话。
 
@@ -32,6 +32,12 @@ class BrowserSession:
 
         self._roxy_cdp = None
         self.roxy_fingerprint = None
+        self.roxy_ip = None
+        self.roxy_warmup_url = (
+            "https://chatgpt.com/"
+            if roxy_warmup_url is None
+            else str(roxy_warmup_url).strip()
+        )
         self.user_agent = USER_AGENT
 
         # CDP 模式不把 Roxy proxyInfo 误当成普通代理，而是直接复用页面上下文。
@@ -85,11 +91,31 @@ class BrowserSession:
         if not self._roxy_cdp or self.roxy_fingerprint is not None:
             return
         fingerprint = self._roxy_cdp.fingerprint()
-        # Roxy CDP initially exposes an about:blank tab. Warm the target origin
-        # before the first page-context fetch so navigation and fetch do not race.
-        self._roxy_cdp.navigate("https://chatgpt.com/", timeout=REQUEST_TIMEOUT)
+        # Keep the legacy ChatGPT warmup for registration; standalone CPA can
+        # disable it so its first visible navigation is the Auth authorize URL.
+        if self.roxy_warmup_url:
+            self._roxy_cdp.navigate(self.roxy_warmup_url, timeout=REQUEST_TIMEOUT)
         self.roxy_fingerprint = fingerprint
         self.user_agent = str(fingerprint.get("userAgent") or self.user_agent)
+
+    def _ensure_roxy_ip(self) -> None:
+        if not self._roxy_cdp:
+            return
+        from config import ROXY_IP_CHECK_ENABLED
+        if not ROXY_IP_CHECK_ENABLED:
+            return
+        ip_reader = getattr(self._roxy_cdp, "ip", None)
+        if not callable(ip_reader):
+            return
+        info = ip_reader() or {}
+        current_ip = str(info.get("ip") or "").strip() if isinstance(info, dict) else ""
+        if not current_ip:
+            return
+        if self.roxy_ip and self.roxy_ip != current_ip:
+            raise RuntimeError(
+                f"Roxy 出口 IP 发生变化: {self.roxy_ip} -> {current_ip}，终止当前 OAuth 会话"
+            )
+        self.roxy_ip = current_ip
 
     def ensure_fingerprint(self) -> None:
         """确保 CDP 指纹已读取，供 Sentinel 生成器在首个请求前调用。"""
@@ -180,6 +206,7 @@ class BrowserSession:
         """发送 GET 请求"""
         if self._roxy_cdp:
             self._ensure_roxy_fingerprint()
+            self._ensure_roxy_ip()
             return self._roxy_cdp.request("GET", url, headers=headers, **kwargs)
         return self.session.get(url, headers=headers, **kwargs)
 
@@ -187,6 +214,7 @@ class BrowserSession:
         """发送 POST 请求"""
         if self._roxy_cdp:
             self._ensure_roxy_fingerprint()
+            self._ensure_roxy_ip()
             return self._roxy_cdp.request("POST", url, headers=headers, **kwargs)
         return self.session.post(url, headers=headers, **kwargs)
 
@@ -194,6 +222,7 @@ class BrowserSession:
         """在 CDP 页面中执行真实导航；curl_cffi 模式退化为普通 GET。"""
         if self._roxy_cdp:
             self._ensure_roxy_fingerprint()
+            self._ensure_roxy_ip()
             return self._roxy_cdp.navigate(url, headers=headers, **kwargs)
         return self.session.get(url, headers=headers, **kwargs)
 
@@ -202,7 +231,20 @@ class BrowserSession:
         if not self._roxy_cdp:
             raise RuntimeError("Sentinel 页面 SDK 只在 Roxy CDP 模式可用")
         self._ensure_roxy_fingerprint()
+        self._ensure_roxy_ip()
         return self._roxy_cdp.sentinel_headers(flow, self.device_id, timeout=REQUEST_TIMEOUT)
+
+    def auth_workspaces(self) -> list[dict]:
+        """读取当前 Auth 会话的脱敏 workspace 元数据，不返回 Cookie 或 Token。"""
+        if not self._roxy_cdp:
+            return []
+        reader = getattr(self._roxy_cdp, "auth_workspaces", None)
+        if not callable(reader):
+            return []
+        self._ensure_roxy_fingerprint()
+        self._ensure_roxy_ip()
+        result = reader()
+        return result if isinstance(result, list) else []
 
     def close(self) -> None:
         """关闭协议会话；CDP 模式只断开桥接，不关闭 Roxy profile。"""

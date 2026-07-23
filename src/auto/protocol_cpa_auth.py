@@ -98,6 +98,8 @@ class CpaAuthProtocol:
         sms_api_url: str = "",
         sms_api_proxy: str = "",
         sms_timeout: float = 15,
+        sms_poll_timeout: float = 90,
+        sms_poll_interval: float = 5,
         output_dir: str | Path | None = None,
     ) -> CpaAuthResult:
         normalized_email = str(email or "").strip()
@@ -160,20 +162,36 @@ class CpaAuthProtocol:
         )
 
         next_stage = extract_next_stage(verify_payload)
+        continue_url = extract_continue_url(verify_payload)
+        payload_keys = ",".join(sorted(str(key) for key in verify_payload)) if isinstance(verify_payload, dict) else type(verify_payload).__name__
+        logger.warning(
+            "MFA verify next_stage=%s continue_path=%s payload_keys=%s",
+            next_stage,
+            _safe_path(continue_url) or "-",
+            payload_keys or "-",
+        )
         phone_verified = False
         if needs_phone_stage(next_stage):
-            phone_verified = self._complete_phone_stage(
+            self._navigate_continue_url(continue_url, referer=f"{AUTH_ORIGIN}/")
+            phone_verified, phone_continue_url = self._complete_phone_stage(
                 next_stage=next_stage,
                 phone_number=phone_number,
                 sms_api_url=sms_api_url,
                 sms_api_proxy=sms_api_proxy,
                 sms_timeout=sms_timeout,
+                sms_poll_timeout=sms_poll_timeout,
+                sms_poll_interval=sms_poll_interval,
             )
+            continue_url = phone_continue_url
+        else:
+            logger.warning("MFA verify did not expose a phone stage; skipping phone flow")
 
+        resolved_workspace = resolve_workspace_id(self.session, normalized_workspace)
         tokens = self._complete_oauth(
             state=state,
             verifier=pkce.verifier,
-            workspace_id=normalized_workspace,
+            workspace_id=resolved_workspace,
+            continue_url=continue_url,
         )
         cpa_path = write_cpa_auth_file(
             email=normalized_email,
@@ -183,7 +201,7 @@ class CpaAuthProtocol:
         return CpaAuthResult(
             email=normalized_email,
             cpa_path=str(cpa_path),
-            workspace_id=normalized_workspace,
+            workspace_id=resolved_workspace,
             phone_verified=phone_verified,
             token_exchanged=True,
         )
@@ -234,23 +252,38 @@ class CpaAuthProtocol:
         sms_api_url: str,
         sms_api_proxy: str,
         sms_timeout: float,
-    ) -> bool:
-        if next_stage != "phone-code":
-            if not phone_number:
-                raise CpaAuthProtocolError("phone number is required for phone-add stage")
-            status = self._send_phone(phone_number)
-            if status >= 500:
-                raise CpaAuthProtocolError(f"add-phone returned HTTP {status}")
+        sms_poll_timeout: float,
+        sms_poll_interval: float,
+    ) -> tuple[bool, str]:
+        if not phone_number:
+            raise CpaAuthProtocolError("phone number is required for phone verification")
+        logger.warning("phone stage=%s; requesting add-phone/send before SMS polling", next_stage)
+        status = self._send_phone(phone_number)
+        if status >= 500:
+            raise CpaAuthProtocolError(f"add-phone returned HTTP {status}")
+        logger.warning("phone stage=%s; add-phone/send returned HTTP %s, continue to SMS polling", next_stage, status)
 
         if self.phone_code_factory:
             code = str(self.phone_code_factory() or "").strip()
         else:
             if not sms_api_url:
                 raise CpaAuthProtocolError("sms_api_url is required for phone verification")
-            code = fetch_sms_code(
+            sms_fetcher = None
+            if getattr(self.session, "uses_roxy_cdp", False) and not sms_api_proxy:
+                sms_fetcher = self._fetch_sms_code_via_roxy
+            logger.warning(
+                "SMS polling transport=%s timeout=%gs interval=%gs",
+                "roxy-browser" if sms_fetcher else "direct-http",
+                sms_poll_timeout,
+                sms_poll_interval,
+            )
+            code = wait_for_sms_code(
                 sms_api_url,
                 proxy=sms_api_proxy,
-                timeout=sms_timeout,
+                request_timeout=sms_timeout,
+                poll_timeout=sms_poll_timeout,
+                poll_interval=sms_poll_interval,
+                fetcher=sms_fetcher,
             )
         if not re.fullmatch(r"\d{6}", code):
             raise CpaAuthProtocolError("phone verification code must be six digits")
@@ -268,7 +301,11 @@ class CpaAuthProtocol:
         payload = response_json(response, PHONE_OTP_VALIDATE_URL)
         if payload.get("success") is False:
             raise CpaAuthProtocolError("phone OTP was rejected")
-        return True
+        return True, extract_continue_url(payload)
+
+    def _fetch_sms_code_via_roxy(self, url: str, *, proxy: str = "", timeout: float = 15) -> str:
+        del proxy
+        return fetch_sms_code_via_browser(self.session, url, timeout=timeout)
 
     def _send_phone(self, phone_number: str) -> int:
         response = self.session.post(
@@ -281,26 +318,53 @@ class CpaAuthProtocol:
         )
         status = int(getattr(response, "status_code", 0) or 0)
         if 400 <= status < 500:
-            logger.warning("add-phone returned HTTP %s; continue to phone OTP stage", status)
+            logger.info(
+                "add-phone returned HTTP %s; phone may already be added, continue to phone OTP stage",
+                status,
+            )
             return status
         require_success(response, "add-phone/send")
         return status
 
-    def _complete_oauth(self, *, state: str, verifier: str, workspace_id: str) -> dict:
+    def _navigate_continue_url(self, continue_url: str, *, referer: str) -> str:
+        resolved = resolve_auth_continue_url(continue_url)
+        if not resolved:
+            return ""
         self.session.navigate(
-            CONSENT_PAGE_URL,
+            resolved,
+            headers=self.session.get_auth_navigate_headers(referer=referer),
+        )
+        return resolved
+
+    def _complete_oauth(
+        self,
+        *,
+        state: str,
+        verifier: str,
+        workspace_id: str,
+        continue_url: str = "",
+    ) -> dict:
+        consent_page_url = resolve_auth_continue_url(continue_url) or CONSENT_PAGE_URL
+        self.session.navigate(
+            consent_page_url,
             headers=self.session.get_auth_navigate_headers(referer=f"{AUTH_ORIGIN}/"),
         )
         consent_response = self.session.get(
             CONSENT_DATA_URL,
-            headers=self.session.get_auth_headers(referer=CONSENT_PAGE_URL),
+            headers=self.session.get_auth_headers(referer=consent_page_url),
         )
-        consent_data = response_json(consent_response, CONSENT_DATA_URL)
+        consent_data = response_json_value(consent_response, CONSENT_DATA_URL)
+        if not isinstance(consent_data, (dict, list)):
+            raise CpaAuthProtocolError(
+                f"unsupported JSON shape from {_safe_path(CONSENT_DATA_URL)}: {type(consent_data).__name__}"
+            )
         consent_challenge = extract_consent_challenge(consent_data)
 
+        workspace_headers = self.session.get_auth_headers(referer=consent_page_url)
+        workspace_headers["x-access-flow-invocation-id"] = str(self.invocation_id_factory())
         workspace_response = self.session.post(
             f"{AUTH_ORIGIN}/api/accounts/workspace/select",
-            headers=self.session.get_auth_headers(referer=CONSENT_PAGE_URL),
+            headers=workspace_headers,
             data=json.dumps({"workspace_id": workspace_id}, separators=(",", ":")),
         )
         require_success(workspace_response, "workspace/select")
@@ -310,7 +374,7 @@ class CpaAuthProtocol:
             consent_url = f"{consent_url}?{urlencode({'consent_challenge': consent_challenge})}"
         consent_result = self.session.get(
             consent_url,
-            headers=self.session.get_auth_headers(referer=CONSENT_PAGE_URL),
+            headers=self.session.get_auth_headers(referer=consent_page_url),
             allow_redirects=False,
         )
         oauth_location = location_header(consent_result)
@@ -319,7 +383,7 @@ class CpaAuthProtocol:
 
         oauth_result = self.session.get(
             urljoin(f"{AUTH_ORIGIN}/", oauth_location),
-            headers=self.session.get_auth_headers(referer=CONSENT_PAGE_URL),
+            headers=self.session.get_auth_headers(referer=consent_page_url),
             allow_redirects=False,
         )
         callback_url = location_header(oauth_result)
@@ -421,6 +485,55 @@ def fetch_sms_code(url: str, *, proxy: str = "", timeout: float = 15) -> str:
     return code
 
 
+def fetch_sms_code_via_browser(session, url: str, *, timeout: float = 15) -> str:
+    """Read the SMS endpoint through the active Roxy page exit when direct HTTP is restricted."""
+    try:
+        response = session.navigate(str(url).strip(), timeout=timeout)
+    except Exception as exc:
+        raise SmsCodeError(f"Roxy SMS navigation failed: {type(exc).__name__}") from exc
+
+    status = int(getattr(response, "status_code", 0) or 0)
+    if not 200 <= status < 300:
+        raise SmsCodeError(f"SMS API returned HTTP {status}")
+    code = find_six_digit_code(getattr(response, "text", ""))
+    if not code:
+        raise SmsCodeError("SMS API returned no six-digit code")
+    return code
+
+
+def wait_for_sms_code(
+    url: str,
+    *,
+    proxy: str = "",
+    request_timeout: float = 15,
+    poll_timeout: float = 90,
+    poll_interval: float = 5,
+    fetcher: Callable[..., str] | None = None,
+    sleep_fn: Callable[[float], None] | None = None,
+) -> str:
+    """Poll the SMS API after add-phone until a six-digit code is available."""
+    request_timeout = max(0.0, float(request_timeout))
+    poll_timeout = max(0.0, float(poll_timeout))
+    poll_interval = max(0.0, float(poll_interval))
+    read_code = fetcher or fetch_sms_code
+    sleep_fn = sleep_fn or time.sleep
+    deadline = time.monotonic() + poll_timeout
+    last_error: SmsCodeError | None = None
+
+    while True:
+        try:
+            return read_code(url, proxy=proxy, timeout=request_timeout)
+        except SmsCodeError as exc:
+            last_error = exc
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise SmsCodeError(
+                f"SMS API polling timed out after {poll_timeout:g}s"
+            ) from last_error
+        sleep_fn(min(poll_interval, remaining))
+
+
 def find_six_digit_code(value) -> str:
     if isinstance(value, dict):
         for item in value.values():
@@ -485,11 +598,16 @@ def format_expiry(timestamp) -> str:
     return datetime.fromtimestamp(value, timezone.utc).isoformat(timespec="milliseconds")
 
 
-def response_json(response, url: str) -> dict:
+def response_json_value(response, url: str):
     try:
         payload = response.json()
     except (AttributeError, TypeError, ValueError) as exc:
         raise CpaAuthProtocolError(f"invalid JSON from {_safe_path(url)}") from exc
+    return payload
+
+
+def response_json(response, url: str) -> dict:
+    payload = response_json_value(response, url)
     if not isinstance(payload, dict):
         raise CpaAuthProtocolError(f"non-object JSON from {_safe_path(url)}")
     return payload
@@ -551,14 +669,52 @@ def extract_next_stage(payload) -> str:
     if isinstance(payload, dict):
         page = payload.get("page")
         if isinstance(page, dict):
-            value = str(page.get("type") or "").strip().lower().replace("_", "-")
+            value = normalize_stage(page.get("type"))
             if value:
                 return value
         for key in ("next_stage", "nextStage", "stage"):
-            value = str(payload.get(key) or "").strip().lower().replace("_", "-")
+            value = normalize_stage(payload.get(key))
             if value:
                 return value
     return "unknown"
+
+
+def normalize_stage(value) -> str:
+    normalized = str(value or "").strip().lower().replace("_", "-")
+    return {
+        "add-phone": "phone-add",
+        "phone-add": "phone-add",
+        "phone-verification": "phone-verify",
+        "phone-code": "phone-code",
+    }.get(normalized, normalized)
+
+
+def extract_continue_url(payload) -> str:
+    if isinstance(payload, dict):
+        for key in ("continue_url", "continueUrl", "next_url", "nextUrl"):
+            value = str(payload.get(key) or "").strip()
+            if value:
+                return value
+        for value in payload.values():
+            found = extract_continue_url(value)
+            if found:
+                return found
+    elif isinstance(payload, list):
+        for value in payload:
+            found = extract_continue_url(value)
+            if found:
+                return found
+    return ""
+
+
+def resolve_auth_continue_url(value: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    resolved = urljoin(f"{AUTH_ORIGIN}/", normalized)
+    if urlsplit(resolved).scheme != "https" or urlsplit(resolved).netloc != "auth.openai.com":
+        raise CpaAuthProtocolError("auth continue_url must stay on auth.openai.com")
+    return resolved
 
 
 def extract_consent_challenge(payload) -> str:
@@ -577,6 +733,50 @@ def extract_consent_challenge(payload) -> str:
             if found:
                 return found
     return ""
+
+
+def resolve_workspace_id(session, requested_workspace: str) -> str:
+    requested = str(requested_workspace or "").strip()
+    reader = getattr(session, "auth_workspaces", None)
+    available = []
+    if callable(reader):
+        try:
+            raw_workspaces = reader()
+        except Exception as exc:
+            logger.warning("unable to read current Auth workspaces: %s", type(exc).__name__)
+            raw_workspaces = []
+        if isinstance(raw_workspaces, dict):
+            raw_workspaces = raw_workspaces.get("workspaces") or []
+        if isinstance(raw_workspaces, list):
+            for item in raw_workspaces:
+                if isinstance(item, str):
+                    workspace_id = item.strip()
+                    kind = ""
+                elif isinstance(item, dict):
+                    workspace_id = str(item.get("id") or "").strip()
+                    kind = str(item.get("kind") or "").strip().lower()
+                else:
+                    continue
+                if workspace_id and not any(candidate["id"] == workspace_id for candidate in available):
+                    available.append({"id": workspace_id, "kind": kind})
+
+    if available:
+        if requested:
+            for candidate in available:
+                if candidate["id"] == requested:
+                    return requested
+        for candidate in available:
+            if candidate["kind"] in {"personal", "user", "individual"}:
+                logger.info("using current Auth personal workspace for workspace/select")
+                return candidate["id"]
+        logger.info("using first current Auth workspace for workspace/select")
+        return available[0]["id"]
+
+    if requested:
+        return requested
+    raise CpaAuthProtocolError(
+        "OpenAI workspace id is unavailable in the current Auth session"
+    )
 
 
 def needs_phone_stage(stage: str) -> bool:
@@ -598,7 +798,7 @@ def create_default_session():
         sys.path.insert(0, str(registration_dir))
     from core.session import BrowserSession
 
-    return BrowserSession(proxy=None)
+    return BrowserSession(proxy=None, roxy_warmup_url="")
 
 
 def main(argv=None) -> int:
@@ -614,6 +814,24 @@ def main(argv=None) -> int:
     parser.add_argument("--phone", default=os.environ.get("CPA_PHONE", ""))
     parser.add_argument("--sms-api", default=os.environ.get("CPA_SMS_API", ""))
     parser.add_argument("--sms-proxy", default=os.environ.get("SMS_API_PROXY", ""))
+    parser.add_argument(
+        "--sms-timeout",
+        type=float,
+        default=float(os.environ.get("CPA_SMS_TIMEOUT", "15")),
+        help="SMS API 单次 HTTP 请求超时（秒）",
+    )
+    parser.add_argument(
+        "--sms-poll-timeout",
+        type=float,
+        default=float(os.environ.get("CPA_SMS_POLL_TIMEOUT", "90")),
+        help="add-phone 后等待短信验证码的总超时（秒）",
+    )
+    parser.add_argument(
+        "--sms-poll-interval",
+        type=float,
+        default=float(os.environ.get("CPA_SMS_POLL_INTERVAL", "5")),
+        help="SMS API 轮询间隔（秒）",
+    )
     parser.add_argument("--output-dir", default=os.environ.get("CPA_OUTPUT_DIR", ""))
     args = parser.parse_args(argv)
 
@@ -627,6 +845,9 @@ def main(argv=None) -> int:
             phone_number=args.phone,
             sms_api_url=args.sms_api,
             sms_api_proxy=args.sms_proxy,
+            sms_timeout=args.sms_timeout,
+            sms_poll_timeout=args.sms_poll_timeout,
+            sms_poll_interval=args.sms_poll_interval,
             output_dir=args.output_dir or None,
         )
         print(json.dumps({

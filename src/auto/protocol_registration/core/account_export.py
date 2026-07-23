@@ -12,11 +12,9 @@ import json
 import logging
 import os
 import re
-import time
 from datetime import datetime
 from pathlib import Path
 import threading
-from urllib.parse import urlencode
 
 import pyotp
 
@@ -212,102 +210,12 @@ def fetch_session(session: BrowserSession) -> dict:
     return data
 
 
-def _trigger_reauth(session: BrowserSession, email: str) -> str:
-    """
-    步骤2-3: 发起密码重认证，返回 OpenAI authorize URL。
-    重定向链会自动触发邮箱发送一份新的 OTP（用于 2FA 重认证）。
-    """
-    # 重新拿一次 csrf（旧的可能已过期）
-    csrf_url = "https://chatgpt.com/api/auth/csrf"
-    csrf_resp = session.get(csrf_url, headers=session.get_chatgpt_headers())
-    csrf_resp.raise_for_status()
-    csrf_token = csrf_resp.json()["csrfToken"]
-    logger.info(f"[2FA] 重认证 CSRF: {csrf_token[:20]}...")
-
-    # POST /api/auth/signin/openai 带 reauth 参数
-    query = {
-        "connection": "password",
-        "login_hint": email,
-        "reauth": "password",
-        "max_age": "0",
-        "ext-oai-did": session.device_id,
-    }
-    signin_url = "https://chatgpt.com/api/auth/signin/openai?" + urlencode(query)
-
-    headers = session.get_chatgpt_headers()
-    headers["content-type"] = "application/x-www-form-urlencoded"
-    headers["origin"] = "https://chatgpt.com"
-
-    body = urlencode({
-        "callbackUrl": "https://chatgpt.com/?action=enable&factor=totp",
-        "csrfToken": csrf_token,
-        "json": "true",
-    })
-
-    logger.info("[2FA] 发起重认证 signin/openai...")
-    resp = session.post(signin_url, headers=headers, data=body)
-    resp.raise_for_status()
-    auth_url = resp.json().get("url")
-    if not auth_url:
-        raise RuntimeError(f"未拿到 reauth authorize URL: {resp.text}")
-    return auth_url
-
-
-def _follow_reauth(session: BrowserSession, auth_url: str) -> None:
-    """
-    步骤3: 跟随 authorize URL 触发邮箱 OTP 发送。
-    auth.openai.com 会重定向到 /email-verification 页面，期间发送 OTP 邮件。
-    """
-    headers = session.get_auth_navigate_headers(referer="https://chatgpt.com/")
-    logger.info("[2FA] 跟随 authorize URL，触发 OTP 发送...")
-    resp = session.get(auth_url, headers=headers, allow_redirects=True)
-    logger.info(f"[2FA] 落点 URL: {resp.url}")
-
-
-def _validate_reauth_otp(session: BrowserSession, code: str) -> str:
-    """
-    步骤4: 提交邮箱 OTP 验证。
-    返回 continue_url（带 code 参数的 callback URL，用于跳回 chatgpt.com）。
-    """
-    url = "https://auth.openai.com/api/accounts/email-otp/validate"
-    headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
-    body = json.dumps({"code": code})
-
-    logger.info(f"[2FA] 提交重认证 OTP: {code}")
-    resp = session.post(url, headers=headers, data=body)
-    resp.raise_for_status()
-    data = resp.json()
-    continue_url = data.get("continue_url")
-    if not continue_url:
-        raise RuntimeError(f"OTP 验证响应缺少 continue_url: {data}")
-    return continue_url
-
-
-def _exchange_new_token(session: BrowserSession, continue_url: str) -> str:
-    """
-    步骤5: 跟随 continue_url 完成回调，再次拉 /api/auth/session 拿到新 accessToken
-    （此时 token 内嵌的 pwd_auth_time 是新鲜的，2FA enroll 才会接受）。
-    """
-    headers = session.get_auth_navigate_headers(referer="https://auth.openai.com/email-verification")
-    logger.info("[2FA] 跟随 continue_url，刷新 session-token cookie...")
-    session.get(continue_url, headers=headers, allow_redirects=True)
-
-    # 拿新的 accessToken
-    new_session = fetch_session(session)
-    new_token = new_session["accessToken"]
-    logger.info(f"[2FA] 新 accessToken（含新鲜 pwd_auth_time）: {new_token[:40]}...")
-    return new_token
-
-
 def _enroll_totp(session: BrowserSession, access_token: str) -> tuple[str, str]:
     """
     步骤6: 注册 TOTP，返回 (secret, session_id)
     """
     url = "https://chatgpt.com/backend-api/accounts/mfa/enroll"
-    headers = session.get_chatgpt_headers(referer="https://chatgpt.com/")
-    headers["authorization"] = f"Bearer {access_token}"
-    headers["oai-device-id"] = session.device_id
-    headers["oai-language"] = "zh-CN"
+    headers = _mfa_headers(session, access_token)
 
     body = json.dumps({"factor_type": "totp"})
 
@@ -335,10 +243,7 @@ def _activate_totp(
     步骤7: 用 secret 生成 6 位 TOTP 码，激活 2FA。
     """
     url = "https://chatgpt.com/backend-api/accounts/mfa/user/activate_enrollment"
-    headers = session.get_chatgpt_headers(referer="https://chatgpt.com/")
-    headers["authorization"] = f"Bearer {access_token}"
-    headers["oai-device-id"] = session.device_id
-    headers["oai-language"] = "zh-CN"
+    headers = _mfa_headers(session, access_token)
 
     totp_code = pyotp.TOTP(secret).now()
     body = json.dumps({
@@ -358,57 +263,72 @@ def _activate_totp(
     return True
 
 
-def setup_2fa(session: BrowserSession, email: str, otp_code: str | None = None) -> str:
+def _mfa_headers(session: BrowserSession, access_token: str) -> dict:
+    """Build the same authenticated ChatGPT headers used by the Roxy MFA flow."""
+    headers = session.get_chatgpt_headers(referer="https://chatgpt.com/")
+    headers["authorization"] = f"Bearer {access_token}"
+    headers["oai-device-id"] = session.device_id
+    headers["oai-language"] = "zh-CN"
+    return headers
+
+
+def _fetch_mfa_info(session: BrowserSession, access_token: str) -> dict:
+    """Read MFA state in the current browser context."""
+    url = "https://chatgpt.com/backend-api/accounts/mfa_info"
+    resp = session.get(url, headers=_mfa_headers(session, access_token))
+    if resp.status_code != 200:
+        logger.error(f"[2FA] mfa_info 失败 {resp.status_code}: {resp.text[:240]}")
+        resp.raise_for_status()
+    data = resp.json()
+    if not isinstance(data, dict):
+        raise RuntimeError(f"mfa_info 响应格式错误: {type(data).__name__}")
+    return data
+
+
+def _setup_direct_2fa(session: BrowserSession, access_token: str) -> str:
+    """Enable TOTP directly, matching roxy_register_openai.js."""
+    before = _fetch_mfa_info(session, access_token)
+    if before.get("mfa_enabled_v2"):
+        raise RuntimeError("账号已启用 MFA，无法取得本次注册的 TOTP secret")
+
+    secret, session_id = _enroll_totp(session, access_token)
+    _activate_totp(session, access_token, secret, session_id)
+
+    after = _fetch_mfa_info(session, access_token)
+    if not after.get("mfa_enabled_v2"):
+        raise RuntimeError("MFA 激活接口成功，但 mfa_info 未确认已启用")
+    return secret
+
+
+def setup_2fa(
+    session: BrowserSession,
+    email: str,
+    access_token: str | None = None,
+) -> str:
     """
-    完整的 2FA 设置流程。
-    会触发再发一份邮箱验证码：
-        - USE_EMAIL_SERVICE=True 时自动从 Outlook 账号池拉取
-        - 否则需要用户手动输入
+    完整的 2FA 设置流程，直接复用注册后的 accessToken。
+    不触发 password re-auth、email OTP 或 OAuth 回调。
 
     Args:
         session: 已完成注册的会话
-        email: 账号邮箱（用作 login_hint）
-        otp_code: 邮箱验证码（None 则按上述策略获取）
+        email: 账号邮箱（保留参数以兼容现有调用）
+        access_token: 注册完成后已获取的 accessToken
 
     Returns:
         TOTP secret（Base32 字符串），可直接用于 pyotp.TOTP() 生成 6 位动态码
     """
-    from config import USE_EMAIL_SERVICE  # 局部 import，避免顶部循环依赖
-
     logger.info("=" * 60)
     logger.info("开始设置 2FA")
     logger.info("=" * 60)
 
-    # 阶段一：重认证
-    reauth_otp_after_ts = time.time()
-    auth_url = _trigger_reauth(session, email)
-    time.sleep(1)
-    _follow_reauth(session, auth_url)
-    time.sleep(2)
+    current_token = str(access_token or "").strip()
+    if not current_token:
+        current_token = str(fetch_session(session).get("accessToken") or "").strip()
+    if not current_token:
+        raise RuntimeError("2FA 缺少注册后的 accessToken")
 
-    if otp_code is None:
-        if USE_EMAIL_SERVICE:
-            from core.email_provider import wait_for_otp
-            logger.info("[2FA] 自动等待邮箱重认证 OTP...")
-            otp_code = wait_for_otp(email, after_ts=reauth_otp_after_ts)
-        else:
-            logger.info("")
-            logger.info("[2FA] 请检查邮箱，输入新收到的 6 位验证码")
-            otp_code = input(">>> 2FA 验证码: ").strip()
-
-    continue_url = _validate_reauth_otp(session, otp_code)
-    time.sleep(0.5)
-    new_token = _exchange_new_token(session, continue_url)
-    time.sleep(0.5)
-
-    # 阶段二：enroll + activate
-    secret, session_id = _enroll_totp(session, new_token)
-    time.sleep(0.5)
-    _activate_totp(session, new_token, secret, session_id)
-
-    logger.info("=" * 60)
+    secret = _setup_direct_2fa(session, current_token)
     logger.info("✅ 2FA 设置完成，TOTP secret 已激活")
-    logger.info("=" * 60)
     return secret
 
 

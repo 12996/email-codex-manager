@@ -52,6 +52,7 @@ const tableFieldLimits = Object.fromEntries(
 const $ = (selector) => document.querySelector(selector);
 let progressActionRunning = false;
 let protocolRegistrationRunning = false;
+let protocolReplacementRunning = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
@@ -92,6 +93,7 @@ function bindEvents() {
     renderActivity();
   });
   $('#clearProtocolLiveLog').addEventListener('click', clearProtocolLiveLog);
+  $('#clearProtocolReplacementLiveLog').addEventListener('click', clearProtocolReplacementLiveLog);
   document.querySelectorAll('[data-close]').forEach((button) => {
     button.addEventListener('click', () => button.closest('dialog').close());
   });
@@ -192,12 +194,13 @@ function accountRow(account) {
         <div class="actions">
           <button class="primary action-toggle" type="button" data-id="${account.id}">操作⌄</button>
           <div class="action-menu" hidden>
+            <button type="button" data-action="register-protocol" data-id="${account.id}">⇄ 协议注册</button>
+            <button type="button" data-action="replace-2fa-protocol" data-id="${account.id}">⟳ 协议补号</button>
             <button type="button" data-action="edit" data-id="${account.id}">✎ 编辑账号</button>
             <button type="button" data-action="toggle-public-code" data-id="${account.id}">${account.public_code_enabled ? '停用公开验证码' : '启用公开验证码'}</button>
             <button type="button" data-action="sms" data-id="${account.id}">▣ 获取验证码</button>
             <button type="button" data-action="json" data-id="${account.id}">▣ 获取 JSON</button>
             <button type="button" data-action="register" data-id="${account.id}">✚ 注册</button>
-            <button type="button" data-action="register-protocol" data-id="${account.id}">⇄ 协议注册</button>
             <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
             <button type="button" data-action="replace-2fa" data-id="${account.id}">⟳ 2FA补号</button>
             <button type="button" data-action="login-2fa" data-id="${account.id}">🔑 2FA登录</button>
@@ -232,6 +235,7 @@ function renderStatusSelect(account) {
 function operationFailureLabel(account) {
   const lastError = String(account?.last_error || '');
   if (/2FA补号失败|2FA.*REPLACE_FAILED/i.test(lastError)) return '2FA补号失败';
+  if (/协议补号失败|PROTOCOL_REPLACE_FAILED/i.test(lastError)) return '协议补号失败';
   if (/补号失败|REPLACE_FAILED/i.test(lastError)) return '补号失败';
   if (/查询 Plus失败|Plus 状态查询失败/i.test(lastError)) return '查询 Plus 失败';
   if (/一键验活失败/i.test(lastError)) return '一键验活失败';
@@ -344,6 +348,7 @@ async function handleAction(action, id, dataset = {}) {
   if (action === 'json') return fetchJson(account);
   if (action === 'register') return registerAccount(account);
   if (action === 'register-protocol') return registerProtocolAccount(account);
+  if (action === 'replace-2fa-protocol') return replaceAccountWith2FAProtocol(account);
   if (action === 'replace') return replaceAccount(account);
   if (action === 'replace-2fa') return replaceAccountWith2FA(account);
   if (action === 'login-2fa') return loginAccountWith2FA(account);
@@ -607,6 +612,30 @@ async function replaceAccountWith2FA(account) {
   }
 }
 
+async function replaceAccountWith2FAProtocol(account) {
+  if (protocolReplacementRunning) {
+    toast('已有协议补号正在执行');
+    return;
+  }
+
+  protocolReplacementRunning = true;
+  addActivity('协议补号已启动', account.email);
+  resetProtocolReplacementLiveLog(account);
+  toast('协议补号已启动，等待 CPA 生成和上传');
+  try {
+    await streamProtocolReplacement(account);
+    addActivity('协议补号成功', account.email);
+    toast('协议补号完成，CPA 已上传并通过健康复查');
+    await loadAccounts();
+  } catch (error) {
+    addActivity('协议补号失败', account.email);
+    toast(error.message);
+    await loadAccounts();
+  } finally {
+    protocolReplacementRunning = false;
+  }
+}
+
 async function loginAccountWith2FA(account) {
   try {
     await api(`/replacement-accounts/${account.id}/login-2fa`, { method: 'POST' });
@@ -733,6 +762,13 @@ async function streamProtocolRegistration(account) {
   );
 }
 
+async function streamProtocolReplacement(account) {
+  return streamEventStream(
+    `/replacement-accounts/${account.id}/replace-2fa-protocol`,
+    handleProtocolReplacementLiveEvent,
+  );
+}
+
 async function streamEventStream(endpoint, handleEvent) {
   const response = await fetch(endpoint, {
     method: 'POST',
@@ -843,6 +879,41 @@ function handleProtocolLiveEvent(event) {
   }
 }
 
+function handleProtocolReplacementLiveEvent(event) {
+  if (event.type === 'start') {
+    $('#protocolReplacementLiveAccount').textContent = `当前账号：${event.email}（ID: ${event.accountId}）`;
+    setProtocolReplacementLiveSummary(event.message || '协议补号已开始');
+    appendProtocolReplacementLiveLog(event.message || '协议补号已开始');
+    return;
+  }
+  if (event.type === 'protocol-step') {
+    setProtocolReplacementLiveSummary(event.message || '协议补号处理中');
+    appendProtocolReplacementLiveLog(event.message || '协议补号步骤更新');
+    return;
+  }
+  if (event.type === 'protocol-log') {
+    const level = event.stream === 'stderr' ? 'error' : 'muted';
+    appendProtocolReplacementLiveLog(event.text || '', level);
+    return;
+  }
+  if (event.type === 'account-result') {
+    const level = event.outcome === 'failed' ? 'error' : 'success';
+    setProtocolReplacementLiveSummary(event.message || '协议补号完成', level);
+    appendProtocolReplacementLiveLog(event.message || '协议补号完成', level);
+    return;
+  }
+  if (event.type === 'complete') {
+    setProtocolReplacementLiveSummary(event.message || '协议补号完成', 'success');
+    appendProtocolReplacementLiveLog(event.message || '协议补号完成', 'success');
+    return;
+  }
+  if (event.type === 'error') {
+    setProtocolReplacementLiveSummary('协议补号失败', 'error');
+    appendProtocolReplacementLiveLog(event.message || '协议补号失败', 'error');
+    throw new Error(event.message || '协议补号失败');
+  }
+}
+
 function resetProtocolLiveLog(account) {
   $('#protocolLiveAccount').textContent = `当前账号：${account.email}（ID: ${account.id}）`;
   $('#protocolLiveSummary').textContent = '正在连接服务...';
@@ -857,6 +928,20 @@ function clearProtocolLiveLog() {
   $('#protocolLiveLog').innerHTML = '';
 }
 
+function resetProtocolReplacementLiveLog(account) {
+  $('#protocolReplacementLiveAccount').textContent = `当前账号：${account.email}（ID: ${account.id}）`;
+  $('#protocolReplacementLiveSummary').textContent = '正在连接服务...';
+  $('#protocolReplacementLiveSummary').className = 'muted';
+  $('#protocolReplacementLiveLog').innerHTML = '';
+}
+
+function clearProtocolReplacementLiveLog() {
+  $('#protocolReplacementLiveAccount').textContent = '当前账号：-';
+  $('#protocolReplacementLiveSummary').textContent = '暂无当前协议补号任务';
+  $('#protocolReplacementLiveSummary').className = 'muted';
+  $('#protocolReplacementLiveLog').innerHTML = '';
+}
+
 function setProtocolLiveSummary(message, level = 'muted') {
   const summary = $('#protocolLiveSummary');
   summary.textContent = message;
@@ -865,6 +950,21 @@ function setProtocolLiveSummary(message, level = 'muted') {
 
 function appendProtocolLiveLog(message, level = 'info') {
   const log = $('#protocolLiveLog');
+  const entry = document.createElement('div');
+  entry.className = `progress-log-entry ${level}`;
+  entry.textContent = `[${new Date().toLocaleTimeString('zh-CN')}] ${message}`;
+  log.appendChild(entry);
+  log.scrollTop = log.scrollHeight;
+}
+
+function setProtocolReplacementLiveSummary(message, level = 'muted') {
+  const summary = $('#protocolReplacementLiveSummary');
+  summary.textContent = message;
+  summary.className = level === 'muted' ? 'muted' : `protocol-live-summary ${level}`;
+}
+
+function appendProtocolReplacementLiveLog(message, level = 'info') {
+  const log = $('#protocolReplacementLiveLog');
   const entry = document.createElement('div');
   entry.className = `progress-log-entry ${level}`;
   entry.textContent = `[${new Date().toLocaleTimeString('zh-CN')}] ${message}`;

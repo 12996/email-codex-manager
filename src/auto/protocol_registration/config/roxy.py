@@ -19,6 +19,7 @@ def _env_int(name: str, default: int) -> int:
 ROXY_PROXY_ENABLED = os.environ.get("ROXY_PROXY_ENABLED", "0") == "1"
 # 仅在确认 Roxy CDP/Playwright 桥接可用后显式打开；默认仍走 curl_cffi。
 ROXY_CDP_ENABLED = os.environ.get("ROXY_CDP_ENABLED", "0") == "1"
+ROXY_IP_CHECK_ENABLED = os.environ.get("ROXY_IP_CHECK_ENABLED", "1") == "1"
 ROXY_CDP_ENDPOINT = os.environ.get("ROXY_CDP_ENDPOINT", "")
 ROXY_API_BASE_URL = os.environ.get("ROXY_API_BASE_URL", "http://127.0.0.1:50000")
 ROXY_API_TOKEN = os.environ.get("ROXY_API_TOKEN", "")

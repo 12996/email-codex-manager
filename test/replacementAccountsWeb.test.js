@@ -107,6 +107,7 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
     '/fetch-json',
     '/replace',
     '/replace-2fa',
+    '/replace-2fa-protocol',
     '/login-2fa',
     '/register-protocol',
     '/healthcheck-banned',
@@ -124,17 +125,30 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(html, /id="protocolLivePanel"/);
   assert.match(html, /id="protocolLiveLog"/);
   assert.ok(html.indexOf('id="protocolLivePanel"') < html.indexOf('快捷操作'));
+  assert.match(html, /id="protocolReplacementLivePanel"/);
+  assert.match(html, /id="protocolReplacementLiveLog"/);
+  assert.ok(html.indexOf('id="protocolReplacementLivePanel"') < html.indexOf('id="protocolLivePanel"'));
   assert.match(html, /新增账号/);
   assert.match(html, /name="password"/);
   assert.match(appJs, /获取验证码/);
   assert.match(appJs, /获取 JSON/);
   assert.match(appJs, /执行补号/);
   assert.match(appJs, /2FA补号/);
+  assert.match(appJs, /协议补号/);
   assert.match(appJs, /2FA登录/);
   assert.match(appJs, /协议注册/);
+  const protocolReplaceStart = appJs.indexOf('async function replaceAccountWith2FAProtocol');
+  const protocolReplaceStream = appJs.indexOf('await streamProtocolReplacement', protocolReplaceStart);
+  const protocolReplaceStarted = appJs.indexOf("addActivity('协议补号已启动'", protocolReplaceStart);
+  assert.ok(protocolReplaceStarted > protocolReplaceStart);
+  assert.ok(protocolReplaceStarted < protocolReplaceStream);
+  assert.match(appJs, /replaceAccountWith2FAProtocol/);
   assert.match(appJs, /registerProtocolAccount/);
   assert.match(appJs, /text\/event-stream/);
   assert.match(appJs, /protocolLiveLog/);
+  assert.match(appJs, /protocolReplacementLiveLog/);
+  assert.match(appJs, /handleProtocolReplacementLiveEvent/);
+  assert.match(appJs, /streamProtocolReplacement/);
   assert.match(appJs, /protocol-log/);
   assert.match(appJs, /protocol-step/);
   assert.doesNotMatch(appJs, /addActivity\('协议注册/);
@@ -151,6 +165,30 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(appJs, /account-result/);
   assert.match(appJs, /状态已更新/);
   assert.match(appJs, /删除账号/);
+});
+
+test('replacement protocol live log panel is placed below the replacement table', () => {
+  const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');
+  const tablePanel = html.indexOf('<tbody id="accountsBody">');
+  const replacementLogPanel = html.indexOf('id="protocolReplacementLivePanel"');
+  const registrationLogPanel = html.indexOf('id="protocolLivePanel"');
+
+  assert.ok(tablePanel >= 0);
+  assert.ok(replacementLogPanel > tablePanel);
+  assert.ok(registrationLogPanel > replacementLogPanel);
+});
+
+test('replacement action menu puts protocol registration and protocol replacement first', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+  const menuStart = appJs.indexOf('<div class="action-menu" hidden>');
+  const protocolRegister = appJs.indexOf('data-action="register-protocol"', menuStart);
+  const protocolReplace = appJs.indexOf('data-action="replace-2fa-protocol"', menuStart);
+  const regularEdit = appJs.indexOf('data-action="edit"', menuStart);
+
+  assert.ok(menuStart >= 0);
+  assert.ok(protocolRegister > menuStart);
+  assert.ok(protocolReplace > protocolRegister);
+  assert.ok(regularEdit > protocolReplace);
 });
 
 test('web frontend exposes public verification code key controls and copy action', () => {
@@ -222,6 +260,7 @@ test('replacement frontend treats operation failure as a red hint, not an accoun
   assert.doesNotMatch(appJs, /failed:\s*'失败'/);
   assert.match(appJs, /operationFailureLabel/);
   assert.match(appJs, /协议注册失败/);
+  assert.match(appJs, /协议补号失败/);
   assert.match(css, /\.operation-failure/);
 });
 

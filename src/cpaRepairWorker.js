@@ -12,18 +12,32 @@ export function createCpaRepairWorker({
   readFileImpl = readFileSync,
 } = {}) {
   return {
-    async repair({ account, credential, reasons, mode } = {}) {
+    async repair({ account, credential, reasons, mode, onLog } = {}) {
       const previousStatus = account.status;
-      const operationLabel = mode === '2fa' ? '2FA补号' : '补号';
+      const operationLabel = mode === '2fa-protocol'
+        ? '协议补号'
+        : mode === '2fa' ? '2FA补号' : '补号';
       replacementAccounts.markReplacementStarted(account.id);
       let runLogPath = '';
       const triggerDetails = formatCpaTriggerDetails({ credential, reasons });
+      const notifyLog = (event) => {
+        if (typeof onLog !== 'function') return;
+        try {
+          onLog(event);
+        } catch {
+          // Live-log consumers must not affect the repair operation.
+        }
+      };
       try {
-        const replacementMethod = mode === '2fa'
-          ? replacementServices?.replaceAccountWith2FA
-          : replacementServices?.replaceAccount;
+        const replacementMethod = mode === '2fa-protocol'
+          ? replacementServices?.replaceAccountWith2FAProtocol
+          : mode === '2fa'
+            ? replacementServices?.replaceAccountWith2FA
+            : replacementServices?.replaceAccount;
         if (typeof replacementMethod !== 'function') {
-          const methodName = mode === '2fa' ? 'replaceAccountWith2FA' : 'replaceAccount';
+          const methodName = mode === '2fa-protocol'
+            ? 'replaceAccountWith2FAProtocol'
+            : mode === '2fa' ? 'replaceAccountWith2FA' : 'replaceAccount';
           throw new Error(`replacementServices.${methodName} is not configured`);
         }
 
@@ -31,7 +45,7 @@ export function createCpaRepairWorker({
         const replacementResult = await replacementMethod.call(
           replacementServices,
           account,
-          { cpaTriggerDetails: triggerDetails },
+          { cpaTriggerDetails: triggerDetails, onLog: notifyLog },
         );
         runLogPath = replacementResult?.run?.log_path || '';
         if (!replacementResult?.cpaTriggerLogged) {
@@ -39,13 +53,33 @@ export function createCpaRepairWorker({
         }
         const localFileName = `${String(account.email).trim().toLowerCase()}.json`;
         const uploadFileName = buildCpaUploadFileName(account.email);
+        notifyLog({
+          type: 'step',
+          step: 'cpa-read-file',
+          message: `读取本地 CPA JSON：${localFileName}`,
+        });
         appendRepairLog(runLogPath, 'cpa-read-file', '读取本地 CPA JSON', `file=${localFileName}`);
         const payload = readFileImpl(join(cpaOutputDir, localFileName), 'utf8');
+        notifyLog({
+          type: 'step',
+          step: 'cpa-upload',
+          message: `上传 CPA auth file：${uploadFileName}`,
+        });
         appendRepairLog(runLogPath, 'cpa-upload', '上传 CPA auth file', `name=${uploadFileName}`);
         await cpaClient.uploadAuthFile({ name: uploadFileName, payload });
+        notifyLog({
+          type: 'step',
+          step: 'cpa-verify',
+          message: `复查 CPA 凭证健康：${String(account.email).trim().toLowerCase()}`,
+        });
         appendRepairLog(runLogPath, 'cpa-verify', '复查 CPA 凭证健康', `email=${String(account.email).trim().toLowerCase()}`);
         await assertCredentialHealthy(cpaClient, account.email);
         const updated = replacementAccounts.markReplacementSuccess(account.id);
+        notifyLog({
+          type: 'step',
+          step: 'cpa-success',
+          message: `${operationLabel}完成：账号 ${account.id} 已挂载 CPA`,
+        });
         appendRepairLog(runLogPath, 'cpa-success', 'CPA repair 完成', `account_id=${account.id}`);
         return { ok: true, account: updated, ...(replacementResult?.run ? { run: replacementResult.run } : {}) };
       } catch (error) {
@@ -56,6 +90,11 @@ export function createCpaRepairWorker({
           operationLabel,
         );
         notifyCircuitBreaker(adminNotifications, updated);
+        notifyLog({
+          type: 'step',
+          step: 'cpa-failure',
+          message: `${operationLabel}失败：${error.message || error}`,
+        });
         appendRepairLog(runLogPath, 'cpa-failure', 'CPA repair 失败', `account_id=${account.id} error=${error.message || error}`);
         return { ok: false, account: updated, error: error.message };
       }

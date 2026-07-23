@@ -251,6 +251,29 @@ test('registerProtocolAccount refreshes the selected Roxy profile before spawnin
   );
 });
 
+test('registerProtocolAccount passes its current local service port to the protocol child', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    protocolPythonPath: 'python.exe',
+    protocolProjectPath: 'protocol-project',
+    protocolMainPath: 'protocol-project/main.py',
+    baseEnv: { PORT: '13400' },
+    prepareProtocolRoxyImpl: async () => ({ cdpEndpoint: 'ws://fresh' }),
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.registerProtocolAccount({ id: 45, email: 'port-sync@example.com' });
+
+  assert.equal(calls[0].options.env.REPLACEMENT_API_BASE, 'http://127.0.0.1:13400');
+});
+
 test('registerProtocolAccount forces origin isolation for the password-before-OTP flow', async () => {
   const calls = [];
   const services = createReplacementServices({
@@ -603,6 +626,7 @@ test('replaceAccountWith2FAProtocol launches the protocol child with independent
       ROXY_CDP_ENDPOINT: 'ws://existing-profile',
       SMS_API_PROXY: 'http://127.0.0.1:7890',
     },
+    prepareProtocolRoxyImpl: async () => ({ cdpEndpoint: 'ws://refreshed-profile' }),
     spawnImpl(command, args, options) {
       calls.push({ command, args, options });
       const child = new EventEmitter();
@@ -623,7 +647,7 @@ test('replaceAccountWith2FAProtocol launches the protocol child with independent
   assert.equal(calls[0].options.env.ROXY_CDP_ENABLED, '1');
   assert.equal(calls[0].options.env.ROXY_CDP_PREPARE, '0');
   assert.equal(calls[0].options.env.ROXY_KEEP_OPEN, '1');
-  assert.equal(calls[0].options.env.ROXY_CDP_ENDPOINT, 'ws://existing-profile');
+  assert.equal(calls[0].options.env.ROXY_CDP_ENDPOINT, 'ws://refreshed-profile');
   assert.equal(calls[0].options.env.SMS_API_PROXY, 'http://127.0.0.1:7890');
 });
 
@@ -634,6 +658,7 @@ test('replaceAccountWith2FAProtocol defaults to the shared protocol Roxy target 
     protocolTwoFaProjectPath: 'protocol-project',
     protocolTwoFaMainPath: 'protocol-project/replacement_2fa.py',
     baseEnv: {},
+    prepareProtocolRoxyImpl: async () => ({ cdpEndpoint: 'ws://refreshed-profile' }),
     spawnImpl(command, args, options) {
       calls.push({ command, args, options });
       const child = new EventEmitter();
@@ -648,7 +673,80 @@ test('replaceAccountWith2FAProtocol defaults to the shared protocol Roxy target 
 
   assert.equal(calls[0].options.env.ROXY_BROWSER_SORT_NUM, '3');
   assert.equal(calls[0].options.env.ROXY_BROWSER_WINDOW_NAME, 'test');
-  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_CDP_ENDPOINT'), false);
+  assert.equal(calls[0].options.env.ROXY_CDP_ENDPOINT, 'ws://refreshed-profile');
+});
+
+test('replaceAccountWith2FAProtocol defaults to the independent CPA replacement entrypoint', async () => {
+  const calls = [];
+  const services = createReplacementServices({
+    baseEnv: {
+      ROXY_CDP_ENDPOINT: 'ws://existing-profile',
+      SMS_API_PROXY: 'http://127.0.0.1:7890',
+    },
+    prepareProtocolRoxyImpl: async () => ({ cdpEndpoint: 'ws://refreshed-profile' }),
+    spawnImpl(command, args, options) {
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccountWith2FAProtocol({ id: 113, email: 'user@example.com' });
+
+  const expectedScript = join(process.cwd(), 'src', 'auto', 'protocol_cpa_replacement.py');
+  assert.equal(calls[0].args[0], expectedScript);
+  assert.equal(calls[0].args[1], '--account-id');
+  assert.equal(calls[0].args[2], '113');
+  assert.equal(calls[0].options.cwd, join(process.cwd(), 'src', 'auto'));
+  assert.equal(calls[0].options.env.REPLACEMENT_ACCOUNT_ID, '113');
+  assert.equal(calls[0].options.env.ROXY_CDP_ENDPOINT, 'ws://refreshed-profile');
+  assert.equal(calls[0].options.env.SMS_API_PROXY, 'http://127.0.0.1:7890');
+  assert.equal(
+    calls[0].options.env.CPA_OUTPUT_DIR,
+    join(process.cwd(), 'src', 'auto', 'product_files', 'cpa'),
+  );
+});
+
+test('replaceAccountWith2FAProtocol refreshes the shared Roxy profile before spawning the child', async () => {
+  const steps = [];
+  const calls = [];
+  const services = createReplacementServices({
+    protocolTwoFaPythonPath: 'python-protocol.exe',
+    protocolTwoFaProjectPath: 'protocol-project',
+    protocolTwoFaMainPath: 'protocol-project/replacement_2fa.py',
+    baseEnv: {
+      ROXY_PROTOCOL_BROWSER_DIR_ID: 'dir-3',
+      ROXY_PROTOCOL_BROWSER_SORT_NUM: '3',
+      ROXY_PROTOCOL_BROWSER_WINDOW_NAME: 'test',
+    },
+    prepareProtocolRoxyImpl: async ({ env }) => {
+      steps.push([
+        'prepare',
+        env.ROXY_BROWSER_DIR_ID,
+        env.ROXY_BROWSER_SORT_NUM,
+        env.ROXY_BROWSER_WINDOW_NAME,
+      ]);
+      return { cdpEndpoint: 'ws://fresh-profile' };
+    },
+    spawnImpl(command, args, options) {
+      steps.push('spawn');
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => child.emit('close', 0));
+      return child;
+    },
+  });
+
+  await services.replaceAccountWith2FAProtocol({ id: 114, email: 'user@example.com' });
+
+  assert.deepEqual(steps, [['prepare', 'dir-3', '3', 'test'], 'spawn']);
+  assert.equal(calls[0].options.env.ROXY_CDP_ENDPOINT, 'ws://fresh-profile');
+  assert.equal(calls[0].options.env.ROXY_CDP_PREPARE, '0');
 });
 
 test('replaceAccountWith2FA can switch to the protocol child without changing the DOM state machine', async () => {

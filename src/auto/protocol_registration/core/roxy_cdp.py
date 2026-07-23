@@ -275,6 +275,26 @@ class RoxyCdpClient:
             raise RuntimeError(f"Roxy fingerprint 返回格式错误: {result!r}")
         return result
 
+    def ip(self) -> dict:
+        result = self._call("ip")
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Roxy IP 返回格式错误: {result!r}")
+        return {"ip": str(result.get("ip") or "").strip()}
+
+    def auth_workspaces(self) -> list[dict]:
+        result = self._call("auth_workspaces")
+        if not isinstance(result, list):
+            raise RuntimeError(f"Roxy Auth workspace 返回格式错误: {result!r}")
+        return [
+            {
+                "id": str(item.get("id") or "").strip(),
+                "kind": str(item.get("kind") or "").strip(),
+                "name": str(item.get("name") or "").strip(),
+            }
+            for item in result
+            if isinstance(item, dict) and str(item.get("id") or "").strip()
+        ]
+
     def sentinel_headers(
         self,
         flow: str,

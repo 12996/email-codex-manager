@@ -513,6 +513,113 @@ export function createApp({
     }
   });
 
+  app.post('/replacement-accounts/:id/replace-2fa-protocol', requireAuth, async (req, res) => {
+    const account = replacementAccounts.getAccount(req.params.id);
+    if (!account) {
+      res.status(404).json(errorBody('ACCOUNT_NOT_FOUND', 'replacement account not found'));
+      return;
+    }
+
+    const execute = async (onProgress) => {
+      const liveLog = typeof onProgress === 'function'
+        ? (event) => onProgress(toProtocolLogEvent(account, event, 'protocol-replacement'))
+        : undefined;
+
+      if (cpaRepairWorker?.repair) {
+        try {
+          const result = await cpaRepairWorker.repair({
+            account,
+            source: 'manual',
+            mode: '2fa-protocol',
+            onLog: liveLog,
+          });
+          if (result?.ok === false) {
+            const updated = result.account || replacementAccounts.getAccount(account.id);
+            const error = Object.assign(
+              new Error(result.error || 'protocol replacement failed'),
+              { code: 'PROTOCOL_REPLACE_FAILED', account: updated },
+            );
+            onProgress?.({
+              type: 'account-result',
+              operation: 'protocol-replacement',
+              accountId: account.id,
+              email: account.email,
+              outcome: 'failed',
+              message: result.error || '协议补号失败',
+            });
+            throw error;
+          }
+          const updated = result.account || replacementAccounts.getAccount(account.id);
+          onProgress?.({
+            type: 'account-result',
+            operation: 'protocol-replacement',
+            accountId: account.id,
+            email: account.email,
+            outcome: 'success',
+            message: '协议补号完成，CPA 已上传并通过健康复查',
+          });
+          return { ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) };
+        } catch (error) {
+          if (!error.account) error.account = replacementAccounts.getAccount(account.id);
+          error.code = error.code || 'PROTOCOL_REPLACE_FAILED';
+          throw error;
+        }
+      }
+
+      const previousStatus = account.status;
+      replacementAccounts.markReplacementStarted(account.id);
+      try {
+        const result = await replacementServices.replaceAccountWith2FAProtocol(account, { onLog: liveLog });
+        const updated = replacementAccounts.markReplacementSuccess(account.id);
+        onProgress?.({
+          type: 'account-result',
+          operation: 'protocol-replacement',
+          accountId: account.id,
+          email: account.email,
+          outcome: 'success',
+          message: '协议补号完成',
+        });
+        return { ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) };
+      } catch (error) {
+        const updated = replacementAccounts.markReplacementFailure(account.id, error.message, previousStatus, '协议补号');
+        notifyCircuitBreaker(adminNotifications, updated);
+        error.account = updated;
+        error.code = error.code || 'PROTOCOL_REPLACE_FAILED';
+        onProgress?.({
+          type: 'account-result',
+          operation: 'protocol-replacement',
+          accountId: account.id,
+          email: account.email,
+          outcome: 'failed',
+          message: error.message || '协议补号失败',
+        });
+        throw error;
+      }
+    };
+
+    if (wantsProgressStream(req)) {
+      await streamProgressResponse(res, async (send) => {
+        send({
+          type: 'start',
+          operation: 'protocol-replacement',
+          accountId: account.id,
+          email: account.email,
+          message: `开始协议补号：${account.email}`,
+        });
+        return execute(send);
+      });
+      return;
+    }
+
+    try {
+      res.json(await execute());
+    } catch (error) {
+      const updated = error.account || replacementAccounts.getAccount(account.id) || account;
+      const wrapped = Object.assign(error, { code: error.code || 'PROTOCOL_REPLACE_FAILED' });
+      sendApiError(res, wrapped, { account: updated });
+    }
+  });
+
   app.post('/replacement-accounts/:id/login-2fa', requireAuth, async (req, res) => {
     const account = replacementAccounts.getAccount(req.params.id);
     if (!account) {
@@ -798,12 +905,12 @@ function wantsProgressStream(req) {
   return String(req.headers.accept || '').includes('text/event-stream');
 }
 
-function toProtocolLogEvent(account, event = {}) {
+function toProtocolLogEvent(account, event = {}, operation = 'protocol-registration') {
   const { type: eventType, ...details } = event;
   return {
     ...details,
     type: eventType === 'log' ? 'protocol-log' : 'protocol-step',
-    operation: 'protocol-registration',
+    operation,
     accountId: account.id,
     email: account.email,
   };
@@ -1050,6 +1157,7 @@ function statusForApiError(code) {
     || code === 'REGISTER_FAILED'
     || code === 'PROTOCOL_REGISTER_FAILED'
     || code === 'PROTOCOL_REGISTER_NOT_CONFIGURED'
+    || code === 'PROTOCOL_REPLACE_FAILED'
     || code === 'RUN_NOT_ACTIVE'
     || code === 'RUN_STOP_FAILED'
   ) {

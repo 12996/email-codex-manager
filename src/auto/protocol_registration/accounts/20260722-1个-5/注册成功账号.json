@@ -1,0 +1,58 @@
+[
+  {
+    "id": 17,
+    "email": "muster.relics2w@icloud.com",
+    "email_source": "replacement",
+    "proxy_used": "roxy-cdp://4c83715f6713db30c9baf9bfbc5086d3",
+    "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IldjNzdXREtWTkN2N1ZYSGxqZUhzZjZZUjFhM3I3MmxYMnhJdG9zaVF4NHciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOlsiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MSJdLCJjbGllbnRfaWQiOiJhcHBfWDh6WTZ2VzJwUTl0UjNkRTduSzFqTDVnSCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJhbXIiOlsib3RwIiwidXJuOm9wZW5haTphbXI6b3RwX2VtYWlsIl0sImNoYXRncHRfYWNjb3VudF9pZCI6IjNmNjc5OWE1LTg0ZDYtNGU0My05ODhjLTcwYTRlNzVkMGQwNSIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1uWEdXbXNkNjVUSUZYQXQ3VHBQdk9WWllfXzNmNjc5OWE1LTg0ZDYtNGU0My05ODhjLTcwYTRlNzVkMGQwNSIsImNoYXRncHRfY29tcHV0ZV9yZXNpZGVuY3kiOiJub19jb25zdHJhaW50IiwiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF91c2VyX2lkIjoidXNlci1uWEdXbXNkNjVUSUZYQXQ3VHBQdk9WWlkiLCJpc19zaWdudXAiOnRydWUsInVzZXJfaWQiOiJ1c2VyLW5YR1dtc2Q2NVRJRlhBdDdUcFB2T1ZaWSJ9LCJodHRwczovL2FwaS5vcGVuYWkuY29tL3Byb2ZpbGUiOnsiZW1haWwiOiJtdXN0ZXIucmVsaWNzMndAaWNsb3VkLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiRHJvc2RubyBaem10In0sImlzcyI6Imh0dHBzOi8vYXV0aC5vcGVuYWkuY29tIiwicHdkX2F1dGhfdGltZSI6MTc4NDcxNzM1MTc3MSwic2NwIjpbIm9wZW5pZCIsImVtYWlsIiwicHJvZmlsZSIsIm9mZmxpbmVfYWNjZXNzIiwibW9kZWwucmVxdWVzdCIsIm1vZGVsLnJlYWQiLCJvcmdhbml6YXRpb24ucmVhZCIsIm9yZ2FuaXphdGlvbi53cml0ZSJdLCJzZXNzaW9uX2lkIjoiYXV0aHNlc3NfSW0zS1Fuc25jdDVrekhJUkp0ekwweUtaIiwic2wiOnRydWUsInN1YiI6ImF1dGgwfHhuS3ZBRlJSR01hV1d2TzNDWkdSTGNVdCIsImlhdCI6MTc4NDcxNzM1NSwiZXhwIjoxNzg1NTgxMzU1LCJqdGkiOiJmYTYxZDliYTZjNjc0MjMyODY5ZGZlOWYwODQ4YjU2NSIsIm5iZiI6MTc4NDcxNzM1NX0.EW_9GQ5bt8tp96_z0JJPuOzS_jCQa3Euwqhxni7ICVRXFoy2WZsj7CXSJUyi258YjIMOHD06nhjdaPAe3fxvBPZXA8bx7p7XoCp0UOXJzaEr3iBhdiGYJt_cF9kaP5p92v0PmQoVVnj1VKnZJMYwisAV_8O9vCISDEe-LbgwyqolPZcYd5TVbgi74G9yvHMoJQlJbeAJF1u4tKTqwS9eNYR-yF5j2h4_g3ul_HMELuNc3UXe9CjkDG89EbpGpLaRBD7SD4fjf4AZCyFsh_BLMpPiGGzCcHlUvYVWZzvsOLR025u0KxkEPBEFgL62b7wvjFyLBdudYAPtvL_hL0qwaw",
+    "totp_secret": "QWGUZFSRN6PMMLEDOHN47WSRMAVQ3B6Q",
+    "material_line": "muster.relics2w@icloud.com",
+    "copy_line": "muster.relics2w@icloud.com----eyJhbGciOiJSUzI1NiIsImtpZCI6IldjNzdXREtWTkN2N1ZYSGxqZUhzZjZZUjFhM3I3MmxYMnhJdG9zaVF4NHciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOlsiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MSJdLCJjbGllbnRfaWQiOiJhcHBfWDh6WTZ2VzJwUTl0UjNkRTduSzFqTDVnSCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJhbXIiOlsib3RwIiwidXJuOm9wZW5haTphbXI6b3RwX2VtYWlsIl0sImNoYXRncHRfYWNjb3VudF9pZCI6IjNmNjc5OWE1LTg0ZDYtNGU0My05ODhjLTcwYTRlNzVkMGQwNSIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1uWEdXbXNkNjVUSUZYQXQ3VHBQdk9WWllfXzNmNjc5OWE1LTg0ZDYtNGU0My05ODhjLTcwYTRlNzVkMGQwNSIsImNoYXRncHRfY29tcHV0ZV9yZXNpZGVuY3kiOiJub19jb25zdHJhaW50IiwiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF91c2VyX2lkIjoidXNlci1uWEdXbXNkNjVUSUZYQXQ3VHBQdk9WWlkiLCJpc19zaWdudXAiOnRydWUsInVzZXJfaWQiOiJ1c2VyLW5YR1dtc2Q2NVRJRlhBdDdUcFB2T1ZaWSJ9LCJodHRwczovL2FwaS5vcGVuYWkuY29tL3Byb2ZpbGUiOnsiZW1haWwiOiJtdXN0ZXIucmVsaWNzMndAaWNsb3VkLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiRHJvc2RubyBaem10In0sImlzcyI6Imh0dHBzOi8vYXV0aC5vcGVuYWkuY29tIiwicHdkX2F1dGhfdGltZSI6MTc4NDcxNzM1MTc3MSwic2NwIjpbIm9wZW5pZCIsImVtYWlsIiwicHJvZmlsZSIsIm9mZmxpbmVfYWNjZXNzIiwibW9kZWwucmVxdWVzdCIsIm1vZGVsLnJlYWQiLCJvcmdhbml6YXRpb24ucmVhZCIsIm9yZ2FuaXphdGlvbi53cml0ZSJdLCJzZXNzaW9uX2lkIjoiYXV0aHNlc3NfSW0zS1Fuc25jdDVrekhJUkp0ekwweUtaIiwic2wiOnRydWUsInN1YiI6ImF1dGgwfHhuS3ZBRlJSR01hV1d2TzNDWkdSTGNVdCIsImlhdCI6MTc4NDcxNzM1NSwiZXhwIjoxNzg1NTgxMzU1LCJqdGkiOiJmYTYxZDliYTZjNjc0MjMyODY5ZGZlOWYwODQ4YjU2NSIsIm5iZiI6MTc4NDcxNzM1NX0.EW_9GQ5bt8tp96_z0JJPuOzS_jCQa3Euwqhxni7ICVRXFoy2WZsj7CXSJUyi258YjIMOHD06nhjdaPAe3fxvBPZXA8bx7p7XoCp0UOXJzaEr3iBhdiGYJt_cF9kaP5p92v0PmQoVVnj1VKnZJMYwisAV_8O9vCISDEe-LbgwyqolPZcYd5TVbgi74G9yvHMoJQlJbeAJF1u4tKTqwS9eNYR-yF5j2h4_g3ul_HMELuNc3UXe9CjkDG89EbpGpLaRBD7SD4fjf4AZCyFsh_BLMpPiGGzCcHlUvYVWZzvsOLR025u0KxkEPBEFgL62b7wvjFyLBdudYAPtvL_hL0qwaw----QWGUZFSRN6PMMLEDOHN47WSRMAVQ3B6Q",
+    "saved_at": "2026-07-22T18:49:52",
+    "row": {
+      "id": 17,
+      "email": "muster.relics2w@icloud.com",
+      "created_at": "2026-07-22T18:49:52",
+      "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IldjNzdXREtWTkN2N1ZYSGxqZUhzZjZZUjFhM3I3MmxYMnhJdG9zaVF4NHciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOlsiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MSJdLCJjbGllbnRfaWQiOiJhcHBfWDh6WTZ2VzJwUTl0UjNkRTduSzFqTDVnSCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJhbXIiOlsib3RwIiwidXJuOm9wZW5haTphbXI6b3RwX2VtYWlsIl0sImNoYXRncHRfYWNjb3VudF9pZCI6IjNmNjc5OWE1LTg0ZDYtNGU0My05ODhjLTcwYTRlNzVkMGQwNSIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1uWEdXbXNkNjVUSUZYQXQ3VHBQdk9WWllfXzNmNjc5OWE1LTg0ZDYtNGU0My05ODhjLTcwYTRlNzVkMGQwNSIsImNoYXRncHRfY29tcHV0ZV9yZXNpZGVuY3kiOiJub19jb25zdHJhaW50IiwiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF91c2VyX2lkIjoidXNlci1uWEdXbXNkNjVUSUZYQXQ3VHBQdk9WWlkiLCJpc19zaWdudXAiOnRydWUsInVzZXJfaWQiOiJ1c2VyLW5YR1dtc2Q2NVRJRlhBdDdUcFB2T1ZaWSJ9LCJodHRwczovL2FwaS5vcGVuYWkuY29tL3Byb2ZpbGUiOnsiZW1haWwiOiJtdXN0ZXIucmVsaWNzMndAaWNsb3VkLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiRHJvc2RubyBaem10In0sImlzcyI6Imh0dHBzOi8vYXV0aC5vcGVuYWkuY29tIiwicHdkX2F1dGhfdGltZSI6MTc4NDcxNzM1MTc3MSwic2NwIjpbIm9wZW5pZCIsImVtYWlsIiwicHJvZmlsZSIsIm9mZmxpbmVfYWNjZXNzIiwibW9kZWwucmVxdWVzdCIsIm1vZGVsLnJlYWQiLCJvcmdhbml6YXRpb24ucmVhZCIsIm9yZ2FuaXphdGlvbi53cml0ZSJdLCJzZXNzaW9uX2lkIjoiYXV0aHNlc3NfSW0zS1Fuc25jdDVrekhJUkp0ekwweUtaIiwic2wiOnRydWUsInN1YiI6ImF1dGgwfHhuS3ZBRlJSR01hV1d2TzNDWkdSTGNVdCIsImlhdCI6MTc4NDcxNzM1NSwiZXhwIjoxNzg1NTgxMzU1LCJqdGkiOiJmYTYxZDliYTZjNjc0MjMyODY5ZGZlOWYwODQ4YjU2NSIsIm5iZiI6MTc4NDcxNzM1NX0.EW_9GQ5bt8tp96_z0JJPuOzS_jCQa3Euwqhxni7ICVRXFoy2WZsj7CXSJUyi258YjIMOHD06nhjdaPAe3fxvBPZXA8bx7p7XoCp0UOXJzaEr3iBhdiGYJt_cF9kaP5p92v0PmQoVVnj1VKnZJMYwisAV_8O9vCISDEe-LbgwyqolPZcYd5TVbgi74G9yvHMoJQlJbeAJF1u4tKTqwS9eNYR-yF5j2h4_g3ul_HMELuNc3UXe9CjkDG89EbpGpLaRBD7SD4fjf4AZCyFsh_BLMpPiGGzCcHlUvYVWZzvsOLR025u0KxkEPBEFgL62b7wvjFyLBdudYAPtvL_hL0qwaw",
+      "totp_secret": "QWGUZFSRN6PMMLEDOHN47WSRMAVQ3B6Q",
+      "user_id": "user-nXGWmsd65TIFXAt7TpPvOVZY",
+      "user_name": "Drosdno Zzmt",
+      "plan_type": "free",
+      "expires_at": "2026-10-20T10:49:24.957Z",
+      "device_id": "e8e10d65-0a63-4d4a-af29-ff2fabdad704",
+      "proxy_used": "roxy-cdp://4c83715f6713db30c9baf9bfbc5086d3",
+      "email_source": "replacement",
+      "extra_json": "{\"user\": {\"id\": \"user-nXGWmsd65TIFXAt7TpPvOVZY\", \"name\": \"Drosdno Zzmt\", \"email\": \"muster.relics2w@icloud.com\", \"idp\": \"auth0\", \"iat\": 1784717355, \"amr\": [\"otp\", \"urn:openai:amr:otp_email\"], \"mfa\": false}, \"account\": {\"id\": \"3f6799a5-84d6-4e43-988c-70a4e75d0d05\", \"planType\": \"free\", \"structure\": \"personal\", \"isUsageBasedSeatEnabled\": false, \"isConversationClassifierEnabledForWorkspace\": true, \"hasFloraFeature\": false, \"isFedrampCompliantWorkspace\": false, \"isDelinquent\": false, \"residencyRegion\": \"no_constraint\", \"computeResidency\": \"no_constraint\"}, \"expires\": \"2026-10-20T10:49:24.957Z\", \"device_id\": \"e8e10d65-0a63-4d4a-af29-ff2fabdad704\"}",
+      "updated_at": "2026-07-22T18:49:52",
+      "copy_line": "muster.relics2w@icloud.com----eyJhbGciOiJSUzI1NiIsImtpZCI6IldjNzdXREtWTkN2N1ZYSGxqZUhzZjZZUjFhM3I3MmxYMnhJdG9zaVF4NHciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOlsiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MSJdLCJjbGllbnRfaWQiOiJhcHBfWDh6WTZ2VzJwUTl0UjNkRTduSzFqTDVnSCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJhbXIiOlsib3RwIiwidXJuOm9wZW5haTphbXI6b3RwX2VtYWlsIl0sImNoYXRncHRfYWNjb3VudF9pZCI6IjNmNjc5OWE1LTg0ZDYtNGU0My05ODhjLTcwYTRlNzVkMGQwNSIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1uWEdXbXNkNjVUSUZYQXQ3VHBQdk9WWllfXzNmNjc5OWE1LTg0ZDYtNGU0My05ODhjLTcwYTRlNzVkMGQwNSIsImNoYXRncHRfY29tcHV0ZV9yZXNpZGVuY3kiOiJub19jb25zdHJhaW50IiwiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF91c2VyX2lkIjoidXNlci1uWEdXbXNkNjVUSUZYQXQ3VHBQdk9WWlkiLCJpc19zaWdudXAiOnRydWUsInVzZXJfaWQiOiJ1c2VyLW5YR1dtc2Q2NVRJRlhBdDdUcFB2T1ZaWSJ9LCJodHRwczovL2FwaS5vcGVuYWkuY29tL3Byb2ZpbGUiOnsiZW1haWwiOiJtdXN0ZXIucmVsaWNzMndAaWNsb3VkLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiRHJvc2RubyBaem10In0sImlzcyI6Imh0dHBzOi8vYXV0aC5vcGVuYWkuY29tIiwicHdkX2F1dGhfdGltZSI6MTc4NDcxNzM1MTc3MSwic2NwIjpbIm9wZW5pZCIsImVtYWlsIiwicHJvZmlsZSIsIm9mZmxpbmVfYWNjZXNzIiwibW9kZWwucmVxdWVzdCIsIm1vZGVsLnJlYWQiLCJvcmdhbml6YXRpb24ucmVhZCIsIm9yZ2FuaXphdGlvbi53cml0ZSJdLCJzZXNzaW9uX2lkIjoiYXV0aHNlc3NfSW0zS1Fuc25jdDVrekhJUkp0ekwweUtaIiwic2wiOnRydWUsInN1YiI6ImF1dGgwfHhuS3ZBRlJSR01hV1d2TzNDWkdSTGNVdCIsImlhdCI6MTc4NDcxNzM1NSwiZXhwIjoxNzg1NTgxMzU1LCJqdGkiOiJmYTYxZDliYTZjNjc0MjMyODY5ZGZlOWYwODQ4YjU2NSIsIm5iZiI6MTc4NDcxNzM1NX0.EW_9GQ5bt8tp96_z0JJPuOzS_jCQa3Euwqhxni7ICVRXFoy2WZsj7CXSJUyi258YjIMOHD06nhjdaPAe3fxvBPZXA8bx7p7XoCp0UOXJzaEr3iBhdiGYJt_cF9kaP5p92v0PmQoVVnj1VKnZJMYwisAV_8O9vCISDEe-LbgwyqolPZcYd5TVbgi74G9yvHMoJQlJbeAJF1u4tKTqwS9eNYR-yF5j2h4_g3ul_HMELuNc3UXe9CjkDG89EbpGpLaRBD7SD4fjf4AZCyFsh_BLMpPiGGzCcHlUvYVWZzvsOLR025u0KxkEPBEFgL62b7wvjFyLBdudYAPtvL_hL0qwaw----QWGUZFSRN6PMMLEDOHN47WSRMAVQ3B6Q"
+    },
+    "extra": {
+      "user": {
+        "id": "user-nXGWmsd65TIFXAt7TpPvOVZY",
+        "name": "Drosdno Zzmt",
+        "email": "muster.relics2w@icloud.com",
+        "idp": "auth0",
+        "iat": 1784717355,
+        "amr": [
+          "otp",
+          "urn:openai:amr:otp_email"
+        ],
+        "mfa": false
+      },
+      "account": {
+        "id": "3f6799a5-84d6-4e43-988c-70a4e75d0d05",
+        "planType": "free",
+        "structure": "personal",
+        "isUsageBasedSeatEnabled": false,
+        "isConversationClassifierEnabledForWorkspace": true,
+        "hasFloraFeature": false,
+        "isFedrampCompliantWorkspace": false,
+        "isDelinquent": false,
+        "residencyRegion": "no_constraint",
+        "computeResidency": "no_constraint"
+      },
+      "expires": "2026-10-20T10:49:24.957Z",
+      "device_id": "e8e10d65-0a63-4d4a-af29-ff2fabdad704"
+    }
+  }
+]

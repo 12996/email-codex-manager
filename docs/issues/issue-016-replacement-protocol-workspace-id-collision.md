@@ -30,4 +30,11 @@
 - Roxy bridge 单元测试通过。
 - `workspace/select` 的请求参数不再使用 Roxy workspace ID。
 
+## 2026-07-20 账号 111 复现与修复补充
+
+- 账号 `111` 的注册 token 显示为 `free`，当前 Auth session 的 personal workspace 是 `7e2e668c-cd6a-4eb6-9a44-297691e39323`；历史浏览器录制的 `workspace/select` 也使用该值。
+- 独立 `protocol_cpa_auth.py` 当时仍无条件使用 `.env` 的账号 109 组织 workspace，因此再次出现 `workspace/select HTTP 401`；同时遗漏了录制请求中的 `x-access-flow-invocation-id`。
+- 已将动态 workspace 解析接入独立 CPA 入口，并让 `BrowserSession`/Roxy bridge 只返回脱敏 workspace 元数据；`workspace/select` 现在补齐 invocation header。
+- 不应把账号 109 的 `OPENAI_WORKSPACE_ID` 当作所有补号账号的固定值；账号 111 需在当前 Auth session 中选择自己的 personal workspace。
+
 后续真实重试若出现 MFA 403，应单独按风控/重复登录问题排查，不能与本 issue 的 workspace 401 混为一谈。

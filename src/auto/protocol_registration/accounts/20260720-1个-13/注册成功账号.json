@@ -1,0 +1,58 @@
+[
+  {
+    "id": 12,
+    "email": "pinched-giddier-4u@icloud.com",
+    "email_source": "replacement",
+    "proxy_used": "roxy-cdp://4c83715f6713db30c9baf9bfbc5086d3",
+    "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IldjNzdXREtWTkN2N1ZYSGxqZUhzZjZZUjFhM3I3MmxYMnhJdG9zaVF4NHciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOlsiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MSJdLCJjbGllbnRfaWQiOiJhcHBfWDh6WTZ2VzJwUTl0UjNkRTduSzFqTDVnSCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJhbXIiOlsib3RwIiwidXJuOm9wZW5haTphbXI6b3RwX2VtYWlsIl0sImNoYXRncHRfYWNjb3VudF9pZCI6ImJkZTY3YzJmLTkwNTctNDk3OC04Y2RmLWVlZWVlMmEwZmU0MiIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1xYkVxSVFkY0NxTUh5UmluSFlxcXpwRUlfX2JkZTY3YzJmLTkwNTctNDk3OC04Y2RmLWVlZWVlMmEwZmU0MiIsImNoYXRncHRfY29tcHV0ZV9yZXNpZGVuY3kiOiJub19jb25zdHJhaW50IiwiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF91c2VyX2lkIjoidXNlci1xYkVxSVFkY0NxTUh5UmluSFlxcXpwRUkiLCJpc19zaWdudXAiOnRydWUsInVzZXJfaWQiOiJ1c2VyLXFiRXFJUWRjQ3FNSHlSaW5IWXFxenBFSSJ9LCJodHRwczovL2FwaS5vcGVuYWkuY29tL3Byb2ZpbGUiOnsiZW1haWwiOiJwaW5jaGVkLWdpZGRpZXItNHVAaWNsb3VkLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiSXVxYXYgVHZ0YiJ9LCJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsInB3ZF9hdXRoX3RpbWUiOjE3ODQ1NDgzNzQ5NzMsInNjcCI6WyJvcGVuaWQiLCJlbWFpbCIsInByb2ZpbGUiLCJvZmZsaW5lX2FjY2VzcyIsIm1vZGVsLnJlcXVlc3QiLCJtb2RlbC5yZWFkIiwib3JnYW5pemF0aW9uLnJlYWQiLCJvcmdhbml6YXRpb24ud3JpdGUiXSwic2Vzc2lvbl9pZCI6ImF1dGhzZXNzX1BKUmpZanVwNDBDUnFKSVQ1Tm90UXZVUCIsInNsIjp0cnVlLCJzdWIiOiJhdXRoMHx0aDRJVDM1NnFuQ2haY1cwYldLS1VNYjAiLCJpYXQiOjE3ODQ1NDgzNzksImV4cCI6MTc4NTQxMjM3OSwianRpIjoiZWNmYmZlMmNiYjk4NGY1MWI0Y2I4ZGQyZDk5YmZmYTAiLCJuYmYiOjE3ODQ1NDgzNzl9.B5B0cIEvZCDvs4cu_WX97J3MolRimGtkVZ3nm3Egaw2Y_vf4MmF52dDE2wPm0EUshNs2Nh65HsZkIb2m3dkOWVn2qPcGl8V2VmAEqCz8rHUnaZITLJvODqPv511C0Hql9BTaQc2gHpwbPvzG_YDFKp4DjKlE7IiCKcihE5xROXB6USyOfSEvEBzxHTyp-GDmWItwApDmDTnv0d4ZoTSkIH3L77JEdEZxVh23yseQq3kMeC4qlNqIAcu_C-SdgpTnoyPmxQiuUqcrPmUuOrOJxMqwrMnQcspCn8fnKnbxQIPup5qgcStUymssLoOAT8Pq-HzeEjdIhILoZXVaeByt7Q",
+    "totp_secret": "CFADPPOQB6SKCEFLSOVDL77BHSPLEP6E",
+    "material_line": "pinched-giddier-4u@icloud.com",
+    "copy_line": "pinched-giddier-4u@icloud.com----eyJhbGciOiJSUzI1NiIsImtpZCI6IldjNzdXREtWTkN2N1ZYSGxqZUhzZjZZUjFhM3I3MmxYMnhJdG9zaVF4NHciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOlsiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MSJdLCJjbGllbnRfaWQiOiJhcHBfWDh6WTZ2VzJwUTl0UjNkRTduSzFqTDVnSCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJhbXIiOlsib3RwIiwidXJuOm9wZW5haTphbXI6b3RwX2VtYWlsIl0sImNoYXRncHRfYWNjb3VudF9pZCI6ImJkZTY3YzJmLTkwNTctNDk3OC04Y2RmLWVlZWVlMmEwZmU0MiIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1xYkVxSVFkY0NxTUh5UmluSFlxcXpwRUlfX2JkZTY3YzJmLTkwNTctNDk3OC04Y2RmLWVlZWVlMmEwZmU0MiIsImNoYXRncHRfY29tcHV0ZV9yZXNpZGVuY3kiOiJub19jb25zdHJhaW50IiwiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF91c2VyX2lkIjoidXNlci1xYkVxSVFkY0NxTUh5UmluSFlxcXpwRUkiLCJpc19zaWdudXAiOnRydWUsInVzZXJfaWQiOiJ1c2VyLXFiRXFJUWRjQ3FNSHlSaW5IWXFxenBFSSJ9LCJodHRwczovL2FwaS5vcGVuYWkuY29tL3Byb2ZpbGUiOnsiZW1haWwiOiJwaW5jaGVkLWdpZGRpZXItNHVAaWNsb3VkLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiSXVxYXYgVHZ0YiJ9LCJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsInB3ZF9hdXRoX3RpbWUiOjE3ODQ1NDgzNzQ5NzMsInNjcCI6WyJvcGVuaWQiLCJlbWFpbCIsInByb2ZpbGUiLCJvZmZsaW5lX2FjY2VzcyIsIm1vZGVsLnJlcXVlc3QiLCJtb2RlbC5yZWFkIiwib3JnYW5pemF0aW9uLnJlYWQiLCJvcmdhbml6YXRpb24ud3JpdGUiXSwic2Vzc2lvbl9pZCI6ImF1dGhzZXNzX1BKUmpZanVwNDBDUnFKSVQ1Tm90UXZVUCIsInNsIjp0cnVlLCJzdWIiOiJhdXRoMHx0aDRJVDM1NnFuQ2haY1cwYldLS1VNYjAiLCJpYXQiOjE3ODQ1NDgzNzksImV4cCI6MTc4NTQxMjM3OSwianRpIjoiZWNmYmZlMmNiYjk4NGY1MWI0Y2I4ZGQyZDk5YmZmYTAiLCJuYmYiOjE3ODQ1NDgzNzl9.B5B0cIEvZCDvs4cu_WX97J3MolRimGtkVZ3nm3Egaw2Y_vf4MmF52dDE2wPm0EUshNs2Nh65HsZkIb2m3dkOWVn2qPcGl8V2VmAEqCz8rHUnaZITLJvODqPv511C0Hql9BTaQc2gHpwbPvzG_YDFKp4DjKlE7IiCKcihE5xROXB6USyOfSEvEBzxHTyp-GDmWItwApDmDTnv0d4ZoTSkIH3L77JEdEZxVh23yseQq3kMeC4qlNqIAcu_C-SdgpTnoyPmxQiuUqcrPmUuOrOJxMqwrMnQcspCn8fnKnbxQIPup5qgcStUymssLoOAT8Pq-HzeEjdIhILoZXVaeByt7Q----CFADPPOQB6SKCEFLSOVDL77BHSPLEP6E",
+    "saved_at": "2026-07-20T19:53:22",
+    "row": {
+      "id": 12,
+      "email": "pinched-giddier-4u@icloud.com",
+      "created_at": "2026-07-20T19:53:22",
+      "access_token": "eyJhbGciOiJSUzI1NiIsImtpZCI6IldjNzdXREtWTkN2N1ZYSGxqZUhzZjZZUjFhM3I3MmxYMnhJdG9zaVF4NHciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOlsiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MSJdLCJjbGllbnRfaWQiOiJhcHBfWDh6WTZ2VzJwUTl0UjNkRTduSzFqTDVnSCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJhbXIiOlsib3RwIiwidXJuOm9wZW5haTphbXI6b3RwX2VtYWlsIl0sImNoYXRncHRfYWNjb3VudF9pZCI6ImJkZTY3YzJmLTkwNTctNDk3OC04Y2RmLWVlZWVlMmEwZmU0MiIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1xYkVxSVFkY0NxTUh5UmluSFlxcXpwRUlfX2JkZTY3YzJmLTkwNTctNDk3OC04Y2RmLWVlZWVlMmEwZmU0MiIsImNoYXRncHRfY29tcHV0ZV9yZXNpZGVuY3kiOiJub19jb25zdHJhaW50IiwiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF91c2VyX2lkIjoidXNlci1xYkVxSVFkY0NxTUh5UmluSFlxcXpwRUkiLCJpc19zaWdudXAiOnRydWUsInVzZXJfaWQiOiJ1c2VyLXFiRXFJUWRjQ3FNSHlSaW5IWXFxenBFSSJ9LCJodHRwczovL2FwaS5vcGVuYWkuY29tL3Byb2ZpbGUiOnsiZW1haWwiOiJwaW5jaGVkLWdpZGRpZXItNHVAaWNsb3VkLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiSXVxYXYgVHZ0YiJ9LCJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsInB3ZF9hdXRoX3RpbWUiOjE3ODQ1NDgzNzQ5NzMsInNjcCI6WyJvcGVuaWQiLCJlbWFpbCIsInByb2ZpbGUiLCJvZmZsaW5lX2FjY2VzcyIsIm1vZGVsLnJlcXVlc3QiLCJtb2RlbC5yZWFkIiwib3JnYW5pemF0aW9uLnJlYWQiLCJvcmdhbml6YXRpb24ud3JpdGUiXSwic2Vzc2lvbl9pZCI6ImF1dGhzZXNzX1BKUmpZanVwNDBDUnFKSVQ1Tm90UXZVUCIsInNsIjp0cnVlLCJzdWIiOiJhdXRoMHx0aDRJVDM1NnFuQ2haY1cwYldLS1VNYjAiLCJpYXQiOjE3ODQ1NDgzNzksImV4cCI6MTc4NTQxMjM3OSwianRpIjoiZWNmYmZlMmNiYjk4NGY1MWI0Y2I4ZGQyZDk5YmZmYTAiLCJuYmYiOjE3ODQ1NDgzNzl9.B5B0cIEvZCDvs4cu_WX97J3MolRimGtkVZ3nm3Egaw2Y_vf4MmF52dDE2wPm0EUshNs2Nh65HsZkIb2m3dkOWVn2qPcGl8V2VmAEqCz8rHUnaZITLJvODqPv511C0Hql9BTaQc2gHpwbPvzG_YDFKp4DjKlE7IiCKcihE5xROXB6USyOfSEvEBzxHTyp-GDmWItwApDmDTnv0d4ZoTSkIH3L77JEdEZxVh23yseQq3kMeC4qlNqIAcu_C-SdgpTnoyPmxQiuUqcrPmUuOrOJxMqwrMnQcspCn8fnKnbxQIPup5qgcStUymssLoOAT8Pq-HzeEjdIhILoZXVaeByt7Q",
+      "totp_secret": "CFADPPOQB6SKCEFLSOVDL77BHSPLEP6E",
+      "user_id": "user-qbEqIQdcCqMHyRinHYqqzpEI",
+      "user_name": "Iuqav Tvtb",
+      "plan_type": "free",
+      "expires_at": "2026-10-18T11:53:11.092Z",
+      "device_id": "8faf3a7b-6d08-4141-98a3-2dc85ac75148",
+      "proxy_used": "roxy-cdp://4c83715f6713db30c9baf9bfbc5086d3",
+      "email_source": "replacement",
+      "extra_json": "{\"user\": {\"id\": \"user-qbEqIQdcCqMHyRinHYqqzpEI\", \"name\": \"Iuqav Tvtb\", \"email\": \"pinched-giddier-4u@icloud.com\", \"idp\": \"auth0\", \"iat\": 1784548379, \"amr\": [\"otp\", \"urn:openai:amr:otp_email\"], \"mfa\": false}, \"account\": {\"id\": \"bde67c2f-9057-4978-8cdf-eeeee2a0fe42\", \"planType\": \"free\", \"structure\": \"personal\", \"isUsageBasedSeatEnabled\": false, \"isConversationClassifierEnabledForWorkspace\": true, \"hasFloraFeature\": false, \"isFedrampCompliantWorkspace\": false, \"isDelinquent\": false, \"residencyRegion\": \"no_constraint\", \"computeResidency\": \"no_constraint\"}, \"expires\": \"2026-10-18T11:53:11.092Z\", \"device_id\": \"8faf3a7b-6d08-4141-98a3-2dc85ac75148\"}",
+      "updated_at": "2026-07-20T19:53:22",
+      "copy_line": "pinched-giddier-4u@icloud.com----eyJhbGciOiJSUzI1NiIsImtpZCI6IldjNzdXREtWTkN2N1ZYSGxqZUhzZjZZUjFhM3I3MmxYMnhJdG9zaVF4NHciLCJ0eXAiOiJKV1QifQ.eyJhdWQiOlsiaHR0cHM6Ly9hcGkub3BlbmFpLmNvbS92MSJdLCJjbGllbnRfaWQiOiJhcHBfWDh6WTZ2VzJwUTl0UjNkRTduSzFqTDVnSCIsImh0dHBzOi8vYXBpLm9wZW5haS5jb20vYXV0aCI6eyJhbXIiOlsib3RwIiwidXJuOm9wZW5haTphbXI6b3RwX2VtYWlsIl0sImNoYXRncHRfYWNjb3VudF9pZCI6ImJkZTY3YzJmLTkwNTctNDk3OC04Y2RmLWVlZWVlMmEwZmU0MiIsImNoYXRncHRfYWNjb3VudF91c2VyX2lkIjoidXNlci1xYkVxSVFkY0NxTUh5UmluSFlxcXpwRUlfX2JkZTY3YzJmLTkwNTctNDk3OC04Y2RmLWVlZWVlMmEwZmU0MiIsImNoYXRncHRfY29tcHV0ZV9yZXNpZGVuY3kiOiJub19jb25zdHJhaW50IiwiY2hhdGdwdF9wbGFuX3R5cGUiOiJmcmVlIiwiY2hhdGdwdF91c2VyX2lkIjoidXNlci1xYkVxSVFkY0NxTUh5UmluSFlxcXpwRUkiLCJpc19zaWdudXAiOnRydWUsInVzZXJfaWQiOiJ1c2VyLXFiRXFJUWRjQ3FNSHlSaW5IWXFxenBFSSJ9LCJodHRwczovL2FwaS5vcGVuYWkuY29tL3Byb2ZpbGUiOnsiZW1haWwiOiJwaW5jaGVkLWdpZGRpZXItNHVAaWNsb3VkLmNvbSIsImVtYWlsX3ZlcmlmaWVkIjp0cnVlLCJuYW1lIjoiSXVxYXYgVHZ0YiJ9LCJpc3MiOiJodHRwczovL2F1dGgub3BlbmFpLmNvbSIsInB3ZF9hdXRoX3RpbWUiOjE3ODQ1NDgzNzQ5NzMsInNjcCI6WyJvcGVuaWQiLCJlbWFpbCIsInByb2ZpbGUiLCJvZmZsaW5lX2FjY2VzcyIsIm1vZGVsLnJlcXVlc3QiLCJtb2RlbC5yZWFkIiwib3JnYW5pemF0aW9uLnJlYWQiLCJvcmdhbml6YXRpb24ud3JpdGUiXSwic2Vzc2lvbl9pZCI6ImF1dGhzZXNzX1BKUmpZanVwNDBDUnFKSVQ1Tm90UXZVUCIsInNsIjp0cnVlLCJzdWIiOiJhdXRoMHx0aDRJVDM1NnFuQ2haY1cwYldLS1VNYjAiLCJpYXQiOjE3ODQ1NDgzNzksImV4cCI6MTc4NTQxMjM3OSwianRpIjoiZWNmYmZlMmNiYjk4NGY1MWI0Y2I4ZGQyZDk5YmZmYTAiLCJuYmYiOjE3ODQ1NDgzNzl9.B5B0cIEvZCDvs4cu_WX97J3MolRimGtkVZ3nm3Egaw2Y_vf4MmF52dDE2wPm0EUshNs2Nh65HsZkIb2m3dkOWVn2qPcGl8V2VmAEqCz8rHUnaZITLJvODqPv511C0Hql9BTaQc2gHpwbPvzG_YDFKp4DjKlE7IiCKcihE5xROXB6USyOfSEvEBzxHTyp-GDmWItwApDmDTnv0d4ZoTSkIH3L77JEdEZxVh23yseQq3kMeC4qlNqIAcu_C-SdgpTnoyPmxQiuUqcrPmUuOrOJxMqwrMnQcspCn8fnKnbxQIPup5qgcStUymssLoOAT8Pq-HzeEjdIhILoZXVaeByt7Q----CFADPPOQB6SKCEFLSOVDL77BHSPLEP6E"
+    },
+    "extra": {
+      "user": {
+        "id": "user-qbEqIQdcCqMHyRinHYqqzpEI",
+        "name": "Iuqav Tvtb",
+        "email": "pinched-giddier-4u@icloud.com",
+        "idp": "auth0",
+        "iat": 1784548379,
+        "amr": [
+          "otp",
+          "urn:openai:amr:otp_email"
+        ],
+        "mfa": false
+      },
+      "account": {
+        "id": "bde67c2f-9057-4978-8cdf-eeeee2a0fe42",
+        "planType": "free",
+        "structure": "personal",
+        "isUsageBasedSeatEnabled": false,
+        "isConversationClassifierEnabledForWorkspace": true,
+        "hasFloraFeature": false,
+        "isFedrampCompliantWorkspace": false,
+        "isDelinquent": false,
+        "residencyRegion": "no_constraint",
+        "computeResidency": "no_constraint"
+      },
+      "expires": "2026-10-18T11:53:11.092Z",
+      "device_id": "8faf3a7b-6d08-4141-98a3-2dc85ac75148"
+    }
+  }
+]

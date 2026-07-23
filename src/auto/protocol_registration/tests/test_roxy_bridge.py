@@ -112,6 +112,41 @@ class RoxyBridgeTests(unittest.TestCase):
         self.assertEqual(fingerprint["userAgent"], "Roxy Chrome")
         self.assertEqual(commands, ["navigate", "fingerprint"])
 
+    def test_cdp_client_reads_selected_profile_exit_ip(self):
+        calls = []
+
+        def exchange(request):
+            calls.append(request["command"])
+            self.assertEqual(request["command"], "ip")
+            return {"ip": "203.0.113.10"}
+
+        client = RoxyCdpClient(exchange=exchange)
+
+        self.assertEqual(client.ip(), {"ip": "203.0.113.10"})
+        self.assertEqual(calls, ["ip"])
+
+    def test_cdp_client_reads_sanitized_auth_workspace_metadata(self):
+        calls = []
+
+        def exchange(request):
+            calls.append(request["command"])
+            self.assertEqual(request["command"], "auth_workspaces")
+            return [
+                {"id": "personal-workspace", "kind": "personal", "name": ""},
+                {"id": "team-workspace", "kind": "team", "name": "Team"},
+            ]
+
+        client = RoxyCdpClient(exchange=exchange)
+
+        self.assertEqual(
+            client.auth_workspaces(),
+            [
+                {"id": "personal-workspace", "kind": "personal", "name": ""},
+                {"id": "team-workspace", "kind": "team", "name": "Team"},
+            ],
+        )
+        self.assertEqual(calls, ["auth_workspaces"])
+
     def test_cdp_response_raises_for_http_error(self):
         response = RoxyResponse(
             status_code=403,
@@ -161,6 +196,46 @@ class RoxyBridgeTests(unittest.TestCase):
         self.assertEqual(fake.calls[2][0:2], ("GET", "https://example.test/ping"))
         self.assertEqual(fake.calls[-1][0], "close")
 
+    def test_browser_session_rejects_roxy_ip_change_before_next_request(self):
+        class FakeCdpClient:
+            def __init__(self):
+                self.calls = []
+                self.ips = iter(["203.0.113.10", "203.0.113.11"])
+
+            def fingerprint(self):
+                self.calls.append(("fingerprint", "", {}))
+                return {"userAgent": "Roxy Chrome"}
+
+            def navigate(self, url, headers=None, **kwargs):
+                self.calls.append(("navigate", url, kwargs))
+                return RoxyResponse(200, url, {}, "")
+
+            def ip(self):
+                value = next(self.ips)
+                self.calls.append(("ip", value, {}))
+                return {"ip": value}
+
+            def request(self, method, url, **kwargs):
+                self.calls.append((method, url, kwargs))
+                return RoxyResponse(200, url, {}, "{}")
+
+            def close(self):
+                self.calls.append(("close", "", {}))
+
+        from core.session import BrowserSession
+
+        fake = FakeCdpClient()
+        with patch("config.ROXY_CDP_ENABLED", True), patch(
+            "config.ROXY_IP_CHECK_ENABLED", True
+        ), patch("core.session.RoxyCdpClient", return_value=fake):
+            session = BrowserSession(proxy=None)
+            session.get("https://example.test/first")
+            with self.assertRaisesRegex(RuntimeError, "IP"):
+                session.get("https://example.test/second")
+
+        request_urls = [call[1] for call in fake.calls if call[0] == "GET"]
+        self.assertEqual(request_urls, ["https://example.test/first"])
+
     def test_browser_session_warms_the_roxy_page_before_first_http_request(self):
         from core.session import BrowserSession
 
@@ -192,6 +267,39 @@ class RoxyBridgeTests(unittest.TestCase):
 
         self.assertEqual([call[0] for call in fake.calls[:3]], ["fingerprint", "navigate", "GET"])
         self.assertEqual(fake.calls[1][1], "https://chatgpt.com/")
+
+    def test_browser_session_can_skip_chatgpt_warmup_for_auth_protocol(self):
+        from core.session import BrowserSession
+
+        class FakeCdpClient:
+            def __init__(self):
+                self.calls = []
+
+            def fingerprint(self):
+                self.calls.append(("fingerprint", "", {}))
+                return {"userAgent": "Roxy Chrome"}
+
+            def navigate(self, url, headers=None, **kwargs):
+                self.calls.append(("navigate", url, kwargs))
+                return RoxyResponse(200, url, {}, "")
+
+            def request(self, method, url, **kwargs):
+                self.calls.append((method, url, kwargs))
+                return RoxyResponse(200, url, {}, "{}")
+
+            def close(self):
+                self.calls.append(("close", "", {}))
+
+        fake = FakeCdpClient()
+        with patch("config.ROXY_CDP_ENABLED", True), patch(
+            "core.session.RoxyCdpClient", return_value=fake
+        ):
+            session = BrowserSession(proxy=None, roxy_warmup_url="")
+            response = session.get("https://auth.openai.com/api/accounts/authorize/continue")
+            session.close()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([call[0] for call in fake.calls[:2]], ["fingerprint", "GET"])
 
     def test_cdp_client_round_trips_over_jsonl_child_process(self):
         bridge_source = r'''

@@ -277,7 +277,9 @@ async function detectPostEmail2FAStage(page, options = {}) {
     const detectOptions = { ...options, timeoutMs };
     // 基础 OAuth 的邮箱提交检测偏 one-time-code；2FA 流程在 unknown 后用自己的阶段集合补判。
     if (url.includes('localhost:1455/auth/callback')) return { stage: 'callback', url };
-    if (await is_openai_choose_account_page(page, detectOptions)) return { stage: 'choose-account', url };
+    if (options.ignoreStage !== 'choose-account' && await is_openai_choose_account_page(page, detectOptions)) {
+        return { stage: 'choose-account', url };
+    }
     if (await is_openai_password_page(page, detectOptions)) return { stage: 'openai-password', url };
     if (await is_openai_mfa_page(page, detectOptions)) return { stage: 'mfa', url };
     if (await base.is_phone_add_page(page, detectOptions)) return { stage: 'phone-add', url };
@@ -420,6 +422,16 @@ async function process2FAOAuthLoginFlow(page, options = {}) {
         if (await is_openai_choose_account_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到 OpenAI 选择账号页');
             await openAi_choose_account(page, actionOptions);
+            const nextStage = await waitForPostEmail2FAStage(page, {
+                ...actionOptions,
+                ignoreStage: 'choose-account',
+            });
+            log(logger, 'oauth-flow', '选择账号提交后阶段识别完成', `next=${nextStage.stage}`);
+            if (nextStage.stage === 'unknown') {
+                throw createAutomationError('OPENAI_CHOOSE_ACCOUNT_STAGE_UNKNOWN', 'OpenAI 选择账号提交后未进入合法后续页面', {
+                    ...(await collectPageDebug(page))
+                });
+            }
         } else if (await base.is_openai_login_page(page, detectOptions)) {
             log(logger, 'oauth-flow', '识别到 OpenAI 邮箱登录页');
             const emailResult = await base.openAi_login(page, options.email, actionOptions);
@@ -504,13 +516,19 @@ function generateTotpCode(secret, options = {}) {
     return generateHotpCode(secret, { ...options, counter });
 }
 
+function buildOAuthAuthorizeUrl(args = {}) {
+    // 2FA 补号必须复用 oauth_login.js 的完整 authorize URL，不额外拼接 prompt=login。
+    return base.buildOAuthAuthorizeUrl(args);
+}
+
+// 保留旧导出名，避免外部调试脚本失效；该别名同样不再追加 prompt=login。
 function buildPromptLoginAuthUrl(args = {}) {
-    return base.buildOAuthAuthorizeUrl({ ...args, promptLogin: true });
+    return buildOAuthAuthorizeUrl(args);
 }
 
 async function run(argv = process.argv.slice(2), deps = {}) {
     const processOAuthLoginFlow = deps.processOAuthLoginFlow || process2FAOAuthLoginFlow;
-    const buildAuthUrl = deps.buildAuthUrl || buildPromptLoginAuthUrl;
+    const buildAuthUrl = deps.buildAuthUrl || buildOAuthAuthorizeUrl;
     return base.run(argv, {
         ...deps,
         buildAuthUrl,
@@ -552,6 +570,7 @@ if (require.main === module) {
 }
 
 module.exports = {
+    buildOAuthAuthorizeUrl,
     buildPromptLoginAuthUrl,
     generateHotpCode,
     generateTotpCode,

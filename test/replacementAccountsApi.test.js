@@ -755,6 +755,171 @@ test('POST /replacement-accounts/:id/replace-2fa returns worker failure with acc
   }
 });
 
+test('POST /replacement-accounts/:id/replace-2fa-protocol uses the CPA worker protocol mode', async () => {
+  const events = [];
+  const cpaRepairWorker = {
+    async repair({ account, source, mode }) {
+      events.push(['cpa-repair', account.id, account.email, source, mode]);
+      return {
+        ok: true,
+        account: {
+          ...account,
+          status: 'cpa_mounted',
+          replacement_count: Number(account.replacement_count || 0) + 1,
+        },
+        run: { id: 910 },
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(successfulServices(), { cpaRepairWorker });
+  const created = replacementAccounts.createAccount({ email: 'protocol-replace@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace-2fa-protocol`);
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.ok, true);
+    assert.equal(response.body.account.status, 'cpa_mounted');
+    assert.equal(response.body.account.replacement_count, 1);
+    assert.equal(response.body.run.id, 910);
+    assert.deepEqual(events, [['cpa-repair', created.id, 'protocol-replace@example.com', 'manual', '2fa-protocol']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/replace-2fa-protocol streams live logs when requested', async () => {
+  const cpaRepairWorker = {
+    async repair({ account, mode, onLog }) {
+      assert.equal(mode, '2fa-protocol');
+      onLog?.({ type: 'step', step: 'child-start', message: '协议补号子进程已启动' });
+      onLog?.({ type: 'log', stream: 'stdout', text: 'child output\\n' });
+      return {
+        ok: true,
+        account: { ...account, status: 'cpa_mounted' },
+        run: { id: 912 },
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(successfulServices(), { cpaRepairWorker });
+  const created = replacementAccounts.createAccount({ email: 'protocol-replace-live@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await fetch(`${server.baseUrl}/replacement-accounts/${created.id}/replace-2fa-protocol`, {
+      method: 'POST',
+      headers: {
+        accept: 'text/event-stream',
+        cookie: authCookie(),
+      },
+    });
+    const text = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(response.headers.get('content-type'), /text\/event-stream/);
+    assert.match(text, /协议补号子进程已启动/);
+    assert.match(text, /child output/);
+    assert.match(text, /"type":"complete"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/replace-2fa-protocol streams failure events when the worker fails', async () => {
+  const cpaRepairWorker = {
+    async repair({ account, onLog }) {
+      onLog?.({ type: 'step', step: 'cpa-failure', message: '协议补号失败：CPA upload failed' });
+      return {
+        ok: false,
+        account: { ...account, status: 'plus_active' },
+        error: 'CPA upload failed',
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(successfulServices(), { cpaRepairWorker });
+  const created = replacementAccounts.createAccount({ email: 'protocol-replace-live-failed@example.com', status: 'plus_active' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await fetch(`${server.baseUrl}/replacement-accounts/${created.id}/replace-2fa-protocol`, {
+      method: 'POST',
+      headers: {
+        accept: 'text/event-stream',
+        cookie: authCookie(),
+      },
+    });
+    const text = await response.text();
+
+    assert.equal(response.status, 200);
+    assert.match(text, /协议补号失败：CPA upload failed/);
+    assert.match(text, /"type":"account-result"/);
+    assert.match(text, /"outcome":"failed"/);
+    assert.match(text, /"type":"error"/);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/replace-2fa-protocol preserves status on worker failure', async () => {
+  const events = [];
+  const cpaRepairWorker = {
+    async repair({ account, source, mode }) {
+      events.push(['cpa-repair', account.id, source, mode]);
+      return {
+        ok: false,
+        account: {
+          ...account,
+          status: 'plus_active',
+          last_error: '协议补号失败：CPA upload failed',
+        },
+        error: 'CPA upload failed',
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(successfulServices(), { cpaRepairWorker });
+  const created = replacementAccounts.createAccount({ email: 'protocol-replace-failed@example.com', status: 'plus_active' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace-2fa-protocol`);
+
+    assert.equal(response.response.status, 502);
+    assert.equal(response.body.error, 'PROTOCOL_REPLACE_FAILED');
+    assert.equal(response.body.account.status, 'plus_active');
+    assert.match(response.body.account.last_error, /协议补号失败/);
+    assert.deepEqual(events, [['cpa-repair', created.id, 'manual', '2fa-protocol']]);
+  } finally {
+    await server.close();
+  }
+});
+
+test('POST /replacement-accounts/:id/replace-2fa-protocol falls back to the direct protocol child', async () => {
+  const events = [];
+  const services = {
+    ...successfulServices(),
+    async replaceAccountWith2FAProtocol(account) {
+      events.push(['replace-2fa-protocol', account.id, account.email]);
+      return { ok: true, run: { id: 911 } };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({ email: 'protocol-replace-fallback@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/replace-2fa-protocol`);
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.account.status, 'cpa_mounted');
+    assert.equal(response.body.account.replacement_count, 1);
+    assert.equal(response.body.run.id, 911);
+    assert.deepEqual(events, [['replace-2fa-protocol', created.id, 'protocol-replace-fallback@example.com']]);
+  } finally {
+    await server.close();
+  }
+});
+
 test('POST /replacement-accounts/:id/login-2fa starts 2fa login automation without replacement state changes', async () => {
   const events = [];
   const services = {

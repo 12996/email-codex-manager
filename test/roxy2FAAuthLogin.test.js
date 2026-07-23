@@ -950,7 +950,123 @@ test('process2FAOAuthLoginFlow selects the existing account before the 2FA passw
   ]);
 });
 
-test('roxy_2fa_auth_login default auth URL includes prompt=login and first CLI arg still overrides it', async () => {
+test('process2FAOAuthLoginFlow waits for delayed choose-account navigation before detecting the next stage', async () => {
+  const { process2FAOAuthLoginFlow } = require('../src/auto/roxy_2fa_auth_login.js');
+  const calls = [];
+  let stage = 'choose-account';
+  let selectClicks = 0;
+  let pendingNavigation = false;
+  let waitCount = 0;
+  let currentUrl = 'https://auth.openai.com/choose-an-account';
+
+  const bodyText = () => {
+    if (stage === 'choose-account') {
+      return 'Welcome back Choose an account to continue to Codex Select account 19_immoral.bitmap@icloud.com';
+    }
+    if (stage === 'password') return 'Enter your password Password Continue';
+    if (stage === 'mfa') return 'Verify your identity Authenticator app Code Continue';
+    return '';
+  };
+
+  const page = {
+    getByRole(role, options = {}) {
+      if (role === 'button' && options.name instanceof RegExp && /select account/i.test(String(options.name))) {
+        return {
+          async isVisible() { return stage === 'choose-account'; },
+          async click() {
+            selectClicks += 1;
+            calls.push(['select-account.click']);
+            pendingNavigation = true;
+          },
+        };
+      }
+      if (role === 'textbox' && options.name === 'Email address') {
+        return {
+          async isVisible() { return false; },
+          async waitFor() {},
+          async click() {},
+          async fill() {},
+        };
+      }
+      if (role === 'textbox' && options.name === 'Password') {
+        return {
+          async isVisible() { return stage === 'password'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['password.fill', value]); },
+        };
+      }
+      if (role === 'textbox' && options.name === 'Code') {
+        return {
+          async isVisible() { return stage === 'mfa'; },
+          async isEnabled() { return stage === 'mfa'; },
+          async isEditable() { return stage === 'mfa'; },
+          async waitFor() {},
+          async click() {},
+          async fill(value) { calls.push(['code.fill', value]); },
+        };
+      }
+      return {
+        async isVisible() { return stage === 'password' || stage === 'mfa'; },
+        async click() {
+          calls.push(['continue.click', stage]);
+          if (stage === 'password') {
+            stage = 'mfa';
+            currentUrl = 'https://auth.openai.com/mfa-challenge/chal_delayed';
+          } else if (stage === 'mfa') {
+            stage = 'callback';
+            currentUrl = 'http://localhost:1455/auth/callback?code=delayed_choose&state=state_delayed_choose';
+          }
+        },
+      };
+    },
+    locator() {
+      return { async textContent() { return bodyText(); } };
+    },
+    url: () => currentUrl,
+    title: async () => 'OAuth',
+    textContent: async () => bodyText(),
+    waitForTimeout: async () => {
+      if (pendingNavigation) {
+        waitCount += 1;
+        if (waitCount >= 2) {
+          pendingNavigation = false;
+          stage = 'password';
+          currentUrl = 'https://auth.openai.com/log-in/password';
+        }
+      }
+    },
+  };
+
+  const result = await process2FAOAuthLoginFlow(page, {
+    email: '19_immoral.bitmap@icloud.com',
+    password: 'openai-password',
+    mfaCode: '654321',
+    verifier: 'verifier_delayed_choose',
+    state: 'state_delayed_choose',
+    timeoutMs: 100,
+    stageDetectTimeoutMs: 10,
+    postEmailStageTimeoutMs: 100,
+    transitionTimeoutMs: 100,
+    maxStageTurns: 10,
+    exchangeToken: async (code, verifier, email) => {
+      calls.push(['exchangeToken', code, verifier, email]);
+      return { cpaPath: 'local-cpa.json' };
+    },
+    logger: { log: () => {}, warn: () => {}, error: () => {} },
+  });
+
+  assert.equal(result.status, 'oauth-completed');
+  assert.equal(selectClicks, 1);
+  assert.equal(waitCount >= 2, true);
+  assert.deepEqual(calls.filter((call) => ['password.fill', 'code.fill', 'exchangeToken'].includes(call[0])), [
+    ['password.fill', 'openai-password'],
+    ['code.fill', '654321'],
+    ['exchangeToken', 'delayed_choose', 'verifier_delayed_choose', '19_immoral.bitmap@icloud.com'],
+  ]);
+});
+
+test('roxy_2fa_auth_login default auth URL matches oauth_login.js and first CLI arg still overrides it', async () => {
   const { run } = require('../src/auto/roxy_2fa_auth_login.js');
   const navigatedUrls = [];
 
@@ -1000,7 +1116,7 @@ test('roxy_2fa_auth_login default auth URL includes prompt=login and first CLI a
   await run([], deps);
   await run(['https://example.test/custom-oauth'], deps);
 
-  assert.match(navigatedUrls[0], /prompt=login/);
+  assert.doesNotMatch(navigatedUrls[0], /(?:[?&])prompt=login(?:&|$)/);
   assert.match(navigatedUrls[0], /code_challenge=challenge_fixed/);
   assert.match(navigatedUrls[0], /state=state_fixed/);
   assert.equal(navigatedUrls[1], 'https://example.test/custom-oauth');

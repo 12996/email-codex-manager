@@ -10,6 +10,19 @@ from core.account_export import save_account_data, save_registration_access_toke
 
 
 class RegistrationTokenExportTests(unittest.TestCase):
+    def test_registration_status_requires_activated_mfa_when_mfa_is_enabled(self):
+        from main import registration_status_ready
+
+        with patch("main.ENABLE_2FA", True):
+            self.assertFalse(registration_status_ready(None))
+            self.assertTrue(registration_status_ready("JBSWY3DPEHPK3PXP"))
+
+    def test_registration_status_does_not_require_mfa_when_mfa_is_disabled(self):
+        from main import registration_status_ready
+
+        with patch("main.ENABLE_2FA", False):
+            self.assertTrue(registration_status_ready(None))
+
     def test_emit_registration_result_json_exposes_only_mfa_metadata_when_enabled(self):
         from main import emit_registration_result
 

@@ -99,6 +99,90 @@ test('repair worker can run 2FA replacement before uploading CPA JSON', async ()
   ]);
 });
 
+test('repair worker can run protocol 2FA replacement before uploading CPA JSON', async () => {
+  const events = [];
+  const worker = createCpaRepairWorker({
+    cpaOutputDir: 'src/auto/product_files/cpa',
+    readFileImpl() {
+      return '{"type":"openai"}';
+    },
+    cpaClient: {
+      async uploadAuthFile(input) {
+        events.push(['upload', input.name, input.payload]);
+      },
+      async listAuthFiles() {
+        return [{ provider: 'codex', email: 'user@example.com', status: 'active', status_message: '' }];
+      },
+    },
+    replacementAccounts: {
+      markReplacementStarted(id) { events.push(['started', id]); },
+      markReplacementSuccess(id) { events.push(['success', id]); return { id, status: 'cpa_mounted' }; },
+      markReplacementFailure() { throw new Error('not expected'); },
+    },
+    replacementServices: {
+      async replaceAccountWith2FAProtocol(account, options) {
+        events.push(['replace-2fa-protocol', account.id, options.cpaTriggerDetails]);
+        return { ok: true, run: { id: 809 } };
+      },
+    },
+  });
+
+  const result = await worker.repair({
+    account: { id: 7, email: 'user@example.com' },
+    mode: '2fa-protocol',
+  });
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(events, [
+    ['started', 7],
+    ['replace-2fa-protocol', 7, ''],
+    ['upload', 'codex-user@example.com-plus.json', '{"type":"openai"}'],
+    ['success', 7],
+  ]);
+});
+
+test('repair worker forwards protocol replacement logs to the live callback', async () => {
+  const liveEvents = [];
+  const worker = createCpaRepairWorker({
+    cpaOutputDir: 'src/auto/product_files/cpa',
+    readFileImpl() {
+      return '{"type":"openai"}';
+    },
+    cpaClient: {
+      async uploadAuthFile() {},
+      async listAuthFiles() {
+        return [{ provider: 'codex', email: 'user@example.com', status: 'active', status_message: '' }];
+      },
+    },
+    replacementAccounts: {
+      markReplacementStarted() {},
+      markReplacementSuccess(id) { return { id, status: 'cpa_mounted' }; },
+      markReplacementFailure() { throw new Error('not expected'); },
+    },
+    replacementServices: {
+      async replaceAccountWith2FAProtocol(account, options) {
+        options.onLog?.({ type: 'step', step: 'child-start', message: '协议子进程已启动' });
+        options.onLog?.({ type: 'log', stream: 'stdout', text: 'child output\\n' });
+        return { ok: true, run: { id: 810 } };
+      },
+    },
+  });
+
+  const result = await worker.repair({
+    account: { id: 7, email: 'user@example.com' },
+    mode: '2fa-protocol',
+    onLog(event) {
+      liveEvents.push(event);
+    },
+  });
+
+  assert.equal(result.ok, true);
+  assert.ok(liveEvents.some((event) => event.step === 'child-start'));
+  assert.ok(liveEvents.some((event) => event.type === 'log' && event.stream === 'stdout'));
+  assert.ok(liveEvents.some((event) => event.step === 'cpa-upload'));
+  assert.ok(liveEvents.some((event) => event.step === 'cpa-success'));
+});
+
 test('repair worker appends CPA upload steps to replacement run log', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'cpa-repair-worker-'));
   const logPath = join(dir, 'replacement.log');

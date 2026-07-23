@@ -90,6 +90,13 @@ def _is_success(result: dict) -> bool:
     return isinstance(result, dict) and bool(result.get("success"))
 
 
+def registration_status_ready(totp_secret: str | None) -> bool:
+    """只有 2FA 已激活时，协议注册才允许回写 replacement registered。"""
+    if not ENABLE_2FA:
+        return True
+    return bool(str(totp_secret or "").strip())
+
+
 def emit_registration_result(results: list[dict]) -> None:
     """按父服务约定输出机器结果；默认不向 stdout 输出敏感结果。"""
     enabled = os.environ.get("REGISTRATION_RESULT_JSON", "").strip().lower()
@@ -247,6 +254,7 @@ def run_registration(
 
     create_acknowledged = False
     registration_status_attempted = False
+    totp_secret = None
     try:
         # ==================== 阶段1: ChatGPT 认证 ====================
         # 步骤1: 获取 providers
@@ -321,11 +329,10 @@ def run_registration(
         time.sleep(1)
 
         # ==================== 阶段7: 设置 2FA（受 config.ENABLE_2FA 控制）====================
-        totp_secret = None
         if ENABLE_2FA:
-            # 步骤14-20: 重认证（要再收一次邮箱 OTP）→ enroll TOTP → activate
+            # 直接复用注册后的 accessToken，不触发二次邮箱验证码或 password re-auth。
             try:
-                totp_secret = setup_2fa(session, email)
+                totp_secret = setup_2fa(session, email, access_token=access_token)
             except Exception as exc:
                 logger.error(f"2FA 设置失败: {exc}")
                 logger.debug("2FA 错误详情:", exc_info=True)
@@ -350,8 +357,13 @@ def run_registration(
             },
         )
 
-        _sync_replacement_registration_status(email)
-        registration_status_attempted = True
+        if registration_status_ready(totp_secret):
+            _sync_replacement_registration_status(email)
+            registration_status_attempted = True
+        else:
+            logger.warning(
+                "[邮箱] 2FA 未激活，暂不将补号数据库状态同步为 registered"
+            )
 
         logger.info(f"[完成] {email}，账号ID={account_id}，Token={access_token[:16]}...")
 
@@ -391,7 +403,12 @@ def run_registration(
         # 创建接口通过后失败：远端已消耗这个邮箱，直接废弃，避免重复注册。
         try:
             from config import EMAIL_SOURCE as _src
-            if _src == "replacement" and create_acknowledged and not registration_status_attempted:
+            if (
+                _src == "replacement"
+                and create_acknowledged
+                and not registration_status_attempted
+                and registration_status_ready(totp_secret)
+            ):
                 _sync_replacement_registration_status(email)
                 registration_status_attempted = True
             if _src == "outlook" and email:

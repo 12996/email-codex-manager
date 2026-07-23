@@ -985,6 +985,7 @@ SQLite 表：`replacement_accounts`
 | `PROTOCOL_REGISTER_FAILED` | 502 | 协议注册或 Roxy 指纹刷新失败 |
 | `PROTOCOL_REGISTER_NOT_CONFIGURED` | 502 | 协议注册适配器尚未配置 |
 | `PROTOCOL_REGISTER_BUSY` | 409 | 共享 Roxy profile 已有协议注册任务运行 |
+| `PROTOCOL_REPLACE_FAILED` | 502 | 独立 CPA 协议补号、CPA 上传或健康复查失败 |
 | `NOTIFICATION_NOT_FOUND` | 404 | 通知不存在 |
 
 ### GET `/replacement-accounts`
@@ -1474,7 +1475,7 @@ src/auto/roxy_oauth_login.js
 | Roxy API 地址 | `.env` / 运行配置 | `ROXY_API_BASE_URL` 或 `ROXY_API_PORT`，由子进程继承，不来自补号表。 |
 | Roxy API Token | `.env` / 运行配置 | `ROXY_API_TOKEN`，不来自补号表。 |
 | Roxy 工作区 | `.env` / 运行配置 | `ROXY_WORKSPACE_ID`，不来自补号表。 |
-| Roxy 窗口定位 | `.env` / 运行配置 | 默认使用 `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者之一；也可按动作覆盖：注册用 `ROXY_REGISTER_BROWSER_*`，协议注册用 `ROXY_PROTOCOL_BROWSER_*`（默认 `3/test`），普通补号用 `ROXY_REPLACE_BROWSER_*`，2FA 补号用 `ROXY_REPLACE_2FA_BROWSER_*`，2FA 登录用 `ROXY_2FA_LOGIN_BROWSER_*`。 |
+| Roxy 窗口定位 | `.env` / 运行配置 | 默认使用 `ROXY_BROWSER_DIR_ID`、`ROXY_BROWSER_SORT_NUM`、`ROXY_BROWSER_WINDOW_NAME` 三者之一；也可按动作覆盖：注册用 `ROXY_REGISTER_BROWSER_*`，协议注册和协议补号用 `ROXY_PROTOCOL_BROWSER_*`（默认 `3/test`），普通补号用 `ROXY_REPLACE_BROWSER_*`，2FA 补号用 `ROXY_REPLACE_2FA_BROWSER_*`，2FA 登录用 `ROXY_2FA_LOGIN_BROWSER_*`。 |
 | 复用 CDP | `.env` / 运行配置 | 默认使用 `ROXY_CDP_ENDPOINT`；动作级可用 `ROXY_REGISTER_CDP_ENDPOINT`、`ROXY_REPLACE_CDP_ENDPOINT`、`ROXY_REPLACE_2FA_CDP_ENDPOINT`、`ROXY_2FA_LOGIN_CDP_ENDPOINT`。配置动作级窗口但未配置动作级 CDP 时，会清除全局 `ROXY_CDP_ENDPOINT`。 |
 | 出口 IP 一致性 | `.env` / 运行配置 | `ROXY_IP_CHECK_ENABLED=1` 时，协议 bridge 通过 Roxy `/browser/list` 读取目标 profile 的 `proxyInfo.lastIp`；sticky 代理在注册中途换 IP 会立即终止当前流程。Roxy 版本不提供该字段时可显式设为 `0`，但不再具备换 IP 防护。 |
 | 邮箱验证码接口 | `.env` / 运行配置 | `VERIFICATION_CODE_API_URL`；补号账号未配置 `email_code_api` 时留空并按邮箱域名自动选择本地接口：iCloud 使用 `http://127.0.0.1:${PORT}/api/icloud-verification-code/latest`，其他邮箱使用 `/api/verification-code/latest`。 |
@@ -1607,6 +1608,39 @@ src/auto/roxy_2fa_auth_login.js
   "message": "2FA补号失败原因"
 }
 ```
+
+### POST `/replacement-accounts/:id/replace-2fa-protocol`
+
+执行独立 CPA“协议补号”。该接口不调用注册状态机，也不调用 `roxy_2fa_auth_login.js`；默认启动 `src/auto/protocol_cpa_replacement.py`，由该入口读取当前账号并调用独立 `src/auto/protocol_cpa_auth.py`。
+
+协议链路为：
+
+```text
+已有账号登录 -> TOTP 2FA -> 可选 add-phone -> SMS API 轮询
+-> phone-otp/validate -> Codex consent -> workspace/select
+-> OAuth token -> CPA JSON
+```
+
+`OPENAI_WORKSPACE_ID` 必须配置为真实 OpenAI workspace ID，不能使用 Roxy API 的 `ROXY_WORKSPACE_ID`（例如 `111070`）。短信验证码使用当前账号的 `sms_api`，`SMS_API_PROXY` 仅作为独立 SMS transport 代理，不经过 Roxy 页面。
+
+生产注入 CPA repair worker 时，后端调用 `cpaRepairWorker.repair({ mode: '2fa-protocol' })`，只有 CPA JSON 上传并通过健康复查后才标记 `cpa_mounted` 并增加 `replacement_count`。失败时恢复操作前业务状态，并记录“协议补号失败”操作错误。未注入 worker 的测试/本地模式直接调用 `replacementServices.replaceAccountWith2FAProtocol(account)`。
+
+请求头包含 `Accept: text/event-stream` 时，接口返回 SSE 流而不是 JSON，事件包括：
+
+```text
+start           开始协议补号
+protocol-step   Roxy、CPA 读取/上传/复查等步骤
+protocol-log    子进程 stdout/stderr
+account-result  本次协议补号成功或失败
+complete        执行完成
+error           执行异常
+```
+
+不带该请求头时保持原 JSON 响应，历史 `/replacement-automation-runs` 日志接口和页面不变。
+
+协议补号子进程默认使用 Roxy 窗口 `3/test`；启动前会刷新动作级 profile（关闭窗口、清理缓存、刷新指纹、重新打开并取得 CDP），再将新的 `ROXY_CDP_ENDPOINT` 注入子进程。运行日志 `kind` 为 `replacement-2fa-protocol`，不记录密码、TOTP、短信验证码或 token 明文。
+
+成功响应格式同 `/replacement-accounts/:id/replace`；失败响应的 `error` 为 `PROTOCOL_REPLACE_FAILED`。
 
 ## CPA 凭证健康检测 API
 
@@ -1875,6 +1909,7 @@ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS=30
 | 协议注册 | `POST /replacement-accounts/:id/register-protocol` | 刷新 Roxy 指纹后启动 `tilian` 协议注册，成功标记 `registered` |
 | 自动补号 | `POST /replacement-accounts/:id/replace` | 成功后补号次数加一 |
 | 2FA补号 | `POST /replacement-accounts/:id/replace-2fa` | 启动密码 + 2FA 补号自动化，成功后补号次数加一 |
+| 协议补号 | `POST /replacement-accounts/:id/replace-2fa-protocol` | 启动独立 CPA 2FA 协议，上传并复查 CPA 后成功 |
 | 查看补号日志 | `GET /replacement-automation-runs` / `GET /replacement-automation-runs/:id` | 查看运行记录和 stdout/stderr |
 | 停止子进程 | `POST /replacement-automation-runs/:id/stop` | 停止当前服务会话内仍在运行的 child |
 

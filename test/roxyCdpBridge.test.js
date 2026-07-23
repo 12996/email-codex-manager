@@ -207,6 +207,37 @@ test('Roxy CDP navigation does not wait for a navigation response body to finish
   assert.equal(result.status_code, 200);
 });
 
+test('Roxy CDP navigation goes directly to the requested Auth URL without origin warmup', async () => {
+  const gotoCalls = [];
+  const page = {
+    isClosed: () => false,
+    url: () => 'about:blank',
+    async goto(url) {
+      gotoCalls.push(url);
+      return {
+        status: () => 200,
+        statusText: () => 'OK',
+        url: () => url,
+        headers: () => ({}),
+        text: async () => '',
+      };
+    },
+    async waitForLoadState() {},
+  };
+  const bridge = new RoxyCdpBridge();
+  bridge.page = page;
+  bridge.ensureConnected = async function ensureConnectedForTest() {};
+
+  await bridge.navigate({
+    url: 'https://auth.openai.com/oauth/authorize?state=redacted',
+    timeout_ms: 30000,
+  });
+
+  assert.deepEqual(gotoCalls, [
+    'https://auth.openai.com/oauth/authorize?state=redacted',
+  ]);
+});
+
 test('Roxy CDP can reuse one page when origin isolation is disabled', async () => {
   const pages = [];
   const page = {
@@ -316,4 +347,30 @@ test('Roxy CDP reads the selected profile exit IP without exposing proxy credent
   };
 
   assert.deepEqual(await bridge.ip(), { ip: '203.0.113.10' });
+});
+
+test('Roxy CDP extracts only OpenAI workspace metadata from the Auth session cookie', async () => {
+  const encoded = Buffer.from(JSON.stringify({
+    email: 'user@example.com',
+    workspaces: [
+      { id: 'personal-workspace', kind: 'personal', name: null },
+      { id: 'team-workspace', kind: 'team', name: 'Team' },
+    ],
+  })).toString('base64url');
+  const bridge = new RoxyCdpBridge();
+  bridge.ensureConnected = async function ensureConnectedForTest() {
+    this.context = {
+      async cookies() {
+        return [
+          { name: 'oai-client-auth-session', value: `${encoded}.signature` },
+          { name: 'unrelated', value: 'must-not-be-read-out' },
+        ];
+      },
+    };
+  };
+
+  assert.deepEqual(await bridge.authWorkspaces(), [
+    { id: 'personal-workspace', kind: 'personal', name: '' },
+    { id: 'team-workspace', kind: 'team', name: 'Team' },
+  ]);
 });

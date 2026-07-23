@@ -14,7 +14,8 @@ const DEFAULT_ROXY_2FA_LOGIN_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_login.js
 const DEFAULT_ROXY_REGISTER_SCRIPT = join(__dirname, 'auto', 'roxy_register_openai.js');
 const DEFAULT_PROTOCOL_PROJECT_DIR = join(__dirname, 'auto', 'protocol_registration');
 const DEFAULT_PROTOCOL_MAIN_PATH = join(DEFAULT_PROTOCOL_PROJECT_DIR, 'main.py');
-const DEFAULT_PROTOCOL_TWO_FA_MAIN_PATH = join(DEFAULT_PROTOCOL_PROJECT_DIR, 'replacement_2fa.py');
+const DEFAULT_PROTOCOL_TWO_FA_PROJECT_DIR = join(__dirname, 'auto');
+const DEFAULT_PROTOCOL_TWO_FA_MAIN_PATH = join(DEFAULT_PROTOCOL_TWO_FA_PROJECT_DIR, 'protocol_cpa_replacement.py');
 const DEFAULT_PROTOCOL_PYTHON_PATH = 'F:\\anaconda\\anaconda3\\envs\\tilian\\python.exe';
 const DEFAULT_REGISTRATION_TOKEN_OUTPUT_DIR = join(__dirname, 'auto', 'product_files', 'registration');
 const DEFAULT_LOG_DIR = join(__dirname, '..', 'data', 'automation-logs');
@@ -209,9 +210,11 @@ export function createRoxyChildProcessAutomation({
   protocolProjectPath = normalizeOptional(process.env.PROTOCOL_PROJECT_PATH) || DEFAULT_PROTOCOL_PROJECT_DIR,
   protocolMainPath = normalizeOptional(process.env.PROTOCOL_MAIN_PATH) || join(protocolProjectPath, 'main.py'),
   protocolTwoFaPythonPath = normalizeOptional(process.env.PROTOCOL_2FA_PYTHON_PATH) || protocolPythonPath,
-  protocolTwoFaProjectPath = normalizeOptional(process.env.PROTOCOL_2FA_PROJECT_PATH) || protocolProjectPath,
+  protocolTwoFaProjectPath = normalizeOptional(process.env.PROTOCOL_2FA_PROJECT_PATH) || DEFAULT_PROTOCOL_TWO_FA_PROJECT_DIR,
   protocolTwoFaMainPath = normalizeOptional(process.env.PROTOCOL_2FA_MAIN_PATH)
-    || join(protocolTwoFaProjectPath, 'replacement_2fa.py'),
+    || (protocolTwoFaProjectPath === DEFAULT_PROTOCOL_TWO_FA_PROJECT_DIR
+      ? DEFAULT_PROTOCOL_TWO_FA_MAIN_PATH
+      : join(protocolTwoFaProjectPath, 'protocol_cpa_replacement.py')),
   prepareProtocolRoxyImpl = prepareProtocolRoxy,
   roxyClientFactory = createDefaultProtocolRoxyClient,
   baseEnv = process.env,
@@ -314,23 +317,51 @@ export function createRoxyChildProcessAutomation({
       });
     },
 
-    replaceAccountWith2FAProtocol(account, options = {}) {
+    async replaceAccountWith2FAProtocol(account, options = {}) {
       const accountId = normalizeRequired(account?.id, 'REPLACE_FAILED', 'replacement account id is required');
-      const existingCdpEndpoint = normalizeOptional(baseEnv.ROXY_CDP_ENDPOINT);
       const env = {
         ...baseEnv,
         REPLACEMENT_ACCOUNT_ID: accountId,
         ROXY_CDP_ENABLED: '1',
-        ROXY_CDP_PREPARE: '0',
+        // Protocol replacement needs a fresh Roxy profile before Auth navigation.
+        ROXY_CDP_PREPARE: '1',
         ROXY_KEEP_OPEN: '1',
         CPA_OUTPUT_DIR: normalizeOptional(baseEnv.CPA_OUTPUT_DIR)
           || join(__dirname, 'auto', 'product_files', 'cpa'),
       };
-      if (!existingCdpEndpoint) {
-        env.ROXY_PROTOCOL_BROWSER_SORT_NUM = normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_SORT_NUM) || '3';
-        env.ROXY_PROTOCOL_BROWSER_WINDOW_NAME = normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_WINDOW_NAME) || 'test';
-        applyActionRoxyTargetEnv(env, 'ROXY_PROTOCOL');
+      const adminPassword = normalizeOptional(baseEnv.REPLACEMENT_ADMIN_PASSWORD)
+        || normalizeOptional(baseEnv.ADMIN_PASSWORD);
+      if (adminPassword) {
+        env.REPLACEMENT_ADMIN_PASSWORD = adminPassword;
       }
+      env.ROXY_PROTOCOL_BROWSER_SORT_NUM = normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_SORT_NUM) || '3';
+      env.ROXY_PROTOCOL_BROWSER_WINDOW_NAME = normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_WINDOW_NAME) || 'test';
+      // Always select the action-specific profile so a stale global CDP endpoint cannot bypass refresh.
+      applyActionRoxyTargetEnv(env, 'ROXY_PROTOCOL');
+
+      notifyAutomationLog(options?.onLog, {
+        type: 'step',
+        step: 'prepare-roxy',
+        message: '正在刷新协议补号使用的 Roxy 浏览器环境',
+      });
+      const prepared = await prepareProtocolRoxyImpl({
+        env,
+        account,
+        clientFactory: roxyClientFactory,
+      });
+      notifyAutomationLog(options?.onLog, {
+        type: 'step',
+        step: 'roxy-ready',
+        message: '协议补号 Roxy 指纹、IP 和 CDP 已准备完成',
+      });
+      const cdpEndpoint = normalizeRequired(
+        prepared?.cdpEndpoint,
+        'REPLACE_FAILED',
+        'Roxy CDP endpoint is unavailable after fingerprint refresh',
+      );
+      env.ROXY_CDP_ENDPOINT = cdpEndpoint;
+      // The profile is already refreshed above; the child must not refresh it a second time.
+      env.ROXY_CDP_PREPARE = '0';
 
       return runChildProcess({
         spawnImpl,
@@ -349,9 +380,12 @@ export function createRoxyChildProcessAutomation({
           'ROXY_CDP_PREPARE',
           'ROXY_KEEP_OPEN',
           'SMS_API_PROXY',
+          'OPENAI_WORKSPACE_ID',
+          'REPLACEMENT_API_BASE',
           'CPA_OUTPUT_DIR',
           ...ROXY_TARGET_ENV_KEYS,
         ],
+        onLog: options?.onLog,
         cpaTriggerDetails: options?.cpaTriggerDetails,
       });
     },
@@ -461,6 +495,7 @@ export function createRoxyChildProcessAutomation({
             'OTP_PROVIDER',
             'EMAIL_SOURCE',
             'REPLACEMENT_ACCOUNT_ID',
+            'REPLACEMENT_API_BASE',
             'ROXY_REGISTER_PASSWORD',
             'ROXY_CDP_ENABLED',
             'ROXY_IP_CHECK_ENABLED',
@@ -545,11 +580,18 @@ function applyActionRoxyTargetEnv(env, prefix) {
 
 function buildProtocolRegistrationEnv({ baseEnv, account, email, accountId }) {
   const password = normalizeOptional(account?.password);
+  const configuredServiceBaseUrl = normalizeOptional(baseEnv.REPLACEMENT_API_BASE);
+  const configuredPort = Number(baseEnv.PORT);
+  const localServicePort = Number.isInteger(configuredPort) && configuredPort > 0 && configuredPort <= 65535
+    ? configuredPort
+    : 3000;
   const env = {
     ...baseEnv,
     OTP_PROVIDER: 'replacement',
     EMAIL_SOURCE: 'replacement',
     REPLACEMENT_ACCOUNT_ID: accountId,
+    // The protocol child calls back into this service to claim the selected account.
+    REPLACEMENT_API_BASE: configuredServiceBaseUrl || `http://127.0.0.1:${localServicePort}`,
     ROXY_CDP_ENABLED: '1',
     ROXY_IP_CHECK_ENABLED: normalizeOptional(baseEnv.ROXY_IP_CHECK_ENABLED) || '1',
     // Keep ChatGPT, Auth, and Sentinel pages separate while sharing one context.

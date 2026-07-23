@@ -88,6 +88,35 @@ function responseToResult(response, fallbackUrl = '') {
   };
 }
 
+function decodeCookiePayload(value) {
+  try {
+    const segment = String(value || '').split('.')[0];
+    if (!segment) return null;
+    return JSON.parse(Buffer.from(segment, 'base64url').toString('utf8'));
+  } catch (_) {
+    return null;
+  }
+}
+
+function extractAuthWorkspaces(cookies) {
+  const cookie = (Array.isArray(cookies) ? cookies : [])
+    .find((candidate) => candidate?.name === 'oai-client-auth-session');
+  const payload = decodeCookiePayload(cookie?.value);
+  const workspaces = Array.isArray(payload?.workspaces) ? payload.workspaces : [];
+  const seen = new Set();
+  return workspaces
+    .map((workspace) => ({
+      id: String(workspace?.id || '').trim(),
+      kind: String(workspace?.kind || '').trim(),
+      name: String(workspace?.name || '').trim(),
+    }))
+    .filter((workspace) => {
+      if (!workspace.id || seen.has(workspace.id)) return false;
+      seen.add(workspace.id);
+      return true;
+    });
+}
+
 function redactUrlForLog(rawUrl) {
   try {
     const target = new URL(String(rawUrl));
@@ -123,18 +152,38 @@ function formatPageRequestDiagnostic(page, method, url, error) {
 }
 
 class RoxyCdpBridge {
-  constructor() {
+  constructor(options = {}) {
     this.browser = null;
     this.context = null;
     this.page = null;
     this.roxyClient = null;
     this.closed = false;
     this.ownsPage = false;
+    this.originIsolationEnabled = options.originIsolationEnabled !== undefined
+      ? Boolean(options.originIsolationEnabled)
+      : String(process.env.ROXY_CDP_ORIGIN_ISOLATION || '1') !== '0';
+    this.pagesByOrigin = new Map();
+    this.ownedPages = new Set();
   }
 
   async ensureConnected() {
     if (this.page && !this.page.isClosed()) return;
+    if (this.page && this.page.isClosed()) this.page = null;
     if (this.closed) throw new Error('Roxy CDP bridge 已关闭');
+
+    // Tests and reconnect paths may already provide a live BrowserContext.
+    // Reuse it without resolving a new Roxy API client.
+    if (this.browser && this.context) {
+      const pages = this.context.pages().filter((candidate) => !candidate.isClosed());
+      if (process.env.ROXY_CDP_REUSE_EXISTING_PAGE === '1' && pages[0]) {
+        this.page = pages[0];
+      } else {
+        this.page = await this.context.newPage();
+        this.ownsPage = true;
+        this.ownedPages.add(this.page);
+      }
+      return;
+    }
 
     const playwrightPath = resolveModulePath('ROXY_PLAYWRIGHT_CORE_PATH', defaultPlaywrightPath());
     const playwright = require(playwrightPath);
@@ -186,27 +235,72 @@ class RoxyCdpBridge {
         // 默认使用独立 tab，避免 Roxy/MCP 正在操作的活动页打断协议请求上下文。
         this.page = await this.context.newPage();
         this.ownsPage = true;
+        this.ownedPages.add(this.page);
       }
     }
   }
 
-  async ensureOrigin(url, timeoutMs) {
+  async pageForOrigin(url, timeoutMs, options = {}) {
     await this.ensureConnected();
     const targetOrigin = new URL(url).origin;
-    let currentOrigin = '';
-    try {
-      currentOrigin = new URL(this.page.url()).origin;
-    } catch (_) {
-      currentOrigin = '';
-    }
-    if (currentOrigin === targetOrigin) return;
+    const warmup = options.warmup !== false;
 
-    // 先把 document origin 切到目标站点，再由该页面发 fetch，避免跨源 CORS。
-    await this.page.goto(`${targetOrigin}/`, {
-      waitUntil: 'domcontentloaded',
-      timeout: timeoutMs
-    });
-    await this.page.waitForLoadState('load', { timeout: timeoutMs }).catch(() => {});
+    if (!this.originIsolationEnabled || !this.context) {
+      const page = this.page;
+      if (!page) throw new Error(`Roxy CDP 没有可用页面: ${targetOrigin}`);
+      let currentOrigin = '';
+      try {
+        currentOrigin = new URL(page.url()).origin;
+      } catch (_) {
+        currentOrigin = '';
+      }
+      if (currentOrigin !== targetOrigin && warmup) {
+        await page.goto(`${targetOrigin}/`, {
+          waitUntil: 'domcontentloaded',
+          timeout: timeoutMs
+        });
+        await page.waitForLoadState('load', { timeout: timeoutMs }).catch(() => {});
+      }
+      return page;
+    }
+
+    const mapped = this.pagesByOrigin.get(targetOrigin);
+    if (mapped && !mapped.isClosed()) {
+      this.page = mapped;
+      return mapped;
+    }
+    if (mapped) this.pagesByOrigin.delete(targetOrigin);
+
+    let page = this.page && !this.page.isClosed() ? this.page : null;
+    let currentOrigin = '';
+    if (page) {
+      try {
+        const currentUrl = String(page.url() || '');
+        currentOrigin = currentUrl.startsWith('about:') ? '' : new URL(currentUrl).origin;
+      } catch (_) {
+        currentOrigin = '';
+      }
+    }
+    if (!page || (currentOrigin && currentOrigin !== targetOrigin)) {
+      page = await this.context.newPage();
+      this.ownedPages.add(page);
+    }
+
+    // 每个 origin 使用独立页面，避免 Auth/Sentinel 导航覆盖 ChatGPT OAuth 状态。
+    if (currentOrigin !== targetOrigin && warmup) {
+      await page.goto(`${targetOrigin}/`, {
+        waitUntil: 'domcontentloaded',
+        timeout: timeoutMs
+      });
+      await page.waitForLoadState('load', { timeout: timeoutMs }).catch(() => {});
+    }
+    this.pagesByOrigin.set(targetOrigin, page);
+    this.page = page;
+    return page;
+  }
+
+  async ensureOrigin(url, timeoutMs) {
+    return this.pageForOrigin(url, timeoutMs);
   }
 
   async request(payload) {
@@ -214,11 +308,11 @@ class RoxyCdpBridge {
     const timeoutMs = Math.max(1, asNumber(payload.timeout_ms, 60000));
     const method = String(payload.method || 'GET').toUpperCase();
     const normalized = normalizeHeaders(payload.headers);
-    await this.ensureOrigin(url, timeoutMs);
+    const page = await this.ensureOrigin(url, timeoutMs);
 
     for (let attempt = 1; attempt <= 2; attempt += 1) {
       try {
-        return await this.page.evaluate(async ({ url, method, headers, body, allowRedirects, timeoutMs, referer }) => {
+        return await page.evaluate(async ({ url, method, headers, body, allowRedirects, timeoutMs, referer }) => {
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), timeoutMs);
           try {
@@ -257,7 +351,7 @@ class RoxyCdpBridge {
         const message = String(error?.message || error);
         const contextDestroyed = /execution context was destroyed|most likely because of a navigation/i.test(message);
         const transientFetch = isTransientPageFetchError(error);
-        const diagnostic = formatPageRequestDiagnostic(this.page, method, url, error);
+        const diagnostic = formatPageRequestDiagnostic(page, method, url, error);
         if (!contextDestroyed && !transientFetch) {
           console.error(`[Roxy CDP] page request failed: ${diagnostic}`);
           throw error;
@@ -278,17 +372,29 @@ class RoxyCdpBridge {
   }
 
   async navigate(payload) {
-    await this.ensureConnected();
-    const normalized = normalizeHeaders(payload.headers);
     const timeoutMs = Math.max(1, asNumber(payload.timeout_ms, 60000));
-    const response = await this.page.goto(payload.url, {
+    const page = await this.pageForOrigin(
+      payload.page_origin || payload.url,
+      timeoutMs,
+      { warmup: false },
+    );
+    const normalized = normalizeHeaders(payload.headers);
+    const response = await page.goto(payload.url, {
       waitUntil: 'domcontentloaded',
       timeout: timeoutMs,
       referer: normalized.referer || undefined
     });
-    const result = responseToResult(response, this.page.url());
-    if (response) result.text = await response.text().catch(() => '');
-    result.url = this.page.url();
+    const finalUrl = page.url();
+    if (this.originIsolationEnabled) {
+      try {
+        this.pagesByOrigin.set(new URL(finalUrl).origin, page);
+      } catch (_) {
+        // Keep the target-origin mapping when the page ends on a non-URL error page.
+      }
+    }
+    this.page = page;
+    const result = responseToResult(response, finalUrl);
+    result.url = finalUrl;
     return result;
   }
 
@@ -298,21 +404,21 @@ class RoxyCdpBridge {
       throw new Error(`找不到 Sentinel SDK: ${sdkPath || '(empty)'}`);
     }
     const timeoutMs = Math.max(1, asNumber(payload.timeout_ms, 60000));
-    await this.ensureOrigin('https://sentinel.openai.com/', timeoutMs);
+    const page = await this.ensureOrigin('https://sentinel.openai.com/', timeoutMs);
 
     const deviceId = String(payload.device_id || '').trim();
     const flow = String(payload.flow || '').trim();
     if (!deviceId || !flow) throw new Error('Sentinel bridge 缺少 device_id 或 flow');
 
     // Sentinel SDK 会从 .openai.com 域的 oai-did cookie 组装 id 字段。
-    await this.page.evaluate((id) => {
+    await page.evaluate((id) => {
       document.cookie = `oai-did=${encodeURIComponent(id)}; Path=/; Domain=.openai.com; Secure; SameSite=Lax`;
     }, deviceId);
 
-    const hasSdk = await this.page.evaluate(() => typeof window.SentinelSDK?.token === 'function');
-    if (!hasSdk) await this.page.addScriptTag({ path: sdkPath });
+    const hasSdk = await page.evaluate(() => typeof window.SentinelSDK?.token === 'function');
+    if (!hasSdk) await page.addScriptTag({ path: sdkPath });
 
-    const output = await this.page.evaluate(async ({ flow: tokenFlow, deviceId: expectedId }) => {
+    const output = await page.evaluate(async ({ flow: tokenFlow, deviceId: expectedId }) => {
       if (typeof window.SentinelSDK?.token !== 'function') {
         throw new Error('页面中没有 SentinelSDK.token');
       }
@@ -369,11 +475,40 @@ class RoxyCdpBridge {
     }));
   }
 
+  async ip() {
+    if (!this.roxyClient) await this.ensureConnected();
+    if (!this.roxyClient || typeof this.roxyClient.listBrowsers !== 'function') {
+      return { ip: '' };
+    }
+    const response = await this.roxyClient.listBrowsers();
+    const data = response && response.data;
+    const rows = Array.isArray(data)
+      ? data
+      : (Array.isArray(data?.rows) ? data.rows
+        : (Array.isArray(data?.list) ? data.list : []));
+    const target = rows.find((row) => {
+      if (this.roxyClient.dirId && String(row?.dirId || '') === String(this.roxyClient.dirId)) return true;
+      if (this.roxyClient.windowSortNum !== undefined && this.roxyClient.windowSortNum !== '') {
+        return String(row?.windowSortNum ?? row?.sortNum ?? '') === String(this.roxyClient.windowSortNum);
+      }
+      return this.roxyClient.windowName
+        && String(row?.windowName || '').trim() === String(this.roxyClient.windowName).trim();
+    }) || rows[0];
+    return { ip: String(target?.proxyInfo?.lastIp || '').trim() };
+  }
+
+  async authWorkspaces() {
+    await this.ensureConnected();
+    if (!this.context || typeof this.context.cookies !== 'function') return [];
+    const cookies = await this.context.cookies(['https://auth.openai.com/']);
+    return extractAuthWorkspaces(cookies);
+  }
+
   async close() {
     if (this.closed) return { closed: true };
     this.closed = true;
-    if (this.ownsPage && this.page && !this.page.isClosed()) {
-      await this.page.close().catch(() => {});
+    for (const page of this.ownedPages) {
+      if (page && !page.isClosed()) await page.close().catch(() => {});
     }
     if (this.browser) {
       // Playwright connected over CDP 时 close() 只断开连接，不关闭 Roxy profile。
@@ -383,6 +518,8 @@ class RoxyCdpBridge {
     this.context = null;
     this.page = null;
     this.ownsPage = false;
+    this.pagesByOrigin.clear();
+    this.ownedPages.clear();
     return { closed: true };
   }
 }
@@ -407,6 +544,8 @@ async function main() {
         if (request.command === 'request') result = await bridge.request(request);
         else if (request.command === 'navigate') result = await bridge.navigate(request);
         else if (request.command === 'fingerprint') result = await bridge.fingerprint();
+        else if (request.command === 'ip') result = await bridge.ip();
+        else if (request.command === 'auth_workspaces') result = await bridge.authWorkspaces();
         else if (request.command === 'sentinel') result = await bridge.sentinel(request);
         else if (request.command === 'close') result = await bridge.close();
         else throw new Error(`未知 bridge command: ${request.command}`);
@@ -427,7 +566,7 @@ async function main() {
   });
 }
 
-module.exports = { RoxyCdpBridge };
+module.exports = { RoxyCdpBridge, extractAuthWorkspaces };
 
 if (require.main === module) {
   main().catch((error) => {

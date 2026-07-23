@@ -134,6 +134,18 @@ PROTOCOL_PYTHON_PATH=F:\anaconda\anaconda3\envs\tilian\python.exe
 
 协议注册固定按当前补号行传入 `REPLACEMENT_ACCOUNT_ID`，强制 `ROXY_CDP_ENABLED=1`，并以单线程执行 `src/auto/protocol_registration/main.py`。共享 profile 不支持并行协议注册。CDP 模式默认启用 `ROXY_IP_CHECK_ENABLED=1`：首次请求记录出口 IP，后续请求、导航和 Sentinel 生成前重新读取；IP 变化时立即终止本次注册，不刷新指纹、不继续提交旧 OAuth 状态。
 
+补号列表的“协议补号”动作使用独立 CPA 入口，不进入注册状态机：
+
+```env
+OPENAI_WORKSPACE_ID=<真实 OpenAI workspace id>
+PROTOCOL_2FA_PYTHON_PATH=F:\anaconda\anaconda3\envs\tilian\python.exe
+PROTOCOL_2FA_PROJECT_PATH=F:\work\email\gmail_IMAP\src\auto
+PROTOCOL_2FA_MAIN_PATH=F:\work\email\gmail_IMAP\src\auto\protocol_cpa_replacement.py
+SMS_API_PROXY=
+```
+
+协议补号通过 `REPLACEMENT_ACCOUNT_ID` 读取当前账号的邮箱、密码、TOTP、手机号和 SMS API，然后在 Roxy CDP 页面上下文执行 Auth/OAuth 请求；SMS API 使用独立 transport。`OPENAI_WORKSPACE_ID` 与 `ROXY_WORKSPACE_ID` 完全分离，不能将 Roxy workspace `111070` 作为 OpenAI workspace。协议完成 MFA 后会从当前 Auth session 读取脱敏 workspace 列表，显式 workspace 只有在属于当前会话时才使用，否则优先使用当前账号的 personal workspace；没有动态元数据时才回退 `OPENAI_WORKSPACE_ID`。协议补号默认定位 `3/test`，每次 spawn 前刷新 profile 并将新 CDP 注入子进程。
+
 ## RoxyBrowser 参数获取
 
 本项目的 Roxy 自动补号运行时位于 `src/auto/roxy_oauth_login.js`，底层封装在 `src/auto/roxy-browser-client.cjs`。脚本会先读取 `.env` 中的 Roxy 参数，再通过 RoxyBrowser 本地 API 查找并打开目标浏览器窗口。
