@@ -103,11 +103,11 @@ export function createReplacementAccountRepository(db) {
       return db.prepare(`
         SELECT * FROM replacement_accounts
         WHERE deleted_at IS NULL
-          AND status IN ('plus_active', 'cpa_mounted', 'for_sale', 'sold', 'active', 'replaced', 'pending')
+          AND status IN ('registered', 'plus_active', 'cpa_mounted', 'for_sale', 'sold', 'active', 'replaced', 'pending')
         ORDER BY id DESC
       `).all()
         .map(normalizeAccountRecord)
-        .filter((account) => ['plus_active', 'cpa_mounted', 'for_sale', 'sold'].includes(account.status));
+        .filter((account) => ['registered', 'plus_active', 'cpa_mounted', 'for_sale', 'sold'].includes(account.status));
     },
 
     listPlusStatusCheckCandidates() {

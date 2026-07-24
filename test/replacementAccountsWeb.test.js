@@ -97,6 +97,17 @@ test('GET /replacement-automation-logs requires login and serves the automation 
   }
 });
 
+test('protocol registration queue keeps failure details in the dedicated log panel', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+  const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');
+
+  assert.match(appJs, /job\.state === 'succeeded' \? '完成' : '失败'/);
+  assert.doesNotMatch(appJs, /失败：\$\{job\.error/);
+  assert.match(appJs, /function renderCurrentProtocolRegistrationLog\(\)/);
+  assert.match(appJs, /job\.logs/);
+  assert.match(html, /web\/app\.js\?v=registration-token-copy/);
+});
+
 test('web frontend calls replacement account APIs and labels screenshot actions correctly', () => {
   const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
   const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');
@@ -124,6 +135,7 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(html, /执行进度/);
   assert.match(html, /id="protocolLivePanel"/);
   assert.match(html, /id="protocolLiveLog"/);
+  assert.match(html, /src="web\/app\.js\?v=registration-token-copy"/);
   assert.ok(html.indexOf('id="protocolLivePanel"') < html.indexOf('快捷操作'));
   assert.match(html, /id="protocolReplacementLivePanel"/);
   assert.match(html, /id="protocolReplacementLiveLog"/);
@@ -147,6 +159,9 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(appJs, /text\/event-stream/);
   assert.match(appJs, /protocolLiveLog/);
   assert.match(appJs, /protocolReplacementLiveLog/);
+  assert.match(appJs, /job\.logs/);
+  assert.match(appJs, /renderCurrentProtocolRegistrationLog/);
+  assert.doesNotMatch(appJs, /protocol-queue-log/);
   assert.match(appJs, /handleProtocolReplacementLiveEvent/);
   assert.match(appJs, /streamProtocolReplacement/);
   assert.match(appJs, /protocol-log/);
@@ -155,6 +170,7 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(appJs, /一键验活/);
   assert.match(appJs, /healthcheckBannedAccounts/);
   assert.match(appJs, /\/replacement-accounts\/healthcheck-banned/);
+  assert.match(appJs, /registered、plus_active、cpa_mounted、for_sale、sold/);
   assert.match(appJs, /checkPlusStatusAccounts/);
   assert.match(appJs, /\/replacement-accounts\/check-plus-status/);
   assert.match(appJs, /只查询.*已注册/);
@@ -176,6 +192,17 @@ test('replacement protocol live log panel is placed below the replacement table'
   assert.ok(tablePanel >= 0);
   assert.ok(replacementLogPanel > tablePanel);
   assert.ok(registrationLogPanel > replacementLogPanel);
+});
+
+test('protocol registration queue refreshes account rows after a job completes', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+  const queueLoader = appJs.indexOf('async function loadProtocolRegistrationQueue()');
+  const queueLoaderEnd = appJs.indexOf('\n}\n\nfunction renderProtocolRegistrationQueue', queueLoader);
+  const queueLoaderSource = appJs.slice(queueLoader, queueLoaderEnd);
+
+  assert.ok(queueLoader >= 0);
+  assert.match(queueLoaderSource, /completedJobs/);
+  assert.match(queueLoaderSource, /if \(completedJobs\.length\) await loadAccounts\(\)/);
 });
 
 test('replacement action menu puts protocol registration and protocol replacement first', () => {
@@ -377,6 +404,15 @@ test('replacement account table compacts non-email cells and exposes field copy 
   assert.match(css, /\.wrapped-field-text\s*{[^}]*word-break:\s*break-all/s);
   assert.doesNotMatch(css, /\.email-field-text\s*{[^}]*overflow-wrap:\s*anywhere/s);
   assert.match(css, /\.copy-field-button\s*{/);
+});
+
+test('replacement email field exposes a saved registration AT copy action', () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+
+  assert.match(appJs, /data-action="copy-registration-token"/);
+  assert.match(appJs, /copyRegistrationToken/);
+  assert.match(appJs, /\/replacement-accounts\/\$\{account\.id\}\/registration-token/);
+  assert.match(appJs, /AT 未找到/);
 });
 
 test('replacement account frontend exposes real pagination controls and query params', () => {

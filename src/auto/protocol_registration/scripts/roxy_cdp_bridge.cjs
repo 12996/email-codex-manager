@@ -128,7 +128,12 @@ function redactUrlForLog(rawUrl) {
 
 function isTransientPageFetchError(error) {
   const message = String(error?.message || error);
-  return /Failed to fetch|NetworkError|ERR_CONNECTION_(?:CLOSED|RESET|TIMED_OUT)|ERR_PROXY_CONNECTION_FAILED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED/i.test(message);
+  return /Failed to fetch|NetworkError|AbortError|ERR_CONNECTION_(?:CLOSED|RESET|TIMED_OUT)|ERR_PROXY_CONNECTION_FAILED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED/i.test(message);
+}
+
+function isTransientNavigationError(error) {
+  const message = String(error?.message || error);
+  return /Timeout|ERR_CONNECTION_(?:CLOSED|RESET|TIMED_OUT)|ERR_PROXY_CONNECTION_FAILED|ERR_NAME_NOT_RESOLVED|ERR_INTERNET_DISCONNECTED|net::ERR_/i.test(message);
 }
 
 function getPageUrlForLog(page) {
@@ -310,7 +315,7 @@ class RoxyCdpBridge {
     const normalized = normalizeHeaders(payload.headers);
     const page = await this.ensureOrigin(url, timeoutMs);
 
-    for (let attempt = 1; attempt <= 2; attempt += 1) {
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         return await page.evaluate(async ({ url, method, headers, body, allowRedirects, timeoutMs, referer }) => {
           const controller = new AbortController();
@@ -356,12 +361,12 @@ class RoxyCdpBridge {
           console.error(`[Roxy CDP] page request failed: ${diagnostic}`);
           throw error;
         }
-        if (attempt === 2) {
+        if (attempt === 3) {
           console.error(`[Roxy CDP] page request retry exhausted: ${diagnostic}`);
           throw error;
         }
 
-        console.warn(`[Roxy CDP] page request transient failure, retrying (${attempt + 1}/2): ${diagnostic}`);
+        console.warn(`[Roxy CDP] page request transient failure, retrying (${attempt + 1}/3): ${diagnostic}`);
         if (contextDestroyed) {
           await this.page.waitForLoadState('domcontentloaded', { timeout: timeoutMs }).catch(() => {});
         } else {
@@ -379,11 +384,21 @@ class RoxyCdpBridge {
       { warmup: false },
     );
     const normalized = normalizeHeaders(payload.headers);
-    const response = await page.goto(payload.url, {
-      waitUntil: 'domcontentloaded',
-      timeout: timeoutMs,
-      referer: normalized.referer || undefined
-    });
+    let response;
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      try {
+        response = await page.goto(payload.url, {
+          waitUntil: 'domcontentloaded',
+          timeout: timeoutMs,
+          referer: normalized.referer || undefined
+        });
+        break;
+      } catch (error) {
+        if (!isTransientNavigationError(error) || attempt === 3) throw error;
+        console.warn(`[Roxy CDP] navigation transient failure, retrying (${attempt + 1}/3): ${formatPageRequestDiagnostic(page, 'NAVIGATE', payload.url, error)}`);
+        await new Promise((resolve) => setTimeout(resolve, Math.min(1000, Math.max(50, Math.floor(timeoutMs / 10)))));
+      }
+    }
     const finalUrl = page.url();
     if (this.originIsolationEnabled) {
       try {

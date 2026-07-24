@@ -385,6 +385,28 @@ Roxy 页面请求失败: HTTP 401 https://auth.openai.com/api/accounts/email-otp
 
 ---
 
+## [ERR-20260724-001] powershell-empty-pipeline
+
+**Logged**: 2026-07-24T00:10:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tooling
+
+### Summary
+Listener inspection command piped a completed `foreach` block directly, which PowerShell parsed as an empty pipeline element.
+
+### Suggested Fix
+Assign loop output to a variable before formatting it through a pipeline.
+
+### Metadata
+- Related Files: `.learnings/ERRORS.md`
+
+### Resolution
+- **Resolved**: 2026-07-24T00:10:00+08:00
+- **Notes**: Re-ran the probe with `$results = foreach (...) { ... }` and confirmed only port 13400 serves the current frontend.
+
+---
+
 ## [ERR-20260718-003] protocol-registration-no-fresh-email-otp
 
 **Logged**: 2026-07-18T18:15:00+08:00

@@ -1,6 +1,6 @@
 import cookieParser from 'cookie-parser';
 import express from 'express';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,6 +30,7 @@ import {
   createReplacementActivationMethodRepository,
 } from './replacementActivationMethods.js';
 import { createReplacementServices } from './replacementServices.js';
+import { createProtocolRegistrationQueue } from './protocolRegistrationQueue.js';
 import { getTotpCodeInfo } from './totpService.js';
 import { accountsPage, editAccountPage, loginPage } from './views.js';
 
@@ -51,9 +52,39 @@ export function createApp({
   cpaCredentialMonitor = null,
   cpaRepairWorker = null,
   icloudCodeDefaultGmailAccount = config.icloudCodeDefaultGmailAccount,
+  registrationTokenOutputDir = process.env.REGISTRATION_TOKEN_OUTPUT_DIR
+    || join(__dirname, 'auto', 'product_files', 'registration'),
 } = {}) {
   const app = express();
   const requireAuth = createAuthMiddleware();
+  const protocolRegistrationQueue = createProtocolRegistrationQueue({
+    async worker(job) {
+      const account = replacementAccounts.getAccount(job.account.id);
+      if (!account) throw Object.assign(new Error('replacement account not found'), { code: 'ACCOUNT_NOT_FOUND' });
+
+      try {
+        const result = await replacementServices.registerProtocolAccount(account, {
+          onLog(event) {
+            protocolRegistrationQueue.appendLog(job, {
+              level: event?.stream === 'stderr' ? 'error' : 'muted',
+              message: event?.type === 'log' ? event.text : event?.message,
+            });
+          },
+        });
+        const mfaSecret = extractRegistrationMfaSecret(result);
+        if (!mfaSecret) {
+          throw Object.assign(
+            new Error('协议注册子进程未返回已激活的 2FA secret，拒绝写入 registered'),
+            { code: 'PROTOCOL_REGISTER_FAILED' },
+          );
+        }
+        replacementAccounts.markRegistrationSuccess(account.id, { codex_2fa: mfaSecret });
+      } catch (error) {
+        replacementAccounts.recordOperationFailure(account.id, '协议注册', error.message);
+        throw error;
+      }
+    },
+  });
 
   app.use(express.urlencoded({ extended: false }));
   app.use(express.json());
@@ -298,6 +329,27 @@ export function createApp({
       return;
     }
     res.json({ ok: true, account });
+  });
+
+  app.get('/replacement-accounts/:id/registration-token', requireAuth, (req, res) => {
+    const account = replacementAccounts.getAccount(req.params.id);
+    if (!account) {
+      res.status(404).json(errorBody('ACCOUNT_NOT_FOUND', 'replacement account not found'));
+      return;
+    }
+
+    const tokenPath = join(registrationTokenOutputDir, registrationTokenFileName(account.email));
+    if (!existsSync(tokenPath)) {
+      res.status(404).json(errorBody('REGISTRATION_TOKEN_NOT_FOUND', 'AT 未找到'));
+      return;
+    }
+
+    const token = readFileSync(tokenPath, 'utf8').trim();
+    if (!token) {
+      res.status(404).json(errorBody('REGISTRATION_TOKEN_NOT_FOUND', 'AT 未找到'));
+      return;
+    }
+    res.json({ ok: true, token });
   });
 
   app.post('/replacement-accounts', requireAuth, (req, res) => {
@@ -656,73 +708,26 @@ export function createApp({
     }
   });
 
-  app.post('/replacement-accounts/:id/register-protocol', requireAuth, async (req, res) => {
+  app.get('/protocol-registration-queue', requireAuth, (req, res) => {
+    res.json({ ok: true, ...protocolRegistrationQueue.getSnapshot() });
+  });
+
+  app.delete('/protocol-registration-queue', requireAuth, (req, res) => {
+    const cleared = protocolRegistrationQueue.clearPending();
+    res.json({ ok: true, cleared, ...protocolRegistrationQueue.getSnapshot() });
+  });
+
+  app.post('/replacement-accounts/:id/register-protocol', requireAuth, (req, res) => {
     const account = replacementAccounts.getAccount(req.params.id);
     if (!account) {
       res.status(404).json(errorBody('ACCOUNT_NOT_FOUND', 'replacement account not found'));
       return;
     }
-
-    const execute = async (onProgress) => {
-      const liveLog = typeof onProgress === 'function'
-        ? (event) => onProgress(toProtocolLogEvent(account, event))
-        : undefined;
-
-      try {
-        const result = await replacementServices.registerProtocolAccount(account, {
-          onLog: liveLog,
-        });
-        const mfaSecret = extractRegistrationMfaSecret(result);
-        if (!mfaSecret) {
-          throw Object.assign(
-            new Error('协议注册子进程未返回已激活的 2FA secret，拒绝写入 registered'),
-            { code: 'PROTOCOL_REGISTER_FAILED' },
-          );
-        }
-        const updated = replacementAccounts.markRegistrationSuccess(account.id, { codex_2fa: mfaSecret });
-        onProgress?.({
-          type: 'account-result',
-          operation: 'protocol-registration',
-          accountId: account.id,
-          email: account.email,
-          outcome: 'success',
-          message: '协议注册完成，2FA 已写回数据库，账号状态已更新为 registered',
-        });
-        return { ok: true, account: updated, ...(result?.run ? { run: result.run } : {}) };
-      } catch (error) {
-        const updated = replacementAccounts.recordOperationFailure(account.id, '协议注册', error.message);
-        error.account = updated;
-        onProgress?.({
-          type: 'account-result',
-          operation: 'protocol-registration',
-          accountId: account.id,
-          email: account.email,
-          outcome: 'failed',
-          message: error.message || '协议注册失败',
-        });
-        throw error;
-      }
-    };
-
-    if (wantsProgressStream(req)) {
-      await streamProgressResponse(res, async (send) => {
-        send({
-          type: 'start',
-          operation: 'protocol-registration',
-          accountId: account.id,
-          email: account.email,
-          message: `开始协议注册：${account.email}`,
-        });
-        return execute(send);
-      });
-      return;
-    }
-
     try {
-      res.json(await execute());
+      const job = protocolRegistrationQueue.enqueue(account);
+      res.status(202).json({ ok: true, job, ...protocolRegistrationQueue.getSnapshot() });
     } catch (error) {
-      const updated = error.account || replacementAccounts.getAccount(account.id) || account;
-      sendApiError(res, error, { account: updated });
+      sendApiError(res, error, { account });
     }
   });
 
@@ -1123,6 +1128,12 @@ function errorBody(error, message) {
   return { ok: false, error, message };
 }
 
+function registrationTokenFileName(email) {
+  const normalized = String(email || '').trim().toLowerCase();
+  const safe = normalized.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');
+  return `${safe || 'unknown-email'}.txt`;
+}
+
 function extractRegistrationMfaSecret(result) {
   const secret = String(
     result?.childResult?.registrationMfa?.secret
@@ -1146,7 +1157,7 @@ function inferErrorCode(error) {
 function statusForApiError(code) {
   if (code === 'EMAIL_DUPLICATE') return 409;
   if (code === 'ACTIVATION_METHOD_DUPLICATE') return 409;
-  if (code === 'PROTOCOL_REGISTER_BUSY') return 409;
+  if (code === 'PROTOCOL_REGISTER_BUSY' || code === 'PROTOCOL_REGISTER_QUEUED') return 409;
   if (code === 'ACCOUNT_NOT_FOUND') return 404;
   if (code === 'NOTIFICATION_NOT_FOUND') return 404;
   if (

@@ -645,12 +645,19 @@ async function prepareProtocolRoxy({ env, clientFactory = createDefaultProtocolR
   await client.clearLocalCache();
   await client.clearServerCache();
   await client.randomFingerprint();
-  await client.openBrowser();
+  await client.openBrowser(resolveProtocolRoxyOpenArgs(env));
   const connection = await client.getConnectionInfo();
   return {
     cdpEndpoint: connection?.ws,
     dirId: client.dirId,
   };
+}
+
+function resolveProtocolRoxyOpenArgs(env) {
+  const configured = String(env.ROXY_HEADLESS || 'auto').trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(configured)) return ['--headless=new'];
+  if (['0', 'false', 'no', 'off'].includes(configured)) return [];
+  return String(env.ROXY_KEEP_OPEN || '1') === '0' ? ['--headless=new'] : [];
 }
 
 function normalizeEmailCodeApiForAccount(account) {

@@ -30,6 +30,14 @@ function authCookie() {
   return `admin_auth=${encodeURIComponent(`s:${signature.sign('1', config.sessionSecret)}`)}`;
 }
 
+function createDeferred() {
+  let resolve;
+  const promise = new Promise((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
+}
+
 function createTestContext(replacementServices = successfulServices(), overrides = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-service-'));
   const db = createDatabase(join(dir, 'test.db'));
@@ -99,6 +107,29 @@ test('GET /replacement-accounts redirects unauthenticated requests to login', as
 
     assert.equal(response.status, 302);
     assert.equal(response.headers.get('location'), '/login');
+  } finally {
+    await server.close();
+  }
+});
+
+test('GET /replacement-accounts/:id/registration-token returns the saved access token or reports it missing', async () => {
+  const tokenDirectory = mkdtempSync(join(tmpdir(), 'registration-token-'));
+  const { app, replacementAccounts } = createTestContext(undefined, {
+    registrationTokenOutputDir: tokenDirectory,
+  });
+  const account = replacementAccounts.createAccount({ email: 'registered@example.com' });
+  writeFileSync(join(tokenDirectory, 'registered@example.com.txt'), 'saved-access-token\n', 'utf8');
+  const server = await startTestServer(app);
+
+  try {
+    const found = await jsonRequest(server, 'GET', `/replacement-accounts/${account.id}/registration-token`);
+    assert.equal(found.response.status, 200);
+    assert.equal(found.body.token, 'saved-access-token');
+
+    const withoutToken = replacementAccounts.createAccount({ email: 'without-token@example.com' });
+    const missing = await jsonRequest(server, 'GET', `/replacement-accounts/${withoutToken.id}/registration-token`);
+    assert.equal(missing.response.status, 404);
+    assert.equal(missing.body.error, 'REGISTRATION_TOKEN_NOT_FOUND');
   } finally {
     await server.close();
   }
@@ -304,7 +335,7 @@ test('replacement account API returns paginated accounts with filters', async ()
     remark: 'second slot',
     status: 'banned',
   });
-  replacementAccounts.createAccount({
+  const third = replacementAccounts.createAccount({
     email: 'third@example.com',
     remark: 'third slot',
     status: 'pending',
@@ -378,7 +409,7 @@ This means your account can no longer be used.`,
     },
     replacementEmailApiService: {
       async fetchMessages(account, options) {
-        assert.equal(account.email, 'receiver+sold@gmail.com');
+        assert.ok(['receiver+sold@gmail.com', 'receiver+registered@gmail.com'].includes(account.email));
         assert.equal(options.limit, 5);
         return [{
           subject: 'Important update about your ChatGPT account',
@@ -394,8 +425,9 @@ This means your account can no longer be used.`,
     email_code_api: 'https://mail.example.test/code?sold',
     status: 'sold',
   });
-  replacementAccounts.createAccount({
+  const registered = replacementAccounts.createAccount({
     email: 'receiver+registered@gmail.com',
+    email_code_api: 'https://mail.example.test/code?registered',
     status: 'registered',
   });
   const server = await startTestServer(app);
@@ -405,9 +437,10 @@ This means your account can no longer be used.`,
 
     assert.equal(response.response.status, 200);
     assert.equal(response.body.ok, true);
-    assert.equal(response.body.result.checked, 1);
-    assert.equal(response.body.result.banned, 1);
+    assert.equal(response.body.result.checked, 2);
+    assert.equal(response.body.result.banned, 2);
     assert.equal(replacementAccounts.getAccount(created.id).status, 'banned');
+    assert.equal(replacementAccounts.getAccount(registered.id).status, 'banned');
   } finally {
     await server.close();
   }
@@ -1051,7 +1084,7 @@ test('POST /replacement-accounts/:id/register starts registration automation', a
   }
 });
 
-test('POST /replacement-accounts/:id/register-protocol runs protocol registration for the current row', async () => {
+test('POST /replacement-accounts/:id/register-protocol queues protocol registration for the current row', async () => {
   const events = [];
   const services = {
     ...successfulServices(),
@@ -1076,20 +1109,20 @@ test('POST /replacement-accounts/:id/register-protocol runs protocol registratio
   try {
     const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/register-protocol`);
 
-    assert.equal(response.response.status, 200);
+    assert.equal(response.response.status, 202);
     assert.equal(response.body.ok, true);
-    assert.equal(response.body.account.id, created.id);
-    assert.equal(response.body.account.status, 'registered');
-    assert.equal(response.body.account.codex_2fa, 'JBSWY3DPEHPK3PXP');
+    assert.equal(response.body.job.account.id, created.id);
+    assert.equal(response.body.job.state, 'running');
+    await new Promise((resolve) => setTimeout(resolve, 0));
     assert.equal(replacementAccounts.getAccount(created.id).codex_2fa, 'JBSWY3DPEHPK3PXP');
-    assert.deepEqual(response.body.run, { id: 89, status: 'running' });
+    assert.equal(replacementAccounts.getAccount(created.id).status, 'registered');
     assert.deepEqual(events, [['register-protocol', created.id, 'protocol@example.com']]);
   } finally {
     await server.close();
   }
 });
 
-test('POST /replacement-accounts/:id/register-protocol rejects a child success without activated MFA', async () => {
+test('protocol registration queue records a child success without activated MFA as failed', async () => {
   const services = {
     ...successfulServices(),
     async registerProtocolAccount() {
@@ -1108,22 +1141,58 @@ test('POST /replacement-accounts/:id/register-protocol rejects a child success w
   try {
     const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/register-protocol`);
 
-    assert.equal(response.response.status, 502);
-    assert.equal(response.body.error, 'PROTOCOL_REGISTER_FAILED');
-    assert.equal(response.body.account.status, 'unregistered');
-    assert.equal(response.body.account.codex_2fa, null);
-    assert.match(response.body.account.last_error, /协议注册失败/);
+    assert.equal(response.response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const snapshot = await jsonRequest(server, 'GET', '/protocol-registration-queue');
+    assert.equal(snapshot.body.recent[0].state, 'failed');
+    assert.equal(replacementAccounts.getAccount(created.id).status, 'unregistered');
+    assert.equal(replacementAccounts.getAccount(created.id).codex_2fa, null);
+    assert.match(replacementAccounts.getAccount(created.id).last_error, /协议注册失败/);
   } finally {
     await server.close();
   }
 });
 
-test('POST /replacement-accounts/:id/register-protocol streams current protocol logs when requested', async () => {
+test('protocol registration queue exposes live protocol logs for the running job', async () => {
+  const started = createDeferred();
   const services = {
     ...successfulServices(),
-    async registerProtocolAccount(account, options = {}) {
-      options.onLog?.({ type: 'step', step: 'child-start', message: '协议子进程已启动' });
-      options.onLog?.({ type: 'log', stream: 'stdout', text: '[OTP] waiting\n' });
+    async registerProtocolAccount(account, { onLog }) {
+      onLog({ type: 'step', message: '正在准备 Roxy 浏览器环境' });
+      onLog({ type: 'log', stream: 'stdout', text: '等待邮箱验证码\n' });
+      await started.promise;
+      return {
+        ok: true,
+        childResult: {
+          registrationMfa: { secret: 'JBSWY3DPEHPK3PXP', enabled: true },
+        },
+      };
+    },
+  };
+  const { app, replacementAccounts } = createTestContext(services);
+  const created = replacementAccounts.createAccount({ email: 'protocol-logs@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    assert.equal((await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/register-protocol`)).response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const snapshot = await jsonRequest(server, 'GET', '/protocol-registration-queue');
+    assert.deepEqual(snapshot.body.current.logs, [
+      { level: 'muted', message: '正在准备 Roxy 浏览器环境' },
+      { level: 'muted', message: '等待邮箱验证码' },
+    ]);
+  } finally {
+    started.resolve();
+    await server.close();
+  }
+});
+
+test('protocol registration queue exposes queued jobs and clears only waiting jobs', async () => {
+  const services = {
+    ...successfulServices(),
+    async registerProtocolAccount() {
+      await new Promise(() => {});
       return {
         ok: true,
         run: { id: 90, status: 'running' },
@@ -1137,33 +1206,27 @@ test('POST /replacement-accounts/:id/register-protocol streams current protocol 
     },
   };
   const { app, replacementAccounts } = createTestContext(services);
-  const created = replacementAccounts.createAccount({ email: 'protocol-live@example.com' });
+  const first = replacementAccounts.createAccount({ email: 'protocol-live@example.com' });
+  const second = replacementAccounts.createAccount({ email: 'protocol-waiting@example.com' });
   const server = await startTestServer(app);
 
   try {
-    const response = await fetch(`${server.baseUrl}/replacement-accounts/${created.id}/register-protocol`, {
-      method: 'POST',
-      headers: {
-        accept: 'text/event-stream',
-        cookie: authCookie(),
-      },
-    });
-    const text = await response.text();
-
-    assert.equal(response.status, 200);
-    assert.match(response.headers.get('content-type'), /text\/event-stream/);
-    assert.match(text, /"type":"protocol-step"/);
-    assert.match(text, /"type":"protocol-log"/);
-    assert.match(text, /\[OTP\] waiting/);
-    assert.match(text, /2FA 已写回数据库/);
-    assert.match(text, /"type":"complete"/);
-    assert.equal(replacementAccounts.getAccount(created.id).status, 'registered');
+    assert.equal((await jsonRequest(server, 'POST', `/replacement-accounts/${first.id}/register-protocol`)).response.status, 202);
+    assert.equal((await jsonRequest(server, 'POST', `/replacement-accounts/${second.id}/register-protocol`)).response.status, 202);
+    const duplicate = await jsonRequest(server, 'POST', `/replacement-accounts/${second.id}/register-protocol`);
+    assert.equal(duplicate.response.status, 409);
+    const beforeClear = await jsonRequest(server, 'GET', '/protocol-registration-queue');
+    assert.equal(beforeClear.body.current.account.id, first.id);
+    assert.deepEqual(beforeClear.body.waiting.map((job) => job.account.id), [second.id]);
+    const cleared = await jsonRequest(server, 'DELETE', '/protocol-registration-queue');
+    assert.deepEqual(cleared.body.cleared.map((job) => job.account.id), [second.id]);
+    assert.equal(cleared.body.current.account.id, first.id);
   } finally {
     await server.close();
   }
 });
 
-test('POST /replacement-accounts/:id/register-protocol records failure without changing account status', async () => {
+test('protocol registration queue preserves account status when a job fails', async () => {
   const services = {
     ...successfulServices(),
     async registerProtocolAccount() {
@@ -1177,10 +1240,10 @@ test('POST /replacement-accounts/:id/register-protocol records failure without c
   try {
     const response = await jsonRequest(server, 'POST', `/replacement-accounts/${created.id}/register-protocol`);
 
-    assert.equal(response.response.status, 502);
-    assert.equal(response.body.error, 'PROTOCOL_REGISTER_FAILED');
-    assert.equal(response.body.account.status, 'unregistered');
-    assert.match(response.body.account.last_error, /协议注册失败/);
+    assert.equal(response.response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(replacementAccounts.getAccount(created.id).status, 'unregistered');
+    assert.match(replacementAccounts.getAccount(created.id).last_error, /协议注册失败/);
   } finally {
     await server.close();
   }

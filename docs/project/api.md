@@ -816,7 +816,7 @@ web/automation-logs.js
 
 补号管理页账号列表支持服务端分页、状态筛选和关键词搜索；前端分页控件支持每页 10/20/50 条、上一页和下一页。
 补号管理页主表会压缩显示除邮箱、备注和开通时间外的长字段：默认只展示前 6 位并提供“复制”按钮复制完整原始值；邮箱、备注和开通时间完整显示，并按约 12 个字符宽度换行，避免被压成几字符一行或把操作列挤出可视区域。主表不显示“状态更新时间”“最后操作”“更新时间”三列，这些信息仍可通过详情查看。
-补号管理页提供“一键验活”按钮，会批量检查 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 状态账号最近 5 封邮件中的 ChatGPT deactivation 通知；命中后自动将账号状态改为 `banned`。
+补号管理页提供“一键验活”按钮，会批量检查 `registered`、`plus_active`、`cpa_mounted`、`for_sale`、`sold` 状态账号最近 5 封邮件中的 ChatGPT deactivation 通知；命中后自动将账号状态改为 `banned`。
 
 补号管理页支持直接配置公开验证码接口：
 
@@ -1030,6 +1030,19 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 }
 ```
 
+### GET `/replacement-accounts/:id/registration-token`
+
+读取该补号账号协议注册或普通注册后保存的本地 access token 文件。接口要求管理员登录，按账号邮箱从 `REGISTRATION_TOKEN_OUTPUT_DIR/<email>.txt` 读取并返回纯 token；文件不存在或为空时返回 `404 REGISTRATION_TOKEN_NOT_FOUND` 和“AT 未找到”。
+
+成功：
+
+```json
+{
+  "ok": true,
+  "token": "eyJ..."
+}
+```
+
 ### POST `/replacement-accounts`
 
 新增补号账号。
@@ -1174,7 +1187,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 
 后端行为：
 
-1. 筛选未软删除且状态为 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 的补号账号。
+1. 筛选未软删除且状态为 `registered`、`plus_active`、`cpa_mounted`、`for_sale`、`sold` 的补号账号。
 2. 只处理配置了非空 `email_code_api` 的账号；没有配置的账号直接跳过，不读取 IMAP 或默认 Gmail 收件箱。
 3. 对每个可查询账号 GET 请求其 `email_code_api`，读取接口返回的完整邮件内容。
 4. 邮件正文、摘要或主题同时包含目标账号邮箱、`Your account has been deactivated`，以及 `violated our Terms and Usage Policies` 或 `This means your account can no longer be used` 时，判定账号已封禁。
@@ -1905,8 +1918,11 @@ REPLACEMENT_AUTOMATION_LOG_MAX_RUNS=30
 | 查询 Plus 状态 | `POST /replacement-accounts/check-plus-status` | 只查询 `registered` 账号，命中订阅邮件后标记 `plus_active`，支持 SSE 进度 |
 | 获取验证码 | `POST /replacement-accounts/:id/fetch-sms-code` | 实时返回验证码，不入库 |
 | 获取 JSON | `POST /replacement-accounts/:id/fetch-json` | 保存 JSON 原文 |
+| 复制注册 AT | `GET /replacement-accounts/:id/registration-token` | 读取已保存的本地 token 文件；不存在时返回“AT 未找到” |
 | 注册 OpenAI | `POST /replacement-accounts/:id/register` | 启动注册自动化子进程，邮箱验证码走 POST 内部接口 |
-| 协议注册 | `POST /replacement-accounts/:id/register-protocol` | 刷新 Roxy 指纹后启动 `tilian` 协议注册，成功标记 `registered` |
+| 协议注册 | `POST /replacement-accounts/:id/register-protocol` | 加入 FIFO 单并发协议注册队列，返回 `202`；成功标记 `registered` |
+| 协议注册队列 | `GET /protocol-registration-queue` | 返回当前任务、等待任务、最近结果及每个任务的实时子进程日志；前端只在当前协议注册日志面板显示细节 |
+| 清空协议注册队列 | `DELETE /protocol-registration-queue` | 只清空尚未开始的等待任务，不中断当前任务 |
 | 自动补号 | `POST /replacement-accounts/:id/replace` | 成功后补号次数加一 |
 | 2FA补号 | `POST /replacement-accounts/:id/replace-2fa` | 启动密码 + 2FA 补号自动化，成功后补号次数加一 |
 | 协议补号 | `POST /replacement-accounts/:id/replace-2fa-protocol` | 启动独立 CPA 2FA 协议，上传并复查 CPA 后成功 |

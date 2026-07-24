@@ -382,7 +382,9 @@ test('registerProtocolAccount keeps MFA result parseable but redacts it from liv
 
 test('registerProtocolAccount performs the Roxy refresh sequence before the protocol child', async () => {
   const steps = [];
+  let openArgs;
   const services = createReplacementServices({
+    baseEnv: { ROXY_KEEP_OPEN: '0' },
     protocolPythonPath: 'python.exe',
     protocolProjectPath: 'protocol-project',
     protocolMainPath: 'protocol-project/main.py',
@@ -393,7 +395,10 @@ test('registerProtocolAccount performs the Roxy refresh sequence before the prot
       async clearLocalCache() { steps.push('clear-local'); },
       async clearServerCache() { steps.push('clear-server'); },
       async randomFingerprint() { steps.push('random-fingerprint'); },
-      async openBrowser() { steps.push('open'); },
+      async openBrowser(args) {
+        steps.push('open');
+        openArgs = args;
+      },
       async getConnectionInfo() {
         steps.push('connection-info');
         return { ws: 'ws://fresh' };
@@ -421,6 +426,7 @@ test('registerProtocolAccount performs the Roxy refresh sequence before the prot
     'connection-info',
     'spawn',
   ]);
+  assert.deepEqual(openArgs, ['--headless=new']);
 });
 
 test('registerProtocolAccount forwards current preparation and child output to the live log callback', async () => {

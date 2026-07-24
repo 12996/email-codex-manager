@@ -4,6 +4,9 @@
 
 | 日期 | 主要工作 | 状态 | 入口 |
 |---|---|---|---|
+| 2026-07-24 | 已注册账号纳入一键验活 | done | `2026-07-24-registered-account-healthcheck.md` |
+| 2026-07-24 | 协议注册日志面板缓存修复 | done | `2026-07-24-protocol-registration-log-panel-cache.md` |
+| 2026-07-23 | 协议注册单并发队列 | done | `2026-07-23-protocol-registration-queue.md` |
 | 2026-07-23 | 协议注册本地服务端口同步 | done | `2026-07-23-protocol-registration-local-port.md` |
 | 2026-07-20 | Gmail-IMAP 协议补号操作、按钮顺序、点击反馈与实时日志 | done | `2026-07-20-protocol-replacement-operation.md` |
 | 2026-05-18 | 文档体系初始化 | done | `2026-05-18-文档体系初始化.md` |

@@ -126,6 +126,17 @@
       <div id="protocolLiveLog" class="protocol-live-log" role="log" aria-live="polite" aria-atomic="false"></div>
     </section>
 
+    <section id="protocolRegistrationQueuePanel" class="panel protocol-live-panel">
+      <div class="protocol-live-header">
+        <div>
+          <h2>协议注册队列</h2>
+          <p id="protocolRegistrationQueueSummary" class="muted">暂无协议注册任务</p>
+        </div>
+        <button id="clearProtocolRegistrationQueue" class="ghost" type="button">清空等待队列</button>
+      </div>
+      <div id="protocolRegistrationQueueList" class="protocol-live-log" aria-live="polite"></div>
+    </section>
+
     <section class="dashboard-grid">
       <article class="panel compact">
         <h2>快捷操作</h2>
@@ -242,6 +253,6 @@
 
   <div id="toast" role="status" aria-live="polite"></div>
   <script src="web/notifications.js"></script>
-  <script src="web/app.js"></script>
+  <script src="web/app.js?v=registration-token-copy"></script>
 </body>
 </html>

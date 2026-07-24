@@ -4,6 +4,8 @@ const state = {
   filtered: [],
   selectedIds: new Set(),
   activity: [],
+  protocolRegistrationQueue: { current: null, waiting: [], recent: [] },
+  seenProtocolRegistrationTerminalJobs: new Set(),
   pagination: {
     page: 1,
     pageSize: 10,
@@ -51,7 +53,7 @@ const tableFieldLimits = Object.fromEntries(
 
 const $ = (selector) => document.querySelector(selector);
 let progressActionRunning = false;
-let protocolRegistrationRunning = false;
+let protocolRegistrationQueueTimer = null;
 let protocolReplacementRunning = false;
 
 document.addEventListener('DOMContentLoaded', () => {
@@ -93,6 +95,7 @@ function bindEvents() {
     renderActivity();
   });
   $('#clearProtocolLiveLog').addEventListener('click', clearProtocolLiveLog);
+  $('#clearProtocolRegistrationQueue').addEventListener('click', clearProtocolRegistrationQueue);
   $('#clearProtocolReplacementLiveLog').addEventListener('click', clearProtocolReplacementLiveLog);
   document.querySelectorAll('[data-close]').forEach((button) => {
     button.addEventListener('click', () => button.closest('dialog').close());
@@ -106,6 +109,7 @@ function bindEvents() {
 async function loadInitialData() {
   await loadActivationMethods();
   await loadAccounts();
+  await loadProtocolRegistrationQueue();
 }
 
 async function loadActivationMethods() {
@@ -178,7 +182,7 @@ function accountRow(account) {
   return `
     <tr>
       <td><input class="row-check" type="checkbox" data-id="${account.id}" ${checked}></td>
-      <td>${renderEmailField(account.email)}<div class="muted">ID: ${account.id}</div></td>
+      <td>${renderEmailField(account)}<div class="muted">ID: ${account.id}</div>${renderProtocolQueueState(account.id)}</td>
       <td>${renderLimitedField(account, 'phone', account.phone, { className: 'field-raw' })}</td>
       <td>${renderLimitedField(account, 'sms_api', account.sms_api, { className: 'field-raw' })}</td>
       <td>${renderLimitedField(account, 'email_code_api', account.email_code_api, { className: 'field-raw' })}</td>
@@ -272,8 +276,11 @@ function renderActivationMethodSelect(account) {
   `;
 }
 
-function renderEmailField(value) {
-  return renderWrappedField(value, { className: 'email-main field-raw' });
+function renderEmailField(account) {
+  return `
+    ${renderWrappedField(account?.email, { className: 'email-main field-raw' })}
+    <div><button class="copy-field-button registration-token-button" type="button" data-action="copy-registration-token" data-id="${account.id}">复制 AT</button></div>
+  `;
 }
 
 function renderWrappedField(value, options = {}) {
@@ -356,6 +363,7 @@ async function handleAction(action, id, dataset = {}) {
   if (action === 'toggle-public-code') return togglePublicCode(account);
   if (action === 'copy-public-code-url') return copyPublicCodeUrl(account);
   if (action === 'copy-field') return copyAccountField(account, dataset.field);
+  if (action === 'copy-registration-token') return copyRegistrationToken(account);
 }
 
 function openAccountDialog(account = null) {
@@ -467,6 +475,26 @@ async function copyAccountField(account, field) {
     toast('字段完整内容已复制');
   } catch (error) {
     prompt('复制字段完整内容', text);
+  }
+}
+
+async function copyRegistrationToken(account) {
+  try {
+    const result = await api(`/replacement-accounts/${account.id}/registration-token`);
+    const token = String(result.token || '').trim();
+    if (!token) {
+      toast('AT 未找到');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(token);
+      addActivity('复制 AT', account.email);
+      toast('AT 已复制');
+    } catch {
+      prompt('复制 AT', token);
+    }
+  } catch (error) {
+    toast(/AT 未找到/.test(error.message) ? 'AT 未找到' : error.message);
   }
 }
 
@@ -676,29 +704,84 @@ async function registerAccount(account) {
 }
 
 async function registerProtocolAccount(account) {
-  if (protocolRegistrationRunning) {
-    toast('已有协议注册正在执行');
-    return;
-  }
-
-  protocolRegistrationRunning = true;
-  resetProtocolLiveLog(account);
   try {
-    await streamProtocolRegistration(account);
-    toast('协议注册已完成，Roxy 指纹已刷新');
-    await loadAccounts();
+    await api(`/replacement-accounts/${account.id}/register-protocol`, { method: 'POST' });
+    toast('协议注册已加入队列');
+    await loadProtocolRegistrationQueue();
   } catch (error) {
-    appendProtocolLiveLog(`执行失败：${error.message}`, 'error');
-    setProtocolLiveSummary('协议注册失败', 'error');
     toast(error.message);
-    await loadAccounts();
-  } finally {
-    protocolRegistrationRunning = false;
   }
 }
 
+function renderProtocolQueueState(accountId) {
+  const current = state.protocolRegistrationQueue.current;
+  if (current?.account?.id === accountId) return '<div class="muted">协议注册：注册中</div>';
+  if (state.protocolRegistrationQueue.waiting.some((job) => job.account?.id === accountId)) return '<div class="muted">协议注册：排队中</div>';
+  return '';
+}
+
+async function loadProtocolRegistrationQueue() {
+  try {
+    const queue = await api('/protocol-registration-queue');
+    const completedJobs = (queue.recent || []).filter((job) => (
+      (job.state === 'succeeded' || job.state === 'failed')
+      && !state.seenProtocolRegistrationTerminalJobs.has(job.id)
+    ));
+    completedJobs.forEach((job) => state.seenProtocolRegistrationTerminalJobs.add(job.id));
+    state.protocolRegistrationQueue = queue;
+    renderProtocolRegistrationQueue();
+    renderCurrentProtocolRegistrationLog();
+    if (completedJobs.length) await loadAccounts();
+    else renderAccounts();
+    const hasJobs = queue.current || queue.waiting?.length;
+    if (hasJobs && !protocolRegistrationQueueTimer) {
+      protocolRegistrationQueueTimer = setInterval(loadProtocolRegistrationQueue, 2000);
+    } else if (!hasJobs && protocolRegistrationQueueTimer) {
+      clearInterval(protocolRegistrationQueueTimer);
+      protocolRegistrationQueueTimer = null;
+    }
+  } catch (error) {
+    console.error('加载协议注册队列失败', error);
+  }
+}
+
+function renderProtocolRegistrationQueue() {
+  const queue = state.protocolRegistrationQueue;
+  $('#protocolRegistrationQueueSummary').textContent = `执行中 ${queue.current ? 1 : 0} · 等待 ${queue.waiting?.length || 0} · 最近 ${queue.recent?.length || 0}`;
+  const items = [
+    ...(queue.current ? [{ ...queue.current, label: '注册中' }] : []),
+    ...(queue.waiting || []).map((job, index) => ({ ...job, label: `排队中（${index + 1}）` })),
+    ...(queue.recent || []).map((job) => ({ ...job, label: job.state === 'succeeded' ? '完成' : '失败' })),
+  ];
+  $('#protocolRegistrationQueueList').innerHTML = items.length
+    ? items.map((job) => `<div class="progress-log-entry ${job.state === 'failed' ? 'error' : ''}">${escapeHtml(job.label)} · ${escapeHtml(job.account.email)}（ID: ${job.account.id}）</div>`).join('')
+    : '<div class="muted">暂无协议注册任务</div>';
+}
+
+function renderCurrentProtocolRegistrationLog() {
+  const queue = state.protocolRegistrationQueue;
+  const job = queue.current || queue.recent?.[0];
+  if (!job) {
+    clearProtocolLiveLog();
+    return;
+  }
+
+  const isCurrent = job === queue.current;
+  const outcome = job.state === 'failed' ? '失败' : job.state === 'succeeded' ? '完成' : '注册中';
+  $('#protocolLiveAccount').textContent = `${isCurrent ? '当前账号' : '最近账号'}：${job.account.email}（ID: ${job.account.id}）`;
+  setProtocolLiveSummary(`协议注册${outcome}`, job.state === 'failed' ? 'error' : job.state === 'succeeded' ? 'success' : 'muted');
+  $('#protocolLiveLog').innerHTML = (job.logs || []).map((log) => (
+    `<div class="progress-log-entry ${escapeHtml(log.level)}">${escapeHtml(log.message)}</div>`
+  )).join('') || '<div class="muted">暂无日志输出</div>';
+}
+
+async function clearProtocolRegistrationQueue() {
+  await api('/protocol-registration-queue', { method: 'DELETE' });
+  await loadProtocolRegistrationQueue();
+}
+
 async function healthcheckBannedAccounts() {
-  if (!confirm('确认对 plus_active、cpa_mounted、for_sale、sold 状态账号执行一键验活？只查询已配置 email_code_api 的账号，未配置的账号会跳过。')) return;
+  if (!confirm('确认对 registered、plus_active、cpa_mounted、for_sale、sold 状态账号执行一键验活？只查询已配置 email_code_api 的账号，未配置的账号会跳过。')) return;
   await runProgressAction({
     title: '一键验活进度',
     endpoint: '/replacement-accounts/healthcheck-banned',

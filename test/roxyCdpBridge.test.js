@@ -58,6 +58,30 @@ test('Roxy CDP request retries a transient page fetch failure', async () => {
   assert.equal(attempts, 2);
 });
 
+test('Roxy CDP navigation retries transient timeout failures before succeeding', async () => {
+  const bridge = new RoxyCdpBridge();
+  let attempts = 0;
+  bridge.page = {
+    isClosed: () => false,
+    url: () => 'https://chatgpt.com/',
+    async goto(url) {
+      attempts += 1;
+      if (attempts < 3) throw new Error('page.goto: Timeout 30000ms exceeded');
+      return {
+        status: () => 200,
+        statusText: () => 'OK',
+        url: () => url,
+        headers: () => ({}),
+      };
+    },
+  };
+
+  const result = await bridge.navigate({ url: 'https://chatgpt.com/', timeout_ms: 1 });
+
+  assert.equal(result.status_code, 200);
+  assert.equal(attempts, 3);
+});
+
 test('Roxy CDP keeps separate pages for ChatGPT, Auth, and Sentinel origins', async () => {
   const pages = [];
   const createPage = (name) => {

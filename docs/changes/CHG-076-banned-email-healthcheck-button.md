@@ -18,7 +18,7 @@
   - `src/accountHealthcheckService.js`，集中处理候选账号筛选、收件箱路由、封禁邮件匹配和批量结果汇总。
   - `replacementAccounts.listBannedHealthcheckCandidates()` 和 `markBannedByHealthcheck()`。
 - 修改：
-  - 一键验活只检测 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 状态账号。
+  - 一键验活检测 `registered`、`plus_active`、`cpa_mounted`、`for_sale`、`sold` 状态账号。
   - 命中封禁邮件时将账号状态写为 `banned`，状态备注写入“一键验活检测到 ChatGPT deactivation 邮件”。
   - Gmail plus alias 使用主 Gmail 收件箱；iCloud 账号使用 `ICLOUD_CODE_GMAIL_ACCOUNT` 对应 Gmail 收件箱。
 - 删除：
@@ -26,7 +26,7 @@
 
 ## 验收标准
 
-- [x] 点击“一键验活”后批量检测 `plus_active`、`cpa_mounted`、`for_sale`、`sold` 状态账号。
+- [x] 点击“一键验活”后批量检测 `registered`、`plus_active`、`cpa_mounted`、`for_sale`、`sold` 状态账号。
 - [x] 每个账号只读取最近 5 封邮件。
 - [x] 邮件同时包含目标账号邮箱和 ChatGPT deactivation 稳定文案时，账号自动变为 `banned`。
 - [x] 非目标邮箱或普通邮件不误封。
