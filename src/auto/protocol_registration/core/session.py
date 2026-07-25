@@ -4,6 +4,7 @@ curl_cffi Session 封装
 统一管理 Cookie、请求头和 TLS 指纹
 """
 import uuid
+import logging
 from curl_cffi.requests import Session
 from core.roxy_cdp import RoxyCdpClient
 
@@ -11,6 +12,8 @@ from config import (
     USER_AGENT, SEC_CH_UA, SEC_CH_UA_PLATFORM, SEC_CH_UA_MOBILE,
     IMPERSONATE, REQUEST_TIMEOUT, pick_proxy,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class BrowserSession:
@@ -107,7 +110,17 @@ class BrowserSession:
         ip_reader = getattr(self._roxy_cdp, "ip", None)
         if not callable(ip_reader):
             return
-        info = ip_reader() or {}
+        try:
+            info = ip_reader() or {}
+        except Exception as exc:
+            # Roxy 元数据接口不可用不代表当前 CDP 页面或其出口已变化。
+            # 保留已观察到的 IP；只有拿到新值且确认不一致时才中断 OAuth。
+            logger.warning(
+                "Roxy 出口 IP 检查暂不可用，继续复用当前 CDP 会话: %s: %s",
+                type(exc).__name__,
+                str(exc)[:160],
+            )
+            return
         current_ip = str(info.get("ip") or "").strip() if isinstance(info, dict) else ""
         if not current_ip:
             return

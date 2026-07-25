@@ -7,6 +7,7 @@ OpenAI Auth 模块
 import json
 import logging
 import time
+import uuid
 
 from core.session import BrowserSession
 from core.sentinel import (
@@ -227,11 +228,113 @@ def build_sentinel_header(session: BrowserSession, sentinel_resp: dict, flow: st
     return header_value, so_header
 
 
+def authorize_signup(session: BrowserSession, email: str, sentinel_header: str) -> dict:
+    """提交邮箱并将 Auth 会话推进到注册验证码阶段。"""
+    url = "https://auth.openai.com/api/accounts/authorize/continue"
+    headers = session.get_auth_headers(referer="https://auth.openai.com/log-in")
+    headers["openai-sentinel-token"] = sentinel_header
+    headers["x-access-flow-invocation-id"] = str(uuid.uuid4())
+    body = json.dumps({
+        "username": {"kind": "email", "value": email},
+        "screen_hint": "signup",
+    })
+
+    logger.info("[步骤5] 提交注册邮箱并进入验证码阶段: %s", email)
+    resp = session.post(url, headers=headers, data=body)
+    if resp.status_code != 200:
+        logger.error("[步骤5] 请求失败, 状态码: %s", resp.status_code)
+        logger.error("[步骤5] 响应内容: %s", resp.text)
+        resp.raise_for_status()
+    data = resp.json()
+    logger.info("[步骤5] 注册邮箱已提交, 下一页: %s", data.get("page", {}).get("type"))
+    return data
+
+
+def get_create_account_page(session: BrowserSession) -> None:
+    """显式进入密码页，使 Auth 会话切换到 username_password_create 阶段。"""
+    url = "https://auth.openai.com/create-account/password"
+    headers = session.get_auth_navigate_headers(
+        referer="https://auth.openai.com/email-verification"
+    )
+    headers["sec-fetch-site"] = "same-origin"
+    logger.info("[步骤6] 访问创建账号密码页...")
+    if getattr(session, "uses_roxy_cdp", False):
+        resp = session.navigate(url, headers=headers, allow_redirects=True)
+    else:
+        resp = session.get(url, headers=headers, allow_redirects=True)
+    resp.raise_for_status()
+    if "/create-account/password" not in str(resp.url):
+        raise RuntimeError(f"Auth 未进入密码页，实际落点: {resp.url}")
+    logger.info("[步骤6] 已进入创建账号密码页")
+
+
+def follow_auth_continue(session: BrowserSession, result: dict, expected_page: str | tuple[str, ...]) -> None:
+    """跟随 Auth JSON 返回的 GET continue_url，并校验下一页面阶段。"""
+    page_type = str(result.get("page", {}).get("type") or "")
+    expected_pages = (expected_page,) if isinstance(expected_page, str) else expected_page
+    if page_type not in expected_pages:
+        raise RuntimeError(
+            f"Auth 阶段错误：期望 {' 或 '.join(expected_pages)}，实际 {page_type or 'unknown'}"
+        )
+
+    continue_url = str(result.get("continue_url") or "")
+    method = str(result.get("method") or "").upper()
+    if not continue_url or method != "GET":
+        raise RuntimeError(f"Auth 未返回可跟随的 {page_type} 页面")
+
+    headers = session.get_auth_navigate_headers(referer="https://auth.openai.com/")
+    if getattr(session, "uses_roxy_cdp", False):
+        resp = session.navigate(continue_url, headers=headers, allow_redirects=True)
+    else:
+        resp = session.get(continue_url, headers=headers, allow_redirects=True)
+    resp.raise_for_status()
+    logger.info("[Auth] 已进入 %s 页面, 落点: %s", page_type, resp.url)
+
+
+def register_user(
+    session: BrowserSession,
+    email: str,
+    password: str,
+    sentinel_header: str,
+    so_header: str | None = None,
+) -> dict:
+    """在创建密码阶段提交补号账号数据库中的密码。"""
+    url = "https://auth.openai.com/api/accounts/user/register"
+    headers = session.get_auth_headers(
+        referer="https://auth.openai.com/create-account/password"
+    )
+    headers["openai-sentinel-token"] = sentinel_header
+    headers["x-access-flow-invocation-id"] = str(uuid.uuid4())
+    if so_header:
+        headers["openai-sentinel-so-token"] = so_header
+    body = json.dumps({"password": password, "username": email})
+
+    logger.info("[步骤7] 提交注册密码, 邮箱: %s", email)
+    resp = session.post(url, headers=headers, data=body)
+    if resp.status_code != 200:
+        logger.error("[步骤7] 请求失败, 状态码: %s", resp.status_code)
+        logger.error("[步骤7] 响应内容: %s", resp.text)
+        resp.raise_for_status()
+    data = resp.json()
+    logger.info("[步骤9] 注册密码已提交, 下一页: %s", data.get("page", {}).get("type"))
+    return data
+
+
+def send_email_otp(session: BrowserSession) -> None:
+    """密码提交成功后触发邮箱 OTP，进入验证码校验阶段。"""
+    url = "https://auth.openai.com/api/accounts/email-otp/send"
+    headers = session.get_auth_navigate_headers(
+        referer="https://auth.openai.com/create-account/password"
+    )
+    headers["sec-fetch-site"] = "same-origin"
+    headers["sec-fetch-user"] = "?1"
+    logger.info("[步骤8] 触发邮箱验证码发送...")
+    resp = session.get(url, headers=headers, allow_redirects=True)
+    resp.raise_for_status()
+
+
 # ============================================================
-# 密码分支专用函数（已停用，保留作备用）
-# 当前 OpenAI 主流程：follow_authorize 自动跳到 /email-verification 并发 OTP，
-# 不再走密码注册路径。如未来需要恢复密码注册（点击"使用密码继续"按钮的分支），
-# 可参考下方实现解封即可。
+# 历史密码分支辅助函数（保留作参考）
 # ============================================================
 
 # def get_create_account_page(session: BrowserSession) -> None:
@@ -324,6 +427,7 @@ def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str 
     headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
     if sentinel_header:
         headers["openai-sentinel-token"] = sentinel_header
+    headers["x-access-flow-invocation-id"] = str(uuid.uuid4())
 
     body = json.dumps({"code": code})
 
@@ -359,9 +463,11 @@ def create_account(session: BrowserSession, name: str, birthday: str, sentinel_h
 
     headers = session.get_auth_headers(referer="https://auth.openai.com/about-you")
     headers["openai-sentinel-token"] = sentinel_header
-    if so_header:
-        headers["openai-sentinel-so-token"] = so_header
-        logger.info(f"[步骤12] 已添加 openai-sentinel-so-token 头")
+    if not so_header:
+        raise RuntimeError("oauth_create_account 缺少 openai-sentinel-so-token，拒绝提交资料")
+    headers["openai-sentinel-so-token"] = so_header
+    headers["x-access-flow-invocation-id"] = str(uuid.uuid4())
+    logger.info("[步骤12] 已添加 Sentinel SO token 与 access-flow invocation id")
 
     body = json.dumps({
         "name": name,

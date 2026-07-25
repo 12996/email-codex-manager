@@ -21,8 +21,12 @@ from core.session import BrowserSession
 from core.chatgpt_auth import get_providers, get_csrf_token, signin_openai
 from core.openai_auth import (
     follow_authorize,
+    authorize_signup,
+    follow_auth_continue,
+    get_create_account_page,
     request_sentinel_token,
     build_sentinel_header,
+    register_user,
     validate_email_otp,
     create_account,
 )
@@ -50,6 +54,15 @@ logger = logging.getLogger(__name__)
 
 _FINALIZE_SESSION_MAX_ATTEMPTS = 5
 _FINALIZE_SESSION_BACKOFF_BASE = 2.0
+
+
+def resolve_registration_password(env: dict | None = None) -> str:
+    """读取协议注册必须提交的补号账号密码。"""
+    values = os.environ if env is None else env
+    password = str(values.get("ROXY_REGISTER_PASSWORD") or "").strip()
+    if not password:
+        raise RuntimeError("ROXY_REGISTER_PASSWORD 未配置，协议注册无法设置账号密码")
+    return password
 
 
 def _sync_replacement_registration_status(email: str) -> None:
@@ -220,11 +233,9 @@ def run_registration(
     batch_dir=None,
 ):
     """
-    执行完整的 ChatGPT 注册流程（OTP-only，无密码）。
+    执行完整的 ChatGPT 密码注册流程。
 
-    OpenAI 当前默认流程：signin 时携带 login_hint+screen_hint=login_or_signup
-    → follow_authorize 重定向链自动落到 /email-verification 并触发 OTP 发送
-    → 用户输入验证码 → validate_email_otp → about-you 提交昵称生日 → 完成。
+    流程：signup authorize → 创建密码 → 邮箱 OTP → about-you → 完成。
 
     Args:
         email: 注册邮箱
@@ -233,6 +244,8 @@ def run_registration(
         proxy: 代理地址（不传则从 PROXY_POOL 随机抽）
         otp_code: 邮箱验证码（如果为None，会等待手动输入）
     """
+    registration_password = resolve_registration_password()
+
     # 创建浏览器会话（proxy=None 时自动从 config.PROXY_POOL 随机抽一个）
     session = BrowserSession(proxy=proxy)
 
@@ -266,7 +279,15 @@ def run_registration(
         time.sleep(0.5)
 
         # 步骤3: 发起 OAuth signin
-        authorize_url = signin_openai(session, csrf_token, email)
+        # 不预填 login_hint，避免 Auth 在初始跳转中固定到无密码邮箱分支。
+        authorize_url = signin_openai(
+            session,
+            csrf_token,
+            email,
+            screen_hint="signup",
+            prompt="",
+            include_login_hint=False,
+        )
         time.sleep(0.5)
 
         # 记录"OTP 触发"前的时间戳，自动取信箱时只看此后的邮件，
@@ -275,30 +296,60 @@ def run_registration(
 
         # ==================== 阶段2: OpenAI Auth ====================
         # 步骤4: 跟随 authorize URL（建立 auth.openai.com 的 cookies）
-        # 由于步骤3已携带 login_hint + screen_hint=login_or_signup，
-        # 重定向链会直接走到 /email-verification 并自动触发 OTP 发送，
-        # 不需要 /create-account/password、register_user、单独 send_email_otp 调用。
         follow_authorize(session, authorize_url)
         time.sleep(2)
 
-        # ==================== 阶段3: 验证码验证 ====================
-        # 步骤9: 获取 Sentinel Token（authorize_continue，用于验证码提交）
-        sentinel_resp_9 = request_sentinel_token(session, "authorize_continue")
-        sentinel_header_9, _ = build_sentinel_header(session, sentinel_resp_9, "authorize_continue")
-        time.sleep(0.3)
+        # 步骤5: 先提交邮箱建立 Auth 注册会话；不能跳过该状态转换直提交密码。
+        sentinel_resp_5 = request_sentinel_token(session, "authorize_continue")
+        sentinel_header_5, _ = build_sentinel_header(
+            session, sentinel_resp_5, "authorize_continue"
+        )
+        signup_result = authorize_signup(session, email, sentinel_header_5)
+        logger.info(
+            "[步骤5] Auth 返回: page=%s method=%s has_continue_url=%s",
+            signup_result.get("page", {}).get("type"),
+            signup_result.get("method"),
+            bool(signup_result.get("continue_url")),
+        )
+        # Auth 先把浏览器落到邮箱验证页；密码分支必须在同一 Auth 会话中
+        # 从这里进入。不能从 authorize 响应跳过该页面直接提交 user/register。
+        follow_auth_continue(session, signup_result, ("email_otp_send", "email_otp_verification"))
+        get_create_account_page(session)
+        time.sleep(0.5)
 
-        # 等待验证码：USE_EMAIL_SERVICE=True 时自动从 Outlook 取件，否则人工输入
-        if otp_code is None:
+        # ==================== 阶段3: 设置密码 ====================
+        sentinel_resp_7 = request_sentinel_token(session, "username_password_create")
+        sentinel_header_7, so_header_7 = build_sentinel_header(
+            session, sentinel_resp_7, "username_password_create"
+        )
+        register_result = register_user(
+            session, email, registration_password, sentinel_header_7, so_header_7
+        )
+
+        password_page = str(register_result.get("page", {}).get("type") or "")
+        if password_page == "about_you":
+            follow_auth_continue(session, register_result, "about_you")
+        elif password_page in {"email_otp_send", "email_otp_verification"}:
+            # 标准密码注册会在提交密码后验证邮箱；旧邮件不能复用。
+            follow_auth_continue(session, register_result, ("email_otp_send", "email_otp_verification"))
+            sentinel_resp_post_password = request_sentinel_token(session, "authorize_continue")
+            sentinel_header_post_password, _ = build_sentinel_header(
+                session, sentinel_resp_post_password, "authorize_continue"
+            )
             if USE_EMAIL_SERVICE:
                 logger.info(f"[OTP] 等待验证码：{email}")
-                otp_code = wait_for_otp(email, after_ts=otp_after_ts)
+                otp_code_post_password = otp_code or wait_for_otp(email, after_ts=otp_after_ts)
             else:
-                logger.info("")
-                logger.info("[OTP] 请检查邮箱，输入收到的 6 位验证码:")
-                otp_code = input(">>> 验证码: ").strip()
-
-        # 步骤10: 提交验证码（带 sentinel-token 头）
-        validate_result = validate_email_otp(session, otp_code, sentinel_header_9)
+                logger.info("[OTP] 密码提交后需要邮箱验证码:")
+                otp_code_post_password = otp_code or input(">>> 验证码: ").strip()
+            post_password_result = validate_email_otp(
+                session, otp_code_post_password, sentinel_header_post_password
+            )
+            follow_auth_continue(session, post_password_result, "about_you")
+        else:
+            raise RuntimeError(
+                f"密码提交后 Auth 阶段错误：期望 about_you 或 email_otp_*，实际 {password_page or 'unknown'}"
+            )
         time.sleep(0.5)
 
         # ==================== 阶段5: 完成注册 ====================

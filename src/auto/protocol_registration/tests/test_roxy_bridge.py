@@ -236,6 +236,34 @@ class RoxyBridgeTests(unittest.TestCase):
         request_urls = [call[1] for call in fake.calls if call[0] == "GET"]
         self.assertEqual(request_urls, ["https://example.test/first"])
 
+    def test_browser_session_continues_when_roxy_ip_metadata_is_temporarily_unavailable(self):
+        class FakeCdpClient:
+            def fingerprint(self):
+                return {"userAgent": "Roxy Chrome"}
+
+            def navigate(self, url, headers=None, **kwargs):
+                return RoxyResponse(200, url, {}, "")
+
+            def ip(self):
+                raise RuntimeError("Roxy API 502")
+
+            def request(self, method, url, **kwargs):
+                return RoxyResponse(200, url, {}, "{}")
+
+            def close(self):
+                return None
+
+        from core.session import BrowserSession
+
+        with patch("config.ROXY_CDP_ENABLED", True), patch(
+            "config.ROXY_IP_CHECK_ENABLED", True
+        ), patch("core.session.RoxyCdpClient", return_value=FakeCdpClient()):
+            session = BrowserSession(proxy=None)
+            response = session.get("https://example.test/ping")
+            session.close()
+
+        self.assertEqual(response.status_code, 200)
+
     def test_browser_session_warms_the_roxy_page_before_first_http_request(self):
         from core.session import BrowserSession
 
@@ -543,13 +571,57 @@ input.on('line', (line) => {
                 self.closed = True
 
         session = FakeSession()
-        with patch("main.BrowserSession", return_value=session), patch(
-            "main.get_providers", side_effect=RuntimeError("stop before network")
-        ), patch("config.EMAIL_SOURCE", ""):
+        with patch("main.resolve_registration_password", return_value="AccountPass12!"), patch(
+            "main.BrowserSession", return_value=session
+        ), patch("main.get_providers", side_effect=RuntimeError("stop before network")), patch(
+            "config.EMAIL_SOURCE", ""
+        ):
             result = main.run_registration("user@example.test", "Test User")
 
         self.assertFalse(result["success"])
         self.assertTrue(session.closed)
+
+    def test_registration_submits_password_from_verified_auth_page_before_otp_validation(self):
+        import main
+
+        class FakeSession:
+            proxy = ""
+            device_id = "device-1"
+            auth_session_logging_id = "log-1"
+
+            def close(self):
+                self.closed = True
+
+        session = FakeSession()
+        with patch("main.resolve_registration_password", return_value="AccountPass12!"), patch(
+            "main.BrowserSession", return_value=session
+        ), patch("main.get_providers", return_value={}), patch(
+            "main.get_csrf_token", return_value="csrf-token"
+        ), patch("main.signin_openai", return_value="https://auth.openai.com/authorize"), patch(
+            "main.follow_authorize"
+        ), patch(
+            "main.authorize_signup",
+            return_value={"page": {"type": "email_otp_verification"}, "method": "GET", "continue_url": "https://auth.openai.com/api/accounts/email-otp/send"},
+        ), patch(
+            "main.follow_auth_continue"
+        ), patch("main.request_sentinel_token", return_value={"token": "challenge"}) as sentinel, patch(
+            "main.build_sentinel_header", return_value=("sentinel-token", None)
+        ), patch(
+            "main.get_create_account_page"
+        ), patch("main.register_user", side_effect=RuntimeError("stop after password submission")) as register, patch(
+            "main.time.sleep"
+        ), patch("config.EMAIL_SOURCE", ""):
+            result = main.run_registration("user@example.test", "Test User", otp_code="123456")
+
+        self.assertFalse(result["success"])
+        self.assertEqual(
+            [call.args[1] for call in sentinel.call_args_list],
+            ["authorize_continue", "username_password_create"],
+        )
+        self.assertEqual(
+            register.call_args.args,
+            (session, "user@example.test", "AccountPass12!", "sentinel-token", None),
+        )
 
 
 if __name__ == "__main__":
