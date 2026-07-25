@@ -781,10 +781,18 @@ async function clearProtocolRegistrationQueue() {
 }
 
 async function healthcheckBannedAccounts() {
-  if (!confirm('确认对 registered、plus_active、cpa_mounted、for_sale、sold 状态账号执行一键验活？只查询已配置 email_code_api 的账号，未配置的账号会跳过。')) return;
+  const selectedStatus = $('#statusFilter').value;
+  const healthcheckStatuses = new Set(['registered', 'plus_active', 'cpa_mounted', 'for_sale', 'sold']);
+  const hasEligibleSelection = healthcheckStatuses.has(selectedStatus);
+  const targetDescription = hasEligibleSelection
+    ? `当前筛选的“${statusLabels[selectedStatus]}”状态`
+    : 'registered、plus_active、cpa_mounted、for_sale、sold 状态';
+  if (!confirm(`确认对${targetDescription}账号执行一键验活？只查询已配置 email_code_api 的账号，未配置的账号会跳过。`)) return;
   await runProgressAction({
     title: '一键验活进度',
-    endpoint: '/replacement-accounts/healthcheck-banned',
+    endpoint: hasEligibleSelection
+      ? `/replacement-accounts/healthcheck-banned?status=${encodeURIComponent(selectedStatus)}`
+      : '/replacement-accounts/healthcheck-banned',
     activityTitle: '一键验活',
     formatSummary: (result) => `检测 ${result.checked || 0} 个，新封禁 ${result.banned || 0} 个，未命中 ${result.clean || 0} 个，跳过 ${result.skipped || 0} 个，失败 ${result.failed || 0} 个`,
   });

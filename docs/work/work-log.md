@@ -4,6 +4,7 @@
 
 | 日期 | 主要工作 | 状态 | 入口 |
 |---|---|---|---|
+| 2026-07-25 | 一键验活按状态筛选 | done | `../changes/CHG-099-healthcheck-filtered-status.md` |
 | 2026-07-24 | 协议注册密码接口接入 | done | `2026-07-24-protocol-registration-password-api.md` |
 | 2026-07-24 | 已注册账号纳入一键验活 | done | `2026-07-24-registered-account-healthcheck.md` |
 | 2026-07-24 | 协议注册日志面板缓存修复 | done | `2026-07-24-protocol-registration-log-panel-cache.md` |

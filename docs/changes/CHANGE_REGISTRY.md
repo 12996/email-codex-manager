@@ -106,3 +106,4 @@ PRD 合并提醒规则：未合并的 `implemented` change 达到 5 个时，AI 
 | CHG-096 | 协议注册继承 Roxy 无头配置 | implemented | 2026-07-24 | PRD-003 | `src/replacementServices.js`, `test/replacementServices.test.js`, `docs/work/` | `CHG-096-protocol-registration-roxy-headless-config.md` |
 | CHG-097 | 补号账号注册 AT 快速复制 | implemented | 2026-07-24 | PRD-003 | `src/server.js`, `web/app.js`, `web/index.html`, `test/`, `docs/project/api.md`, `docs/work/` | `CHG-097-replacement-registration-token-copy.md` |
 | CHG-098 | 协议注册提交补号账号密码 | implemented | 2026-07-24 | PRD-003 | `src/auto/protocol_registration/`, `docs/work/` | `CHG-098-protocol-registration-password-api.md` |
+| CHG-099 | 一键验活遵循状态筛选 | implemented | 2026-07-25 | PRD-003 | `web/app.js`, `src/server.js`, `src/accountHealthcheckService.js`, `src/replacementAccounts.js`, `test/` | `CHG-099-healthcheck-filtered-status.md` |

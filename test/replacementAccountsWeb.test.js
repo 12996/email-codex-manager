@@ -170,6 +170,7 @@ test('web frontend calls replacement account APIs and labels screenshot actions 
   assert.match(appJs, /一键验活/);
   assert.match(appJs, /healthcheckBannedAccounts/);
   assert.match(appJs, /\/replacement-accounts\/healthcheck-banned/);
+  assert.match(appJs, /status=\$\{encodeURIComponent\(selectedStatus\)\}/);
   assert.match(appJs, /registered、plus_active、cpa_mounted、for_sale、sold/);
   assert.match(appJs, /checkPlusStatusAccounts/);
   assert.match(appJs, /\/replacement-accounts\/check-plus-status/);

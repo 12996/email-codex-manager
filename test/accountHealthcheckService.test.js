@@ -99,7 +99,7 @@ test('runBannedEmailHealthcheck marks eligible matching accounts as banned', asy
   });
 
   assert.equal(result.checked, 2);
-  assert.equal(result.skipped, 1);
+  assert.equal(result.skipped, 2);
   assert.equal(result.banned, 2);
   assert.equal(result.clean, 0);
   assert.equal(result.failed, 0);
@@ -116,6 +116,38 @@ test('runBannedEmailHealthcheck marks eligible matching accounts as banned', asy
       [emailApi('sold@icloud.com'), 5, 'sold@icloud.com'],
     ],
   );
+});
+
+test('runBannedEmailHealthcheck limits candidates to an explicitly selected eligible status', async () => {
+  const { accounts, replacementAccounts } = createRepos();
+  createGmailAccount(accounts, 'receiver@gmail.com');
+  const plus = replacementAccounts.createAccount({
+    email: 'selected-plus@icloud.com',
+    email_code_api: emailApi('selected-plus@icloud.com'),
+    status: 'plus_active',
+  });
+  const registered = replacementAccounts.createAccount({
+    email: 'unselected-registered@icloud.com',
+    email_code_api: emailApi('unselected-registered@icloud.com'),
+    status: 'registered',
+  });
+
+  const result = await runBannedEmailHealthcheck({
+    accounts,
+    replacementAccounts,
+    statuses: ['plus_active'],
+    emailApiService: {
+      async fetchMessages(account) {
+        assert.equal(account.id, plus.id);
+        return [deactivationMessage(plus.email)];
+      },
+    },
+  });
+
+  assert.equal(result.checked, 1);
+  assert.equal(result.banned, 1);
+  assert.equal(replacementAccounts.getAccount(plus.id).status, 'banned');
+  assert.equal(replacementAccounts.getAccount(registered.id).status, 'registered');
 });
 
 test('runBannedEmailHealthcheck reports clean and failed accounts without changing status', async () => {

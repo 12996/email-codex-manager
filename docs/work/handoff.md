@@ -2,6 +2,11 @@
 
 状态：active
 
+## 2026-07-25 一键验活按状态筛选
+
+- 当前筛选为 `registered`、`plus_active`、`cpa_mounted`、`for_sale` 或 `sold` 时，一键验活只处理该状态。
+- 状态为空或筛选其他状态时，仍处理上述五种可验活状态的全集；后端会校验该范围。
+
 ## 2026-07-25 协议注册密码链路端到端验证
 
 - 协议流程已改为：signup → 密码页 → `user/register` → 邮箱 OTP → `about_you` → OAuth 回调 → access token → 直接 TOTP 激活。

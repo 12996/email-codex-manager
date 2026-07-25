@@ -380,11 +380,15 @@ export function createApp({
   });
 
   app.post('/replacement-accounts/healthcheck-banned', requireAuth, async (req, res) => {
+    const eligibleStatuses = new Set(['registered', 'plus_active', 'cpa_mounted', 'for_sale', 'sold']);
+    const requestedStatus = String(req.query?.status || '').trim();
+    const statuses = eligibleStatuses.has(requestedStatus) ? [requestedStatus] : undefined;
     const run = (onProgress) => runBannedEmailHealthcheck({
       accounts,
       replacementAccounts,
       emailApiService: replacementEmailApiService,
       onProgress,
+      statuses,
     });
     if (wantsProgressStream(req)) {
       await streamProgressResponse(res, run);

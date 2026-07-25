@@ -1,6 +1,7 @@
 import { fetchReplacementEmailMessages } from './replacementEmailApiService.js';
 
-const ELIGIBLE_BANNED_HEALTHCHECK_STATUSES = new Set([
+export const ELIGIBLE_BANNED_HEALTHCHECK_STATUSES = new Set([
+  'registered',
   'plus_active',
   'cpa_mounted',
   'for_sale',
@@ -32,8 +33,9 @@ export async function runBannedEmailHealthcheck({
   replacementAccounts,
   emailApiService = { fetchMessages: fetchReplacementEmailMessages },
   onProgress,
+  statuses,
 } = {}) {
-  const candidates = listCandidates(replacementAccounts);
+  const candidates = listCandidates(replacementAccounts, statuses);
   const queryable = candidates.filter(hasEmailCodeApi);
   const skipped = candidates.filter((account) => !hasEmailCodeApi(account));
   reportProgress(onProgress, {
@@ -159,12 +161,24 @@ export function isBannedHealthcheckEligibleStatus(status) {
   return ELIGIBLE_BANNED_HEALTHCHECK_STATUSES.has(String(status || '').trim());
 }
 
-function listCandidates(replacementAccounts) {
+function listCandidates(replacementAccounts, statuses) {
+  const selectedStatuses = normalizeEligibleStatuses(statuses);
   if (replacementAccounts?.listBannedHealthcheckCandidates) {
-    return replacementAccounts.listBannedHealthcheckCandidates();
+    return replacementAccounts.listBannedHealthcheckCandidates(selectedStatuses);
   }
   return (replacementAccounts?.listAccounts?.() || [])
-    .filter((account) => isBannedHealthcheckEligibleStatus(account.status));
+    .filter((account) => (
+      selectedStatuses
+        ? selectedStatuses.includes(String(account.status || '').trim())
+        : isBannedHealthcheckEligibleStatus(account.status)
+    ));
+}
+
+function normalizeEligibleStatuses(statuses) {
+  if (!Array.isArray(statuses)) return null;
+  const result = [...new Set(statuses.map((status) => String(status || '').trim()))]
+    .filter(isBannedHealthcheckEligibleStatus);
+  return result.length ? result : null;
 }
 
 function normalizeEmail(value) {

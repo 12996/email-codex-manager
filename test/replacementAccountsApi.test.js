@@ -446,6 +446,44 @@ This means your account can no longer be used.`,
   }
 });
 
+test('POST /replacement-accounts/healthcheck-banned honors one eligible status query filter', async () => {
+  const fetchedEmails = [];
+  const { app, replacementAccounts } = createTestContext(successfulServices(), {
+    replacementEmailApiService: {
+      async fetchMessages(account, options) {
+        fetchedEmails.push(account.email);
+        return [{
+          subject: 'Important update about your ChatGPT account',
+          bodyText: `Account: ${options.targetEmail}. Your account has been deactivated because recent activity violated our Terms and Usage Policies. This means your account can no longer be used.`,
+        }];
+      },
+    },
+  });
+  const selected = replacementAccounts.createAccount({
+    email: 'selected-status@icloud.com',
+    email_code_api: 'https://mail.example.test/code?selected',
+    status: 'for_sale',
+  });
+  const unselected = replacementAccounts.createAccount({
+    email: 'unselected-status@icloud.com',
+    email_code_api: 'https://mail.example.test/code?unselected',
+    status: 'registered',
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', '/replacement-accounts/healthcheck-banned?status=for_sale');
+
+    assert.equal(response.response.status, 200);
+    assert.equal(response.body.result.checked, 1);
+    assert.deepEqual(fetchedEmails, [selected.email]);
+    assert.equal(replacementAccounts.getAccount(selected.id).status, 'banned');
+    assert.equal(replacementAccounts.getAccount(unselected.id).status, 'registered');
+  } finally {
+    await server.close();
+  }
+});
+
 test('POST /replacement-accounts/check-plus-status updates only registered accounts', async () => {
   const { app, replacementAccounts } = createTestContext(successfulServices(), {
     accounts: {
