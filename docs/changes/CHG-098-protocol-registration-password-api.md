@@ -1,8 +1,10 @@
 # CHG-098 协议注册提交补号账号密码
 
-状态：implemented
+状态：merged
 创建日期：2026-07-24
 关联 PRD：PRD-003
+合并日期：2026-07-25
+合并目标：PRD-003
 
 协议注册从原先的 OTP-only 路径切换为密码优先：在 Auth 已确认进入密码阶段后，使用 Sentinel `username_password_create`，向 `/api/accounts/user/register` 提交补号账号的 `ROXY_REGISTER_PASSWORD`，再完成邮箱 OTP。
 

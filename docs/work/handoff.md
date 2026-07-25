@@ -2,6 +2,11 @@
 
 状态：active
 
+## 2026-07-25 PRD-003 基线合并
+
+- 已将 `CHG-091` 至 `CHG-099` 合并进 PRD-003，并将这些 change 标记为 `merged`。
+- 本次基线覆盖协议注册/协议补号、直接 MFA、CDP 重试与运行模式、AT 复制，以及按状态筛选的一键验活。
+
 ## 2026-07-25 一键验活按状态筛选
 
 - 当前筛选为 `registered`、`plus_active`、`cpa_mounted`、`for_sale` 或 `sold` 时，一键验活只处理该状态。

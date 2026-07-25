@@ -1,8 +1,10 @@
 # CHG-092 协议注册直接启用 MFA
 
-状态：implemented
+状态：merged
 创建日期：2026-07-20
 关联 PRD：PRD-003
+合并日期：2026-07-25
+合并目标：PRD-003
 影响范围：`src/auto/protocol_registration/main.py`、`src/auto/protocol_registration/core/account_export.py`、`src/auto/protocol_registration/tests/`、`docs/issues/`、`docs/work/`
 
 ## 背景

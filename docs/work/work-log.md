@@ -4,6 +4,7 @@
 
 | 日期 | 主要工作 | 状态 | 入口 |
 |---|---|---|---|
+| 2026-07-25 | PRD-003 基线合并（CHG-091 至 CHG-099） | done | `../prd/PRD-003-account-management-system-2026-06-25-baseline.md` |
 | 2026-07-25 | 一键验活按状态筛选 | done | `../changes/CHG-099-healthcheck-filtered-status.md` |
 | 2026-07-24 | 协议注册密码接口接入 | done | `2026-07-24-protocol-registration-password-api.md` |
 | 2026-07-24 | 已注册账号纳入一键验活 | done | `2026-07-24-registered-account-healthcheck.md` |

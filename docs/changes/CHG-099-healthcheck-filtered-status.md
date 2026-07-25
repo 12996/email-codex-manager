@@ -1,8 +1,10 @@
 # CHG-099 一键验活遵循状态筛选
 
-状态：implemented
+状态：merged
 创建日期：2026-07-25
 关联 PRD：PRD-003
+合并日期：2026-07-25
+合并目标：PRD-003
 
 一键验活读取当前账号状态筛选：当筛选值为 `registered`、`plus_active`、`cpa_mounted`、`for_sale` 或 `sold` 时，仅检查该状态；筛选为空或为其他状态时，检查这五种状态的全部账号。
 

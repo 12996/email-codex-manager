@@ -1,8 +1,10 @@
 # CHG-093 协议注册继承本地补号服务端口
 
-状态：implemented
+状态：merged
 创建日期：2026-07-23
 关联 PRD：PRD-003
+合并日期：2026-07-25
+合并目标：PRD-003
 影响范围：`src/replacementServices.js`、`test/replacementServices.test.js`、`docs/work/`
 
 ## 背景

@@ -1,7 +1,9 @@
 # CHG-095 协议注册 CDP 网络重试
 
-状态：implemented
+状态：merged
 创建日期：2026-07-23
 关联 PRD：PRD-003
+合并日期：2026-07-25
+合并目标：PRD-003
 
 协议注册的 Roxy CDP bridge 对导航超时和临时网络错误最多重试 3 次；`AbortError` 视为可重试的临时页面请求错误。HTTP 业务错误仍不重试。

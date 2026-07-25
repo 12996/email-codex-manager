@@ -1,8 +1,10 @@
 # CHG-091 补号列表独立 CPA 协议补号操作
 
-状态：implemented
+状态：merged
 创建日期：2026-07-20
 关联 PRD：PRD-003
+合并日期：2026-07-25
+合并目标：PRD-003
 影响范围：`src/auto/protocol_cpa_replacement.py`、`src/replacementServices.js`、`src/cpaRepairWorker.js`、`src/server.js`、`web/`、`test/`、`docs/project/`
 
 ## 背景

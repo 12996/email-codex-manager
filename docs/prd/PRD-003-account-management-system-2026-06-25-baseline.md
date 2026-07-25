@@ -2,7 +2,7 @@
 
 状态：active
 创建日期：2026-06-25
-最近基线合并：2026-06-25
+最近基线合并：2026-07-25
 继承基线：`PRD-002-account-management-system.md`
 
 ## 1. 基线说明
@@ -90,8 +90,26 @@ API 统一返回字段名 `codex_2fa`。新增和编辑补号账号时，后端�
 - [x] CPA 上传 auth file 名称为 `codex-<email>-plus.json`。
 - [x] 邮箱账号列表和补号日志列表在无数据时显示可见空态行。
 
-## 7. 合并记录
+## 7. 2026-07-25 基线增量
 
-- 合并日期：2026-06-25
-- 合并来源：`CHG-044`、`CHG-045`、`CHG-046`、`CHG-047`、`CHG-048`
+### 7.1 协议注册与协议补号
+
+- 补号管理页必须提供“协议注册”和“协议补号”操作；协议注册使用服务进程内 FIFO 单并发队列，支持查看当前、等待、最近任务和实时日志。清空队列只清除等待任务。
+- 协议注册必须从补号账号记录读取密码并通过 `ROXY_REGISTER_PASSWORD` 传给子进程；主链顺序为 signup、密码页、`user/register`、邮箱 OTP、资料提交、OAuth 回调、session access token、直接 TOTP 激活。
+- 资料提交必须携带对应 Sentinel token、SO token 与 invocation id；成功必须以 OAuth 回调后的 access token 和已激活的 TOTP 为准，缺少 TOTP 不得回写 `registered`。
+- 协议注册子进程必须继承当前本地补号服务地址；未显式配置时使用服务 `PORT` 推导的 `REPLACEMENT_API_BASE`。
+- Roxy CDP 对临时网络错误最多重试 3 次。IP 元数据临时不可读只记录告警；实际观测到出口 IP 改变时才中止 OAuth。
+- Roxy 的协议注册、普通补号和 DOM 2FA 补号必须共享动作级浏览器目标配置；`ROXY_HEADLESS` 与 `ROXY_KEEP_OPEN` 控制有头/无头模式。
+- 协议补号必须支持 CPA repair worker 的 `2fa-protocol` 模式，并通过 SSE 回传子进程、CPA 上传和健康复查进度。
+
+### 7.2 补号管理页面与验活
+
+- 补号账号邮箱行必须提供管理员鉴权的“复制 AT”操作；只读取对应注册 token 文件，不在页面或日志中缓存 token。
+- 一键验活默认覆盖 `registered`、`plus_active`、`cpa_mounted`、`for_sale`、`sold`。当页面状态筛选为这五种之一时，只验活被筛选状态；筛选为空或其他状态时回退到默认全集。
+- 一键验活只读取已配置 `email_code_api` 的账号。匹配 ChatGPT deactivation 邮件时状态改为 `banned`；未命中或查询失败不改变原业务状态。
+
+## 8. 合并记录
+
+- 合并日期：2026-07-25
+- 合并来源：`CHG-044`、`CHG-045`、`CHG-046`、`CHG-047`、`CHG-048`、`CHG-091`、`CHG-092`、`CHG-093`、`CHG-094`、`CHG-095`、`CHG-096`、`CHG-097`、`CHG-098`、`CHG-099`
 - 合并目标：PRD-003
