@@ -629,7 +629,7 @@ input.on('line', (line) => {
         self.assertFalse(result["success"])
         self.assertTrue(session.closed)
 
-    def test_registration_defers_email_otp_continuation_until_after_password_submission(self):
+    def test_registration_opens_password_before_any_email_otp_authorization(self):
         import main
 
         class FakeSession:
@@ -641,11 +641,6 @@ input.on('line', (line) => {
                 self.closed = True
 
         session = FakeSession()
-        signup_result = {
-            "page": {"type": "email_otp_verification"},
-            "method": "GET",
-            "continue_url": "https://auth.openai.com/api/accounts/email-otp/send",
-        }
         password_result = {
             "page": {"type": "email_otp_send"},
             "method": "GET",
@@ -657,9 +652,6 @@ input.on('line', (line) => {
             "main.get_csrf_token", return_value="csrf-token"
         ), patch("main.signin_openai", return_value="https://auth.openai.com/authorize"), patch(
             "main.follow_authorize"
-        ), patch(
-            "main.authorize_signup",
-            return_value=signup_result,
         ), patch(
             "main.follow_auth_continue", side_effect=RuntimeError("stop after password result")
         ) as follow_continue, patch("main.request_sentinel_token", return_value={"token": "challenge"}) as sentinel, patch(
@@ -674,7 +666,7 @@ input.on('line', (line) => {
         self.assertFalse(result["success"])
         self.assertEqual(
             [call.args[1] for call in sentinel.call_args_list],
-            ["authorize_continue", "username_password_create"],
+            ["username_password_create"],
         )
         self.assertEqual(
             register.call_args.args,

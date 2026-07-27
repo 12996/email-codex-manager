@@ -21,7 +21,6 @@ from core.session import BrowserSession
 from core.chatgpt_auth import get_providers, get_csrf_token, signin_openai
 from core.openai_auth import (
     follow_authorize,
-    authorize_signup,
     follow_auth_continue,
     get_create_account_page,
     request_sentinel_token,
@@ -299,28 +298,10 @@ def run_registration(
         follow_authorize(session, authorize_url)
         time.sleep(2)
 
-        # 步骤5: 先提交邮箱建立 Auth 注册会话；不能跳过该状态转换直提交密码。
-        sentinel_resp_5 = request_sentinel_token(session, "authorize_continue")
-        sentinel_header_5, _ = build_sentinel_header(
-            session, sentinel_resp_5, "authorize_continue"
-        )
-        signup_result = authorize_signup(session, email, sentinel_header_5)
-        logger.info(
-            "[步骤5] Auth 返回: page=%s method=%s has_continue_url=%s",
-            signup_result.get("page", {}).get("type"),
-            signup_result.get("method"),
-            bool(signup_result.get("continue_url")),
-        )
-        signup_page = str(signup_result.get("page", {}).get("type") or "")
-        if signup_page not in {"email_otp_send", "email_otp_verification"}:
-            raise RuntimeError(
-                "Auth 邮箱提交后阶段错误："
-                f"期望 email_otp_*，实际 {signup_page or 'unknown'}"
-            )
-
-        # 此 continue_url 会发送邮箱 OTP 并将服务端会话推进到验证码阶段。
-        # 密码注册必须先切到 username_password_create；只有 user/register 成功后
-        # 才跟随其返回的 OTP continue_url。
+        # 步骤5: 密码注册先由 Auth 页面切入 username_password_create。
+        # 不能预先调用 authorize/continue 或 email-otp/send，否则服务端会话会
+        # 进入 email_otp_verification，随后拒绝 user/register。
+        logger.info("[步骤5] Auth 会话已建立，进入创建密码阶段")
         get_create_account_page(session)
         time.sleep(0.5)
 
