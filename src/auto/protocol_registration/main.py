@@ -311,9 +311,16 @@ def run_registration(
             signup_result.get("method"),
             bool(signup_result.get("continue_url")),
         )
-        # Auth 先把浏览器落到邮箱验证页；密码分支必须在同一 Auth 会话中
-        # 从这里进入。不能从 authorize 响应跳过该页面直接提交 user/register。
-        follow_auth_continue(session, signup_result, ("email_otp_send", "email_otp_verification"))
+        signup_page = str(signup_result.get("page", {}).get("type") or "")
+        if signup_page not in {"email_otp_send", "email_otp_verification"}:
+            raise RuntimeError(
+                "Auth 邮箱提交后阶段错误："
+                f"期望 email_otp_*，实际 {signup_page or 'unknown'}"
+            )
+
+        # 此 continue_url 会发送邮箱 OTP 并将服务端会话推进到验证码阶段。
+        # 密码注册必须先切到 username_password_create；只有 user/register 成功后
+        # 才跟随其返回的 OTP continue_url。
         get_create_account_page(session)
         time.sleep(0.5)
 

@@ -102,13 +102,22 @@ class RoxyBridgeTests(unittest.TestCase):
             commands.append(request["command"])
             if request["command"] == "fingerprint":
                 return {"userAgent": "Roxy Chrome", "timeZone": "Asia/Tokyo"}
-            return {"status_code": 302, "url": "https://example.test/landing", "headers": {}, "text": ""}
+            return {
+                "status_code": 302,
+                "url": "https://example.test/landing",
+                "headers": {},
+                "text": "",
+                "response_committed": True,
+                "redirect_chain": [{"status_code": 302, "url": "https://example.test/landing"}],
+            }
 
         client = RoxyCdpClient(exchange=exchange)
         navigation = client.navigate("https://example.test/start")
         fingerprint = client.fingerprint()
 
         self.assertEqual(navigation.url, "https://example.test/landing")
+        self.assertTrue(navigation.metadata["response_committed"])
+        self.assertEqual(navigation.metadata["redirect_chain"][0]["status_code"], 302)
         self.assertEqual(fingerprint["userAgent"], "Roxy Chrome")
         self.assertEqual(commands, ["navigate", "fingerprint"])
 
@@ -620,7 +629,7 @@ input.on('line', (line) => {
         self.assertFalse(result["success"])
         self.assertTrue(session.closed)
 
-    def test_registration_submits_password_from_verified_auth_page_before_otp_validation(self):
+    def test_registration_defers_email_otp_continuation_until_after_password_submission(self):
         import main
 
         class FakeSession:
@@ -632,6 +641,16 @@ input.on('line', (line) => {
                 self.closed = True
 
         session = FakeSession()
+        signup_result = {
+            "page": {"type": "email_otp_verification"},
+            "method": "GET",
+            "continue_url": "https://auth.openai.com/api/accounts/email-otp/send",
+        }
+        password_result = {
+            "page": {"type": "email_otp_send"},
+            "method": "GET",
+            "continue_url": "https://auth.openai.com/api/accounts/email-otp/send",
+        }
         with patch("main.resolve_registration_password", return_value="AccountPass12!"), patch(
             "main.BrowserSession", return_value=session
         ), patch("main.get_providers", return_value={}), patch(
@@ -640,14 +659,14 @@ input.on('line', (line) => {
             "main.follow_authorize"
         ), patch(
             "main.authorize_signup",
-            return_value={"page": {"type": "email_otp_verification"}, "method": "GET", "continue_url": "https://auth.openai.com/api/accounts/email-otp/send"},
+            return_value=signup_result,
         ), patch(
-            "main.follow_auth_continue"
-        ), patch("main.request_sentinel_token", return_value={"token": "challenge"}) as sentinel, patch(
+            "main.follow_auth_continue", side_effect=RuntimeError("stop after password result")
+        ) as follow_continue, patch("main.request_sentinel_token", return_value={"token": "challenge"}) as sentinel, patch(
             "main.build_sentinel_header", return_value=("sentinel-token", None)
         ), patch(
             "main.get_create_account_page"
-        ), patch("main.register_user", side_effect=RuntimeError("stop after password submission")) as register, patch(
+        ), patch("main.register_user", return_value=password_result) as register, patch(
             "main.time.sleep"
         ), patch("config.EMAIL_SOURCE", ""):
             result = main.run_registration("user@example.test", "Test User", otp_code="123456")
@@ -661,6 +680,7 @@ input.on('line', (line) => {
             register.call_args.args,
             (session, "user@example.test", "AccountPass12!", "sentinel-token", None),
         )
+        self.assertEqual(follow_continue.call_args.args[1], password_result)
 
 
 if __name__ == "__main__":

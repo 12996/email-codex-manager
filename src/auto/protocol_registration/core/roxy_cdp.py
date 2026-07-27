@@ -25,12 +25,14 @@ class RoxyResponse:
         headers: dict | None,
         text: str,
         reason: str = "",
+        metadata: dict | None = None,
     ):
         self.status_code = int(status_code or 0)
         self.url = str(url or "")
         self.headers = dict(headers or {})
         self.text = text if isinstance(text, str) else str(text or "")
         self.reason = str(reason or "")
+        self.metadata = dict(metadata or {})
 
     @property
     def ok(self) -> bool:
@@ -60,6 +62,11 @@ class RoxyResponse:
             headers=result.get("headers") or {},
             text=result.get("text", ""),
             reason=result.get("status_text", result.get("reason", "")),
+            metadata={
+                key: result[key]
+                for key in ("response_committed", "redirect_chain")
+                if key in result
+            },
         )
 
 
