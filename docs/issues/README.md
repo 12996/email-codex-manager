@@ -25,3 +25,4 @@
 | issue-017 | Roxy CPA Auth 出口被重置或拒绝 | resolved | `issue-017-roxy-cpa-auth-egress-reset.md` |
 | issue-018 | 协议注册 2FA 重认证回调返回 401 | active | `issue-018-protocol-registration-mfa-reauth-401.md` |
 | issue-019 | 协议 CPA phone-code 阶段跳过 add-phone/send | resolved | `issue-019-protocol-cpa-phone-add-request-skipped.md` |
+| issue-020 | 协议注册 CDP 导航重试超时预算不足 | active | `issue-020-protocol-registration-cdp-navigate-timeout-budget.md` |

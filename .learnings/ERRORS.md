@@ -920,3 +920,35 @@ proxy-url: http://127.0.0.1:7891
 ### Resolution
 - **Resolved**: 2026-07-21T15:23:00+08:00
 - **Notes**: 已备份并将顶层 `proxy-url` 设为空，重启 CPA 后完成 API、进程环境和直连出口复核。
+## [ERR-20260728-001] diagnosis-query-schema-assumption
+
+**Logged**: 2026-07-28T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+诊断查询错误假设了协议注册目录和 replacement_accounts 的配置/字段位置。
+
+### Error
+```text
+Cannot find path 'src\\auto\\protocol_registration\\config.py'
+SqliteError: no such column: registered_at
+```
+
+### Context
+- 配置拆分在 `config/` 包，账号表使用 `activated_at` 而非 `registered_at`。
+- 先通过 `rg --files` 和 `PRAGMA table_info` 确认真实路径和 schema 后完成查询。
+
+### Suggested Fix
+后续诊断前先枚举目标目录并读取 SQLite 表结构，不根据旧模块布局或字段名推断。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_registration/config/`, `data/app.db`
+
+### Resolution
+- **Resolved**: 2026-07-28T00:00:00+08:00
+- **Notes**: 已通过实际配置包和表结构完成证据采集。
+
+---
