@@ -11,6 +11,10 @@ import threading
 from pathlib import Path
 
 
+_PAGE_COMMAND_MAX_ATTEMPTS = 3
+_PAGE_COMMAND_OVERHEAD_SECONDS = 10.0
+
+
 class RoxyResponse:
     """提供当前协议代码所需的 requests/curl_cffi Response 最小兼容面。"""
 
@@ -93,6 +97,21 @@ class RoxyCdpClient:
         self._next_id += 1
         request.update(payload)
         return request
+
+    def _response_wait_timeout(self, command: str, payload: dict) -> float:
+        """覆盖 bridge 的页面重试及首次 origin 后台页初始化时间。"""
+        if command not in {"request", "navigate"}:
+            return self._request_timeout
+
+        timeout_ms = payload.get("timeout_ms", self._request_timeout * 1000)
+        try:
+            single_timeout = max(self._request_timeout, float(timeout_ms) / 1000)
+        except (TypeError, ValueError):
+            single_timeout = self._request_timeout
+
+        # request 首次进入 origin 时还可能执行一次后台页初始化导航。
+        attempts = _PAGE_COMMAND_MAX_ATTEMPTS + (1 if command == "request" else 0)
+        return single_timeout * attempts + _PAGE_COMMAND_OVERHEAD_SECONDS
 
     def _resolve_bridge_script(self) -> str:
         configured = self._bridge_script or os.environ.get("ROXY_CDP_BRIDGE_SCRIPT")
@@ -211,7 +230,7 @@ class RoxyCdpClient:
             except (BrokenPipeError, OSError) as exc:
                 raise RuntimeError("Roxy CDP bridge 进程已断开") from exc
 
-            deadline = self._request_timeout
+            deadline = self._response_wait_timeout(command, payload)
             while True:
                 try:
                     response = self._responses.get(timeout=deadline)

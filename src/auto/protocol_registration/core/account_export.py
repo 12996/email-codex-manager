@@ -173,6 +173,7 @@ def follow_oauth_callback(session: BrowserSession, continue_url: str) -> str:
         resp = session.navigate(continue_url, headers=headers, allow_redirects=True)
     else:
         resp = session.get(continue_url, headers=headers, allow_redirects=True)
+    resp.raise_for_status()
     logger.info(f"[OAuth回调] 完成, 最终落点: {resp.url}")
     return resp.url
 

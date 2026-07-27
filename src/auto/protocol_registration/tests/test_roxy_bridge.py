@@ -368,6 +368,18 @@ input.on('line', (line) => {
         self.assertEqual(response.json(), {"transport": "ok"})
         self.assertEqual(fingerprint["userAgent"], "Fake Roxy")
 
+    def test_cdp_client_waits_for_all_page_command_retry_attempts(self):
+        client = RoxyCdpClient(request_timeout=60, exchange=lambda request: {})
+
+        self.assertGreaterEqual(
+            client._response_wait_timeout("navigate", {"timeout_ms": 60_000}),
+            190,
+        )
+        self.assertGreaterEqual(
+            client._response_wait_timeout("request", {"timeout_ms": 60_000}),
+            190,
+        )
+
     def test_cdp_client_can_request_browser_generated_sentinel_headers(self):
         calls = []
 
@@ -419,6 +431,9 @@ input.on('line', (line) => {
         class FakeResponse:
             url = "https://chatgpt.com/api/auth/callback/openai?code=ok"
 
+            def raise_for_status(self):
+                return None
+
         class FakeSession:
             uses_roxy_cdp = True
 
@@ -436,6 +451,30 @@ input.on('line', (line) => {
         result = follow_oauth_callback(session, "https://auth.openai.com/authorize/continue?x=1")
         self.assertIn("chatgpt.com", result)
         self.assertTrue(session.call[2]["allow_redirects"])
+
+    def test_oauth_callback_rejects_a_failed_navigation_response(self):
+        from core.account_export import follow_oauth_callback
+
+        class FailedResponse:
+            url = "https://chatgpt.com/api/auth/callback/openai"
+
+            def raise_for_status(self):
+                raise RuntimeError("HTTP 502")
+
+        class FakeSession:
+            uses_roxy_cdp = True
+
+            def get_auth_navigate_headers(self, referer):
+                return {"referer": referer}
+
+            def navigate(self, url, headers=None, **kwargs):
+                return FailedResponse()
+
+        with self.assertRaisesRegex(RuntimeError, "HTTP 502"):
+            follow_oauth_callback(
+                FakeSession(),
+                "https://auth.openai.com/authorize/continue?x=1",
+            )
 
     def test_sentinel_runner_receives_the_active_cdp_user_agent(self):
         from core.openai_auth import build_sentinel_header
