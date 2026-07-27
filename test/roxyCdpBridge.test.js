@@ -5,7 +5,7 @@ import test from 'node:test';
 const require = createRequire(import.meta.url);
 const { RoxyCdpBridge } = require('../src/auto/protocol_registration/scripts/roxy_cdp_bridge.cjs');
 
-test('Roxy CDP origin warmup waits for the page load event before page-context fetches', async () => {
+test('Roxy CDP origin warmup waits only for the document response commit', async () => {
   const calls = [];
   const bridge = new RoxyCdpBridge();
   bridge.page = {
@@ -22,8 +22,7 @@ test('Roxy CDP origin warmup waits for the page load event before page-context f
   await bridge.ensureOrigin('https://chatgpt.com/api/auth/providers', 30000);
 
   assert.deepEqual(calls, [
-    ['goto', 'https://chatgpt.com/', 'domcontentloaded'],
-    ['waitForLoadState', 'load'],
+    ['goto', 'https://chatgpt.com/', 'commit'],
   ]);
 });
 
@@ -80,6 +79,61 @@ test('Roxy CDP navigation retries transient timeout failures before succeeding',
 
   assert.equal(result.status_code, 200);
   assert.equal(attempts, 3);
+});
+
+test('Roxy CDP navigation returns the committed redirect chain without waiting for DOM load', async () => {
+  let gotoOptions;
+  const initialRequest = {
+    redirectedFrom: () => null,
+    response: async () => initialResponse,
+  };
+  const initialResponse = {
+    status: () => 302,
+    statusText: () => 'Found',
+    url: () => 'https://auth.openai.com/api/accounts/email-otp/send',
+    headers: () => ({ location: '/email-verification' }),
+    request: () => initialRequest,
+  };
+  const finalRequest = {
+    redirectedFrom: () => initialRequest,
+    response: async () => finalResponse,
+  };
+  const finalResponse = {
+    status: () => 200,
+    statusText: () => 'OK',
+    url: () => 'https://auth.openai.com/email-verification',
+    headers: () => ({}),
+    request: () => finalRequest,
+  };
+  const bridge = new RoxyCdpBridge();
+  bridge.page = {
+    isClosed: () => false,
+    url: () => 'https://auth.openai.com/email-verification',
+    async goto(_url, options) {
+      gotoOptions = options;
+      return finalResponse;
+    },
+  };
+
+  const result = await bridge.navigate({
+    url: 'https://auth.openai.com/api/accounts/email-otp/send',
+    timeout_ms: 30_000,
+  });
+
+  assert.equal(gotoOptions.waitUntil, 'commit');
+  assert.equal(result.response_committed, true);
+  assert.deepEqual(result.redirect_chain, [
+    {
+      status_code: 302,
+      status_text: 'Found',
+      url: 'https://auth.openai.com/api/accounts/email-otp/send',
+    },
+    {
+      status_code: 200,
+      status_text: 'OK',
+      url: 'https://auth.openai.com/email-verification',
+    },
+  ]);
 });
 
 test('Roxy CDP keeps separate pages for ChatGPT, Auth, and Sentinel origins', async () => {

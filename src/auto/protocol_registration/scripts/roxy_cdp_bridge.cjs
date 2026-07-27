@@ -88,6 +88,49 @@ function responseToResult(response, fallbackUrl = '') {
   };
 }
 
+async function responseChainToResult(response) {
+  if (!response) return [];
+
+  const chain = [];
+  let request;
+  try {
+    request = response.request();
+  } catch (_) {
+    request = null;
+  }
+
+  while (request) {
+    let current;
+    try {
+      current = await request.response();
+    } catch (_) {
+      current = null;
+    }
+    if (current) {
+      const result = responseToResult(current);
+      chain.unshift({
+        status_code: result.status_code,
+        status_text: result.status_text,
+        url: result.url
+      });
+    }
+
+    try {
+      request = request.redirectedFrom();
+    } catch (_) {
+      request = null;
+    }
+  }
+
+  if (chain.length) return chain;
+  const result = responseToResult(response);
+  return [{
+    status_code: result.status_code,
+    status_text: result.status_text,
+    url: result.url
+  }];
+}
+
 function decodeCookiePayload(value) {
   try {
     const segment = String(value || '').split('.')[0];
@@ -261,10 +304,9 @@ class RoxyCdpBridge {
       }
       if (currentOrigin !== targetOrigin && warmup) {
         await page.goto(`${targetOrigin}/`, {
-          waitUntil: 'domcontentloaded',
+          waitUntil: 'commit',
           timeout: timeoutMs
         });
-        await page.waitForLoadState('load', { timeout: timeoutMs }).catch(() => {});
       }
       return page;
     }
@@ -294,10 +336,9 @@ class RoxyCdpBridge {
     // 每个 origin 使用独立页面，避免 Auth/Sentinel 导航覆盖 ChatGPT OAuth 状态。
     if (currentOrigin !== targetOrigin && warmup) {
       await page.goto(`${targetOrigin}/`, {
-        waitUntil: 'domcontentloaded',
+        waitUntil: 'commit',
         timeout: timeoutMs
       });
-      await page.waitForLoadState('load', { timeout: timeoutMs }).catch(() => {});
     }
     this.pagesByOrigin.set(targetOrigin, page);
     this.page = page;
@@ -388,7 +429,7 @@ class RoxyCdpBridge {
     for (let attempt = 1; attempt <= 3; attempt += 1) {
       try {
         response = await page.goto(payload.url, {
-          waitUntil: 'domcontentloaded',
+          waitUntil: 'commit',
           timeout: timeoutMs,
           referer: normalized.referer || undefined
         });
@@ -410,6 +451,8 @@ class RoxyCdpBridge {
     this.page = page;
     const result = responseToResult(response, finalUrl);
     result.url = finalUrl;
+    result.response_committed = Boolean(response);
+    result.redirect_chain = await responseChainToResult(response);
     return result;
   }
 
