@@ -115,3 +115,4 @@
 | 2026-07-21 | CPA 临时切换宿主机直连出口 | done | `2026-07-21-cpa-host-direct-egress.md` |
 | 2026-07-21 | CPA 代理切换脚本与使用说明 | done | `2026-07-21-cpa-host-direct-egress.md`、`../project/cpa-proxy-operation.md` |
 | 2026-07-28 | 协议注册 CDP 导航超时诊断 | done | `2026-07-28-protocol-registration-cdp-timeout-diagnosis.md` |
+| 2026-07-28 | 协议注册响应驱动导航修复 | in progress | `2026-07-28-protocol-registration-cdp-timeout-diagnosis.md` |

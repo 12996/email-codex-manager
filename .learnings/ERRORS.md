@@ -952,3 +952,35 @@ SqliteError: no such column: registered_at
 - **Notes**: 已通过实际配置包和表结构完成证据采集。
 
 ---
+
+## [ERR-20260728-002] verification-command-workdir
+
+**Logged**: 2026-07-28T01:14:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+在 Python 协议目录执行 Node 测试，导致 npm 找不到根目录的 test script。
+
+### Error
+```text
+npm error Missing script: "test"
+```
+
+### Context
+- `package.json` 位于仓库根目录；Python `unittest` 位于 `src/auto/protocol_registration/`。
+- Node bridge 测试改为在仓库根目录运行后通过。
+
+### Suggested Fix
+按测试框架选择工作目录：Node 测试从仓库根目录执行，Python 协议测试从协议目录执行。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `package.json`, `src/auto/protocol_registration/tests/`
+
+### Resolution
+- **Resolved**: 2026-07-28T01:14:00+08:00
+- **Notes**: 已分别在正确工作目录运行专项测试。
+
+---

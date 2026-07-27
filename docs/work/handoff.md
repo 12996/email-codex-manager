@@ -698,4 +698,6 @@
 - 新增 issue：`docs/issues/issue-020-protocol-registration-cdp-navigate-timeout-budget.md`，状态 `active`。
 - 当前进展：账号 `211`（`rattler.riel4v@icloud.com`）在 Auth 返回 `email_otp_verification` 后，导航 `GET /api/accounts/email-otp/send` 时失败。bridge 的 `page.goto()` 单次超时为 60 秒且可重试 3 次，但 Python `RoxyCdpClient._call()` 外层等待同样只有 60 秒；首个导航超时后 bridge 刚开始第 2 次尝试，Python 已提前退出，因此导航重试没有机会完成。
 - 结论：问题位于 Roxy/CDP 导航超时预算，不是邮箱验证码、密码、Sentinel 或 OpenAI HTTP 业务响应。run `691` 未执行 `user/register`，账号仍为 `unregistered`。
-- 下一步：按命令 timeout 和最大重试次数调整 bridge 外层等待预算（或将重试移到 Python），补“第 1 次导航超时、bridge 进入第 2 次时外层不提前超时”的回归测试，再重试账号 `211`。
+- 下一步：按命令 timeout 和最大重试次数调整 bridge 外层等待预算（或将重试移到 Python），补“第 1 次导航超时、bridge 进入第 2 次时外层不提前超时”的回归测试，再重试账号 `211`。审计发现同一模式还覆盖步骤 4 authorize、各 `follow_auth_continue()`、进入密码页、OAuth callback 及跨 origin warm-up；需统一修复，不能只针对 `email-otp/send`。
+- 2026-07-28 00:58 补充：账号 `210` 的 run `692` 没有导航超时，但步骤 7 `user/register` 返回 HTTP 400 `invalid_auth_step`。步骤 5 JSON 是 `email_otp_verification`，当前代码仅通过访问 `/create-account/password` 的 URL 认定已进入密码阶段，服务端响应证明该认定不成立。修复必须以 Auth JSON 和接口响应决定密码阶段，不得以 URL/DOM 推断。
+- 2026-07-28 实施：`CHG-100` 状态为 `implemented`。bridge 后台页导航改为等待 HTTP `commit` 并返回脱敏重定向链；Python 等待预算覆盖 bridge 重试；OAuth callback 校验 HTTP 响应后仍以 session `accessToken` 终态确认。另修正密码阶段顺序：步骤 5 的 `email-otp/send` continuation 只能在 `user/register` 成功后跟随，避免提前进入 OTP 状态导致 `invalid_auth_step`。自动化测试 Node 12/12、Python 33/33 通过；账号 `210` 仍待实机重跑验收。
