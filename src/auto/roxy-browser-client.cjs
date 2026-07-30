@@ -65,6 +65,51 @@ function extractBrowserList(response) {
     return [];
 }
 
+function extractResponseRows(response) {
+    const data = response && response.data;
+    if (Array.isArray(data)) {
+        return data;
+    }
+    if (Array.isArray(data?.rows)) {
+        return data.rows;
+    }
+    if (Array.isArray(data?.list)) {
+        return data.list;
+    }
+    if (Array.isArray(data?.data)) {
+        return data.data;
+    }
+    return [];
+}
+
+function publicProxy(proxy = {}) {
+    const password = proxy.proxyPassword ?? proxy.password;
+    return {
+        id: proxy.id,
+        ipType: proxy.ipType,
+        protocol: proxy.protocol,
+        host: proxy.host,
+        port: proxy.port,
+        username: proxy.proxyUserName ?? proxy.username ?? '',
+        checkChannel: proxy.checkChannel,
+        refreshUrl: proxy.refreshUrl,
+        remark: proxy.remark,
+        passwordConfigured: Boolean(password)
+    };
+}
+
+function publicBrowserProxy(proxyInfo = {}) {
+    const password = proxyInfo.proxyPassword ?? proxyInfo.password;
+    return {
+        host: proxyInfo.host,
+        port: proxyInfo.port,
+        protocol: proxyInfo.protocol ?? proxyInfo.proxyCategory,
+        username: proxyInfo.proxyUserName ?? proxyInfo.username ?? '',
+        lastIp: proxyInfo.lastIp,
+        passwordConfigured: Boolean(password)
+    };
+}
+
 function extractCdpEndpoint(response, dirId) {
     const data = response && response.data;
     if (typeof data?.ws === 'string' && data.ws) {
@@ -156,6 +201,86 @@ class RoxyBrowserClient {
             pageIndex: 1,
             pageSize: 100
         });
+    }
+
+    async getBrowserProfile(dirId) {
+        assertRequired(dirId, 'dirId');
+        const response = await this.listBrowsers();
+        const browser = extractBrowserList(response)
+            .find((item) => String(item?.dirId || '') === String(dirId));
+        if (!browser) {
+            throw new Error(`未找到 RoxyBrowser 窗口 dirId=${dirId}`);
+        }
+
+        // Only a documented, top-level proxyId can safely link a profile to a proxy resource.
+        if (browser.proxyId === undefined || browser.proxyId === null || browser.proxyId === '') {
+            throw new Error(`RoxyBrowser 窗口 dirId=${dirId} 无法识别 proxyId，不能安全建立绑定；请确认 /browser/list 返回显式 proxyId`);
+        }
+
+        return {
+            dirId: browser.dirId,
+            sortNum: browser.sortNum ?? browser.windowSortNum ?? browser.SN,
+            windowName: browser.windowName,
+            proxyId: browser.proxyId,
+            proxy: publicBrowserProxy(browser.proxyInfo || {})
+        };
+    }
+
+    async listProxies() {
+        assertRequired(this.workspaceId, 'workspaceId');
+        const response = await this.request('GET', '/proxy/list', {
+            workspaceId: this.workspaceId,
+            pageIndex: 1,
+            pageSize: 100
+        });
+        return extractResponseRows(response).map((proxy) => publicProxy(proxy));
+    }
+
+    async detectProxyChannels() {
+        const response = await this.request('GET', '/proxy/detect_channel', {});
+        return extractResponseRows(response);
+    }
+
+    buildProxyPayload(payload = {}, proxyId) {
+        const body = {
+            workspaceId: payload.workspaceId ?? this.workspaceId,
+            checkChannel: payload.checkChannel,
+            ipType: payload.ipType,
+            protocol: payload.protocol,
+            host: payload.host,
+            port: payload.port,
+            proxyUserName: payload.proxyUserName,
+            proxyPassword: payload.proxyPassword,
+            refreshUrl: payload.refreshUrl ?? '',
+            remark: payload.remark ?? ''
+        };
+        if (proxyId !== undefined) {
+            body.id = proxyId;
+        }
+
+        for (const field of [
+            'workspaceId', 'checkChannel', 'ipType', 'protocol', 'host', 'port',
+            'proxyUserName', 'proxyPassword'
+        ]) {
+            assertRequired(body[field], field);
+        }
+        if (proxyId !== undefined) {
+            assertRequired(proxyId, 'proxyId');
+        }
+        return body;
+    }
+
+    async createProxy(payload = {}) {
+        const body = this.buildProxyPayload(payload);
+        const response = await this.request('POST', '/proxy/create', body);
+        return publicProxy(response.data || {});
+    }
+
+    async modifyProxy(proxyId, payload = {}) {
+        assertRequired(proxyId, 'proxyId');
+        const body = this.buildProxyPayload(payload, proxyId);
+        const response = await this.request('POST', '/proxy/modify', body);
+        return publicProxy(response.data || body);
     }
 
     async resolveDirId() {
