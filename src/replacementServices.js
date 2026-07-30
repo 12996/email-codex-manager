@@ -44,6 +44,7 @@ export function createReplacementServices({
   protocolTwoFaMainPath,
   prepareProtocolRoxyImpl,
   roxyClientFactory,
+  roxyProxyService,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
@@ -63,6 +64,7 @@ export function createReplacementServices({
     protocolTwoFaMainPath,
     prepareProtocolRoxyImpl,
     roxyClientFactory,
+    roxyProxyService,
     baseEnv,
     automationRuns,
     logDir,
@@ -174,6 +176,7 @@ export function createRoxyOAuthChildProcessAutomation({
   protocolTwoFaMainPath,
   prepareProtocolRoxyImpl,
   roxyClientFactory,
+  roxyProxyService,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
@@ -193,6 +196,7 @@ export function createRoxyOAuthChildProcessAutomation({
     protocolTwoFaMainPath,
     prepareProtocolRoxyImpl,
     roxyClientFactory,
+    roxyProxyService,
     baseEnv,
     automationRuns,
     logDir,
@@ -217,6 +221,7 @@ export function createRoxyChildProcessAutomation({
       : join(protocolTwoFaProjectPath, 'protocol_cpa_replacement.py')),
   prepareProtocolRoxyImpl = prepareProtocolRoxy,
   roxyClientFactory = createDefaultProtocolRoxyClient,
+  roxyProxyService,
   baseEnv = process.env,
   automationRuns,
   logDir = DEFAULT_LOG_DIR,
@@ -338,56 +343,64 @@ export function createRoxyChildProcessAutomation({
       env.ROXY_PROTOCOL_BROWSER_WINDOW_NAME = normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_WINDOW_NAME) || 'test';
       // Always select the action-specific profile so a stale global CDP endpoint cannot bypass refresh.
       applyActionRoxyTargetEnv(env, 'ROXY_PROTOCOL');
+      removeRoxyProxySecrets(env);
 
       notifyAutomationLog(options?.onLog, {
         type: 'step',
         step: 'prepare-roxy',
         message: '正在刷新协议补号使用的 Roxy 浏览器环境',
       });
-      const prepared = await prepareProtocolRoxyImpl({
-        env,
-        account,
-        clientFactory: roxyClientFactory,
-      });
-      notifyAutomationLog(options?.onLog, {
-        type: 'step',
-        step: 'roxy-ready',
-        message: '协议补号 Roxy 指纹、IP 和 CDP 已准备完成',
-      });
-      const cdpEndpoint = normalizeRequired(
-        prepared?.cdpEndpoint,
-        'REPLACE_FAILED',
-        'Roxy CDP endpoint is unavailable after fingerprint refresh',
-      );
-      env.ROXY_CDP_ENDPOINT = cdpEndpoint;
-      // The profile is already refreshed above; the child must not refresh it a second time.
-      env.ROXY_CDP_PREPARE = '0';
+      let prepared;
+      try {
+        prepared = await prepareProtocolBrowser({
+          env,
+          account,
+          prepareProtocolRoxyImpl,
+          roxyClientFactory,
+          roxyProxyService,
+        });
+        notifyAutomationLog(options?.onLog, {
+          type: 'step',
+          step: 'roxy-ready',
+          message: '协议补号 Roxy 指纹、IP 和 CDP 已准备完成',
+        });
+        const cdpEndpoint = normalizeRequired(
+          prepared?.cdpEndpoint,
+          'REPLACE_FAILED',
+          'Roxy CDP endpoint is unavailable after fingerprint refresh',
+        );
+        env.ROXY_CDP_ENDPOINT = cdpEndpoint;
+        // The profile is already refreshed above; the child must not refresh it a second time.
+        env.ROXY_CDP_PREPARE = '0';
 
-      return runChildProcess({
-        spawnImpl,
-        command: protocolTwoFaPythonPath,
-        args: [protocolTwoFaMainPath, '--account-id', accountId],
-        cwd: protocolTwoFaProjectPath,
-        env,
-        account,
-        automationRuns,
-        logDir,
-        kind: 'replacement-2fa-protocol',
-        failureCode: 'REPLACE_FAILED',
-        envSummaryKeys: [
-          'REPLACEMENT_ACCOUNT_ID',
-          'ROXY_CDP_ENABLED',
-          'ROXY_CDP_PREPARE',
-          'ROXY_KEEP_OPEN',
-          'SMS_API_PROXY',
-          'OPENAI_WORKSPACE_ID',
-          'REPLACEMENT_API_BASE',
-          'CPA_OUTPUT_DIR',
-          ...ROXY_TARGET_ENV_KEYS,
-        ],
-        onLog: options?.onLog,
-        cpaTriggerDetails: options?.cpaTriggerDetails,
-      });
+        return await runChildProcess({
+          spawnImpl,
+          command: protocolTwoFaPythonPath,
+          args: [protocolTwoFaMainPath, '--account-id', accountId],
+          cwd: protocolTwoFaProjectPath,
+          env,
+          account,
+          automationRuns,
+          logDir,
+          kind: 'replacement-2fa-protocol',
+          failureCode: 'REPLACE_FAILED',
+          envSummaryKeys: [
+            'REPLACEMENT_ACCOUNT_ID',
+            'ROXY_CDP_ENABLED',
+            'ROXY_CDP_PREPARE',
+            'ROXY_KEEP_OPEN',
+            'SMS_API_PROXY',
+            'OPENAI_WORKSPACE_ID',
+            'REPLACEMENT_API_BASE',
+            'CPA_OUTPUT_DIR',
+            ...ROXY_TARGET_ENV_KEYS,
+          ],
+          onLog: options?.onLog,
+          cpaTriggerDetails: options?.cpaTriggerDetails,
+        });
+      } finally {
+        prepared?.release?.();
+      }
     },
 
     loginAccountWith2FA(account) {
@@ -462,25 +475,29 @@ export function createRoxyChildProcessAutomation({
           email,
           accountId,
         });
-        const prepared = await prepareProtocolRoxyImpl({
-          env,
-          account,
-          clientFactory: roxyClientFactory,
-        });
-        notifyAutomationLog(options?.onLog, {
-          type: 'step',
-          step: 'roxy-ready',
-          message: 'Roxy 指纹、IP 和 CDP 已准备完成',
-        });
-        const cdpEndpoint = normalizeRequired(
-          prepared?.cdpEndpoint,
-          'PROTOCOL_REGISTER_FAILED',
-          'Roxy CDP endpoint is unavailable after fingerprint refresh',
-        );
-        env.ROXY_CDP_ENDPOINT = cdpEndpoint;
-        env.ROXY_CDP_PREPARE = '0';
+        let prepared;
+        try {
+          prepared = await prepareProtocolBrowser({
+            env,
+            account,
+            prepareProtocolRoxyImpl,
+            roxyClientFactory,
+            roxyProxyService,
+          });
+          notifyAutomationLog(options?.onLog, {
+            type: 'step',
+            step: 'roxy-ready',
+            message: 'Roxy 指纹、IP 和 CDP 已准备完成',
+          });
+          const cdpEndpoint = normalizeRequired(
+            prepared?.cdpEndpoint,
+            'PROTOCOL_REGISTER_FAILED',
+            'Roxy CDP endpoint is unavailable after fingerprint refresh',
+          );
+          env.ROXY_CDP_ENDPOINT = cdpEndpoint;
+          env.ROXY_CDP_PREPARE = '0';
 
-        return runChildProcess({
+          return await runChildProcess({
           spawnImpl,
           command: protocolPythonPath,
           args: [protocolMainPath, '--count', '1', '--workers', '1'],
@@ -508,7 +525,10 @@ export function createRoxyChildProcessAutomation({
           ],
           onLog: options?.onLog,
           cpaTriggerDetails: options?.cpaTriggerDetails,
-        });
+          });
+        } finally {
+          prepared?.release?.();
+        }
       })().finally(() => {
         protocolRegistrationInFlight = false;
       });
@@ -612,8 +632,15 @@ function buildProtocolRegistrationEnv({ baseEnv, account, email, accountId }) {
   delete env.ROXY_CDP_ENDPOINT;
   delete env.ROXY_PROTOCOL_CDP_ENDPOINT;
   delete env.ROXY_OAUTH_PASSWORD;
+  removeRoxyProxySecrets(env);
   if (!password) delete env.ROXY_REGISTER_PASSWORD;
   return applyActionRoxyTargetEnv(env, 'ROXY_PROTOCOL');
+}
+
+function removeRoxyProxySecrets(env) {
+  delete env.ROXY_PROXY_SETTINGS_KEY;
+  delete env.ROXY_PROXY_PASSWORD;
+  delete env.ROXY_REGISTER_PROXY_PASSWORD;
 }
 
 function createDefaultProtocolRoxyClient(env) {
@@ -651,6 +678,25 @@ async function prepareProtocolRoxy({ env, clientFactory = createDefaultProtocolR
     cdpEndpoint: connection?.ws,
     dirId: client.dirId,
   };
+}
+
+async function prepareProtocolBrowser({
+  env,
+  account,
+  prepareProtocolRoxyImpl,
+  roxyClientFactory,
+  roxyProxyService,
+}) {
+  const bound = await roxyProxyService?.prepareBoundBrowser({
+    env,
+    openArgs: resolveProtocolRoxyOpenArgs(env),
+  });
+  if (bound) return bound;
+  return prepareProtocolRoxyImpl({
+    env,
+    account,
+    clientFactory: roxyClientFactory,
+  });
 }
 
 function resolveProtocolRoxyOpenArgs(env) {

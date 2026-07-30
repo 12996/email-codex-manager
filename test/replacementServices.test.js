@@ -251,6 +251,78 @@ test('registerProtocolAccount refreshes the selected Roxy profile before spawnin
   );
 });
 
+test('registerProtocolAccount holds a bound Roxy proxy lease through child completion and passes only the fresh CDP endpoint', async () => {
+  const events = [];
+  const calls = [];
+  const services = createReplacementServices({
+    protocolPythonPath: 'python.exe',
+    protocolProjectPath: 'protocol-project',
+    protocolMainPath: 'protocol-project/main.py',
+    baseEnv: { ROXY_REGISTER_PROXY_PASSWORD: 'must-not-reach-child' },
+    roxyProxyService: {
+      async prepareBoundBrowser({ env, openArgs }) {
+        events.push(['prepare-bound', env.ROXY_BROWSER_DIR_ID, openArgs]);
+        return {
+          cdpEndpoint: 'ws://bound-fresh-profile',
+          release() { events.push('release'); },
+        };
+      },
+    },
+    spawnImpl(command, args, options) {
+      events.push('spawn');
+      calls.push({ command, args, options });
+      const child = new EventEmitter();
+      child.stdout = new EventEmitter();
+      child.stderr = new EventEmitter();
+      queueMicrotask(() => {
+        events.push('close');
+        child.emit('close', 0);
+      });
+      return child;
+    },
+  });
+
+  await services.registerProtocolAccount({ id: 142, email: 'bound@example.com' });
+
+  assert.deepEqual(events, [
+    ['prepare-bound', undefined, []],
+    'spawn',
+    'close',
+    'release',
+  ]);
+  assert.equal(calls[0].options.env.ROXY_CDP_ENDPOINT, 'ws://bound-fresh-profile');
+  assert.equal(Object.hasOwn(calls[0].options.env, 'ROXY_REGISTER_PROXY_PASSWORD'), false);
+  assert.equal(Object.hasOwn(calls[0].options.env, 'proxyPassword'), false);
+  assert.equal(JSON.stringify(calls[0].options.env).includes('proxy-password'), false);
+});
+
+test('registerProtocolAccount releases a bound Roxy proxy lease when child launch fails', async () => {
+  const events = [];
+  const services = createReplacementServices({
+    protocolPythonPath: 'python.exe',
+    protocolProjectPath: 'protocol-project',
+    protocolMainPath: 'protocol-project/main.py',
+    roxyProxyService: {
+      async prepareBoundBrowser() {
+        return {
+          cdpEndpoint: 'ws://bound-fresh-profile',
+          release() { events.push('release'); },
+        };
+      },
+    },
+    spawnImpl() {
+      events.push('spawn');
+      throw new Error('spawn unavailable');
+    },
+  });
+
+  await assert.rejects(
+    () => services.registerProtocolAccount({ id: 143, email: 'bound-failure@example.com' }),
+    /spawn unavailable/,
+  );
+  assert.deepEqual(events, ['spawn', 'release']);
+});
+
 test('registerProtocolAccount passes its current local service port to the protocol child', async () => {
   const calls = [];
   const services = createReplacementServices({
