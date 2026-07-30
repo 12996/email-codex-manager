@@ -157,6 +157,42 @@ function initializeSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_admin_notifications_read_at
     ON admin_notifications (read_at);
   `);
+
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS roxy_proxy_templates (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      workspace_id INTEGER,
+      host TEXT NOT NULL,
+      port TEXT NOT NULL,
+      account_prefix TEXT NOT NULL,
+      encrypted_password TEXT,
+      country TEXT NOT NULL,
+      ttl_minutes INTEGER NOT NULL,
+      protocol TEXT NOT NULL,
+      ip_type TEXT NOT NULL,
+      check_channel TEXT,
+      refresh_url TEXT,
+      remark TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS roxy_browser_proxy_bindings (
+      dir_id TEXT PRIMARY KEY,
+      proxy_id INTEGER NOT NULL,
+      sort_num INTEGER,
+      window_name TEXT,
+      template_id INTEGER,
+      last_generated_username TEXT,
+      last_refresh_ip TEXT,
+      last_refreshed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_roxy_browser_proxy_bindings_proxy_id
+    ON roxy_browser_proxy_bindings (proxy_id);
+  `);
 }
 
 function ensureColumn(db, tableName, columnName, definition) {
