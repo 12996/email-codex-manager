@@ -260,8 +260,12 @@ test('registerProtocolAccount holds a bound Roxy proxy lease through child compl
     protocolMainPath: 'protocol-project/main.py',
     baseEnv: { ROXY_REGISTER_PROXY_PASSWORD: 'must-not-reach-child' },
     roxyProxyService: {
-      async prepareBoundBrowser({ env, openArgs }) {
-        events.push(['prepare-bound', env.ROXY_BROWSER_DIR_ID, openArgs]);
+      createTaskOwner() {
+        events.push('owner');
+        return 'protocol-owner-142';
+      },
+      async prepareBoundBrowser({ env, openArgs, owner }) {
+        events.push(['prepare-bound', env.ROXY_BROWSER_DIR_ID, openArgs, owner]);
         return {
           cdpEndpoint: 'ws://bound-fresh-profile',
           release() { events.push('release'); },
@@ -285,7 +289,8 @@ test('registerProtocolAccount holds a bound Roxy proxy lease through child compl
   await services.registerProtocolAccount({ id: 142, email: 'bound@example.com' });
 
   assert.deepEqual(events, [
-    ['prepare-bound', undefined, []],
+    'owner',
+    ['prepare-bound', undefined, [], 'protocol-owner-142'],
     'spawn',
     'close',
     'release',
@@ -303,7 +308,12 @@ test('registerProtocolAccount releases a bound Roxy proxy lease when child launc
     protocolProjectPath: 'protocol-project',
     protocolMainPath: 'protocol-project/main.py',
     roxyProxyService: {
-      async prepareBoundBrowser() {
+      createTaskOwner() {
+        events.push('owner');
+        return 'protocol-owner-143';
+      },
+      async prepareBoundBrowser({ owner }) {
+        events.push(['prepare-bound', owner]);
         return {
           cdpEndpoint: 'ws://bound-fresh-profile',
           release() { events.push('release'); },
@@ -320,7 +330,7 @@ test('registerProtocolAccount releases a bound Roxy proxy lease when child launc
     () => services.registerProtocolAccount({ id: 143, email: 'bound-failure@example.com' }),
     /spawn unavailable/,
   );
-  assert.deepEqual(events, ['spawn', 'release']);
+  assert.deepEqual(events, ['owner', ['prepare-bound', 'protocol-owner-143'], 'spawn', 'release']);
 });
 
 test('registerProtocolAccount passes its current local service port to the protocol child', async () => {

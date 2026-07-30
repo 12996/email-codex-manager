@@ -157,6 +157,7 @@ test('bindings are unique by dirId and refresh updates only the target binding',
   repo.recordRoxyProxyRefresh('dir-first', {
     username: 'sttj1150537-region-JP-sid-Abc123Xy-t-5',
     ip: '203.0.113.10',
+    cdpStatus: 'ready',
     refreshedAt: '2026-07-30T12:00:00.000Z',
   });
 
@@ -169,11 +170,25 @@ test('bindings are unique by dirId and refresh updates only the target binding',
   assert.equal(updated.proxyId, 14);
   assert.equal(refreshed.lastGeneratedUsername, 'sttj1150537-region-JP-sid-Abc123Xy-t-5');
   assert.equal(refreshed.lastRefreshIp, '203.0.113.10');
+  assert.equal(refreshed.lastCdpStatus, 'ready');
   assert.equal(refreshed.lastRefreshedAt, '2026-07-30T12:00:00.000Z');
   assert.equal(untouched.proxyId, 13);
   assert.equal(untouched.lastGeneratedUsername, null);
+  assert.equal(untouched.lastCdpStatus, null);
   assert.equal(bindings.length, 2);
 
   repo.deleteRoxyProxyBinding('dir-first');
   assert.deepEqual(repo.listRoxyProxyBindings().map((binding) => binding.dirId), ['dir-second']);
+});
+
+test('CDP status records a missing endpoint without creating a successful refresh record', () => {
+  const repo = createRepository();
+  repo.upsertRoxyProxyBinding({ dirId: 'dir-missing', proxyId: 21, templateId: 1 });
+
+  const result = repo.recordRoxyProxyStatus('dir-missing', 'missing');
+
+  assert.equal(result.lastCdpStatus, 'missing');
+  assert.equal(result.lastGeneratedUsername, null);
+  assert.equal(result.lastRefreshIp, null);
+  assert.equal(result.lastRefreshedAt, null);
 });

@@ -185,6 +185,7 @@ function initializeSchema(db) {
       template_id INTEGER,
       last_generated_username TEXT,
       last_refresh_ip TEXT,
+      last_cdp_status TEXT,
       last_refreshed_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
@@ -193,6 +194,7 @@ function initializeSchema(db) {
     CREATE INDEX IF NOT EXISTS idx_roxy_browser_proxy_bindings_proxy_id
     ON roxy_browser_proxy_bindings (proxy_id);
   `);
+  ensureColumn(db, 'roxy_browser_proxy_bindings', 'last_cdp_status', 'TEXT');
 }
 
 function ensureColumn(db, tableName, columnName, definition) {

@@ -351,6 +351,7 @@ export function createRoxyChildProcessAutomation({
         message: '正在刷新协议补号使用的 Roxy 浏览器环境',
       });
       let prepared;
+      const roxyProxyOwner = options?.roxyProxyOwner ?? roxyProxyService?.createTaskOwner?.();
       try {
         prepared = await prepareProtocolBrowser({
           env,
@@ -358,6 +359,7 @@ export function createRoxyChildProcessAutomation({
           prepareProtocolRoxyImpl,
           roxyClientFactory,
           roxyProxyService,
+          roxyProxyOwner,
         });
         notifyAutomationLog(options?.onLog, {
           type: 'step',
@@ -476,6 +478,7 @@ export function createRoxyChildProcessAutomation({
           accountId,
         });
         let prepared;
+        const roxyProxyOwner = options?.roxyProxyOwner ?? roxyProxyService?.createTaskOwner?.();
         try {
           prepared = await prepareProtocolBrowser({
             env,
@@ -483,6 +486,7 @@ export function createRoxyChildProcessAutomation({
             prepareProtocolRoxyImpl,
             roxyClientFactory,
             roxyProxyService,
+            roxyProxyOwner,
           });
           notifyAutomationLog(options?.onLog, {
             type: 'step',
@@ -686,10 +690,12 @@ async function prepareProtocolBrowser({
   prepareProtocolRoxyImpl,
   roxyClientFactory,
   roxyProxyService,
+  roxyProxyOwner,
 }) {
   const bound = await roxyProxyService?.prepareBoundBrowser({
     env,
     openArgs: resolveProtocolRoxyOpenArgs(env),
+    owner: roxyProxyOwner,
   });
   if (bound) return bound;
   return prepareProtocolRoxyImpl({

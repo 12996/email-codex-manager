@@ -104,8 +104,8 @@ export function createRoxyProxySettingsRepository(db, { env = process.env } = {}
       db.prepare(`
         INSERT INTO roxy_browser_proxy_bindings (
           dir_id, proxy_id, sort_num, window_name, template_id,
-          last_generated_username, last_refresh_ip, last_refreshed_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          last_generated_username, last_refresh_ip, last_cdp_status, last_refreshed_at, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(dir_id) DO UPDATE SET
           proxy_id = excluded.proxy_id,
           sort_num = excluded.sort_num,
@@ -120,6 +120,7 @@ export function createRoxyProxySettingsRepository(db, { env = process.env } = {}
         normalized.templateId,
         existing?.last_generated_username || null,
         existing?.last_refresh_ip || null,
+        existing?.last_cdp_status || null,
         existing?.last_refreshed_at || null,
         existing?.created_at || now,
         now,
@@ -140,21 +141,37 @@ export function createRoxyProxySettingsRepository(db, { env = process.env } = {}
       }
       const now = new Date().toISOString();
       const refreshedAt = normalizeOptional(result.refreshedAt ?? result.refreshed_at) || now;
+      const cdpStatus = normalizeCdpStatus(result.cdpStatus ?? result.cdp_status);
       db.prepare(`
         UPDATE roxy_browser_proxy_bindings
         SET
           last_generated_username = ?,
           last_refresh_ip = ?,
+          last_cdp_status = ?,
           last_refreshed_at = ?,
           updated_at = ?
         WHERE dir_id = ?
       `).run(
         normalizeOptional(result.username ?? result.lastGeneratedUsername ?? result.last_generated_username),
         normalizeOptional(result.ip ?? result.lastRefreshIp ?? result.last_refresh_ip),
+        cdpStatus,
         refreshedAt,
         now,
         existing.dirId,
       );
+      return this.getRoxyProxyBinding(existing.dirId);
+    },
+
+    recordRoxyProxyStatus(dirId, cdpStatus) {
+      const existing = this.getRoxyProxyBinding(dirId);
+      if (!existing) {
+        throw codedError('ROXY_PROXY_BINDING_NOT_FOUND', 'Roxy proxy binding not found');
+      }
+      db.prepare(`
+        UPDATE roxy_browser_proxy_bindings
+        SET last_cdp_status = ?, updated_at = ?
+        WHERE dir_id = ?
+      `).run(normalizeCdpStatus(cdpStatus), new Date().toISOString(), existing.dirId);
       return this.getRoxyProxyBinding(existing.dirId);
     },
   };
@@ -239,6 +256,7 @@ function toPublicBinding(record) {
     templateId: record.template_id,
     lastGeneratedUsername: record.last_generated_username,
     lastRefreshIp: record.last_refresh_ip,
+    lastCdpStatus: record.last_cdp_status,
     lastRefreshedAt: record.last_refreshed_at,
     createdAt: record.created_at,
     updatedAt: record.updated_at,
@@ -339,6 +357,14 @@ function normalizeInteger(value) {
     throw codedError('SORT_NUM_INVALID', 'sortNum must be an integer');
   }
   return number;
+}
+
+function normalizeCdpStatus(value) {
+  const normalized = normalizeOptional(value);
+  if (!['ready', 'missing', 'failed'].includes(normalized)) {
+    throw codedError('CDP_STATUS_INVALID', 'cdpStatus must be ready, missing, or failed');
+  }
+  return normalized;
 }
 
 export function codedError(code, message) {

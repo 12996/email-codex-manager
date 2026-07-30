@@ -13,17 +13,21 @@ export function createRoxyProxyService({
   if (typeof roxyClientFactory !== 'function') throw new TypeError('roxyClientFactory is required');
 
   const leases = new Map();
+  let taskOwnerSequence = 0;
 
   async function refreshBrowserProxy({ dirId, env = {}, openArgs = [] } = {}) {
     const targetDirId = requireText(dirId, 'DIR_ID_REQUIRED', 'dirId is required');
-    if (isTaskActive(targetDirId)) throw busyError(targetDirId);
+    if (!isRefreshActivityAllowed(isTaskActive(targetDirId), undefined, false)) {
+      throw busyError(targetDirId);
+    }
     const client = await roxyClientFactory(buildClientEnv(env, targetDirId));
     return refreshBoundBrowser({
       dirId: targetDirId,
       client,
       openArgs,
       keepLease: false,
-      ignoreTaskActivity: false,
+      owner: undefined,
+      allowMatchingOwner: false,
     });
   }
 
@@ -31,7 +35,7 @@ export function createRoxyProxyService({
    * Used only by the protocol child-process preparation path. If no binding
    * exists, it performs no mutation so the caller can use its legacy prepare path.
    */
-  async function prepareBoundBrowser({ env = {}, openArgs = [] } = {}) {
+  async function prepareBoundBrowser({ env = {}, openArgs = [], owner } = {}) {
     const client = await roxyClientFactory(buildClientEnv(env));
     const targetDirId = requireText(
       await client.resolveDirId(),
@@ -47,9 +51,8 @@ export function createRoxyProxyService({
       client,
       openArgs,
       keepLease: true,
-      // This task owns its own pre-spawn preparation. The queue may already
-      // report it as current, which must not block its initial refresh.
-      ignoreTaskActivity: true,
+      owner,
+      allowMatchingOwner: true,
     });
   }
 
@@ -59,13 +62,16 @@ export function createRoxyProxyService({
     binding = settingsRepository.getRoxyProxyBinding(dirId),
     openArgs,
     keepLease,
-    ignoreTaskActivity,
+    owner,
+    allowMatchingOwner,
   }) {
     if (!binding) {
       throw codedError('ROXY_PROXY_BINDING_NOT_FOUND', `Roxy proxy binding not found for dirId=${dirId}`);
     }
 
-    const release = acquireLease(dirId, { ignoreTaskActivity });
+    const release = acquireLease(dirId, { owner, allowMatchingOwner });
+    let successRecorded = false;
+    let cdpStatusRecorded = false;
     try {
       const template = settingsRepository.getRoxyProxyTemplateCredentials();
       const payload = buildProxyPayload(template, generateUsername(template, generateSid()));
@@ -78,11 +84,12 @@ export function createRoxyProxyService({
       await runStep('randomFingerprint', () => client.randomFingerprint());
       await runStep('openBrowser', () => client.openBrowser(openArgs));
       const connection = await runStep('getConnectionInfo', () => client.getConnectionInfo());
-      const cdpEndpoint = requireText(
-        connection?.ws,
-        'ROXY_PROXY_REFRESH_FAILED',
-        'getConnectionInfo did not return a CDP endpoint',
-      );
+      const cdpEndpoint = normalizeOptional(connection?.ws);
+      if (!cdpEndpoint) {
+        recordCdpStatus(settingsRepository, dirId, 'missing');
+        cdpStatusRecorded = true;
+        throw codedError('ROXY_PROXY_REFRESH_FAILED', 'getConnectionInfo did not return a CDP endpoint');
+      }
       const lastRefreshIp = normalizeOptional(connection?.ip ?? connection?.lastIp ?? connection?.proxyInfo?.lastIp);
 
       // The repository only persists safe refresh metadata; the endpoint and
@@ -90,8 +97,10 @@ export function createRoxyProxyService({
       settingsRepository.recordRoxyProxyRefresh(dirId, {
         username: payload.proxyUserName,
         ip: lastRefreshIp,
+        cdpStatus: 'ready',
         refreshedAt,
       });
+      successRecorded = true;
 
       const result = {
         dirId,
@@ -105,13 +114,16 @@ export function createRoxyProxyService({
       release();
       return result;
     } catch (error) {
+      if (!successRecorded && !cdpStatusRecorded) {
+        recordCdpStatus(settingsRepository, dirId, 'failed');
+      }
       release();
       throw error;
     }
   }
 
-  function acquireLease(dirId, { ignoreTaskActivity = false } = {}) {
-    if (!ignoreTaskActivity && isTaskActive(dirId)) {
+  function acquireLease(dirId, { owner, allowMatchingOwner = false } = {}) {
+    if (!isRefreshActivityAllowed(isTaskActive(dirId), owner, allowMatchingOwner)) {
       throw busyError(dirId);
     }
     if (leases.has(dirId)) throw busyError(dirId);
@@ -138,7 +150,31 @@ export function createRoxyProxyService({
     isLeased(dirId) {
       return leases.has(String(dirId || '').trim());
     },
+    createTaskOwner() {
+      taskOwnerSequence += 1;
+      return `roxy-proxy-task-${process.pid}-${taskOwnerSequence}`;
+    },
   };
+}
+
+function isRefreshActivityAllowed(activity, owner, allowMatchingOwner) {
+  if (activity === false || activity === undefined || activity === null) return true;
+  if (activity === true || typeof activity !== 'object') return false;
+  if (activity.active === false) return true;
+  return Boolean(
+    allowMatchingOwner
+    && activity.active === true
+    && owner !== undefined
+    && activity.owner === owner,
+  );
+}
+
+function recordCdpStatus(settingsRepository, dirId, status) {
+  try {
+    settingsRepository.recordRoxyProxyStatus?.(dirId, status);
+  } catch {
+    // Preserve the original refresh failure; status recording must not enable a spawn.
+  }
 }
 
 export function generateProxySid() {
