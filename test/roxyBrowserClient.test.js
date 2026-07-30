@@ -125,6 +125,81 @@ test('RoxyBrowserClient 创建代理时校验必填字段并发送完整 Roxy �
   assert.equal(calls.length, 1);
 });
 
+test('RoxyBrowserClient 创建代理响应缺少 Roxy resource ID 时拒绝推断绑定', async () => {
+  const client = new RoxyBrowserClient({
+    apiBaseUrl: 'http://127.0.0.1:9999',
+    workspaceId: 7,
+    request: async () => ({ code: 0, data: { host: 'us.arxlabs.io' }, msg: '成功' }),
+  });
+  const payload = {
+    checkChannel: 'arx',
+    ipType: 'IPV4',
+    protocol: 'SOCKS5',
+    host: 'us.arxlabs.io',
+    port: '3010',
+    proxyUserName: 'sttj1150537-region-JP-sid-Ab12Cd34-t-5',
+    proxyPassword: 'secret',
+  };
+
+  await assert.rejects(
+    () => client.createProxy(payload),
+    /\/proxy\/create.*未返回有效的 Roxy proxyId/
+  );
+});
+
+test('RoxyBrowserClient 创建代理走 fetch 时发送完整 HTTP 契约并脱敏响应', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  const payload = {
+    checkChannel: 'arx',
+    ipType: 'IPV4',
+    protocol: 'SOCKS5',
+    host: 'us.arxlabs.io',
+    port: '3010',
+    proxyUserName: 'sttj1150537-region-JP-sid-Ab12Cd34-t-5',
+    proxyPassword: 'secret',
+    refreshUrl: 'https://proxy.example/refresh',
+    remark: 'JP template',
+  };
+  globalThis.fetch = async (url, init) => {
+    calls.push([url, init]);
+    return new Response(JSON.stringify({
+      code: 0,
+      data: { workspaceId: 7, id: 12, ...payload, proxyPassword: 'must-not-leak' },
+      msg: '成功',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  try {
+    const client = new RoxyBrowserClient({
+      apiBaseUrl: 'http://127.0.0.1:9999',
+      token: 'test-token',
+      workspaceId: 7,
+    });
+
+    assert.deepEqual(await client.createProxy(payload), {
+      id: 12,
+      ipType: 'IPV4',
+      protocol: 'SOCKS5',
+      host: 'us.arxlabs.io',
+      port: '3010',
+      username: 'sttj1150537-region-JP-sid-Ab12Cd34-t-5',
+      checkChannel: 'arx',
+      refreshUrl: 'https://proxy.example/refresh',
+      remark: 'JP template',
+      passwordConfigured: true,
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], 'http://127.0.0.1:9999/proxy/create');
+    assert.equal(calls[0][1].method, 'POST');
+    assert.equal(calls[0][1].headers.token, 'test-token');
+    assert.equal(calls[0][1].headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(calls[0][1].body), { workspaceId: 7, ...payload });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('RoxyBrowserClient 修改指定 proxyId，且不会把密码回显到返回值', async () => {
   const calls = [];
   const client = new RoxyBrowserClient({
@@ -162,6 +237,59 @@ test('RoxyBrowserClient 修改指定 proxyId，且不会把密码回显到返回
     remark: 'JP refreshed',
     passwordConfigured: true,
   });
+});
+
+test('RoxyBrowserClient 修改代理走 fetch 时发送完整 HTTP 契约并脱敏响应', async () => {
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  const payload = {
+    checkChannel: 'arx',
+    ipType: 'IPV4',
+    protocol: 'SOCKS5',
+    host: 'us.arxlabs.io',
+    port: '3010',
+    proxyUserName: 'sttj1150537-region-JP-sid-Zy98Xw76-t-5',
+    proxyPassword: 'secret',
+    refreshUrl: '',
+    remark: 'JP refreshed',
+  };
+  globalThis.fetch = async (url, init) => {
+    calls.push([url, init]);
+    return new Response(JSON.stringify({
+      code: 0,
+      data: { workspaceId: 7, id: 12, ...payload, proxyPassword: 'must-not-leak' },
+      msg: '成功',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  };
+
+  try {
+    const client = new RoxyBrowserClient({
+      apiBaseUrl: 'http://127.0.0.1:9999',
+      token: 'test-token',
+      workspaceId: 7,
+    });
+
+    assert.deepEqual(await client.modifyProxy(12, payload), {
+      id: 12,
+      ipType: 'IPV4',
+      protocol: 'SOCKS5',
+      host: 'us.arxlabs.io',
+      port: '3010',
+      username: 'sttj1150537-region-JP-sid-Zy98Xw76-t-5',
+      checkChannel: 'arx',
+      refreshUrl: '',
+      remark: 'JP refreshed',
+      passwordConfigured: true,
+    });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0][0], 'http://127.0.0.1:9999/proxy/modify');
+    assert.equal(calls[0][1].method, 'POST');
+    assert.equal(calls[0][1].headers.token, 'test-token');
+    assert.equal(calls[0][1].headers['Content-Type'], 'application/json');
+    assert.deepEqual(JSON.parse(calls[0][1].body), { workspaceId: 7, id: 12, ...payload });
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test('RoxyBrowserClient 只接受浏览器记录显式提供的 proxyId', async () => {

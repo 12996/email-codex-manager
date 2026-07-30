@@ -110,6 +110,10 @@ function publicBrowserProxy(proxyInfo = {}) {
     };
 }
 
+function hasValidProxyId(proxyId) {
+    return Number.isInteger(proxyId) && proxyId > 0;
+}
+
 function extractCdpEndpoint(response, dirId) {
     const data = response && response.data;
     if (typeof data?.ws === 'string' && data.ws) {
@@ -273,7 +277,11 @@ class RoxyBrowserClient {
     async createProxy(payload = {}) {
         const body = this.buildProxyPayload(payload);
         const response = await this.request('POST', '/proxy/create', body);
-        return publicProxy(response.data || {});
+        const proxy = publicProxy(response.data || {});
+        if (!hasValidProxyId(proxy.id)) {
+            throw new Error('/proxy/create 未返回有效的 Roxy proxyId，不能安全建立绑定');
+        }
+        return proxy;
     }
 
     async modifyProxy(proxyId, payload = {}) {
