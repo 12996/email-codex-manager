@@ -285,8 +285,9 @@ function decryptPassword(value, env) {
 
 function getPasswordEncryptionKey(env) {
   const encoded = String(env?.ROXY_PROXY_SETTINGS_KEY || '').trim();
-  const key = encoded ? Buffer.from(encoded, 'base64') : Buffer.alloc(0);
-  if (key.length !== 32) {
+  const isStandardBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded);
+  const key = isStandardBase64 ? Buffer.from(encoded, 'base64') : Buffer.alloc(0);
+  if (key.length !== 32 || key.toString('base64') !== encoded) {
     throw codedError(
       'ROXY_PROXY_SETTINGS_KEY_INVALID',
       'ROXY_PROXY_SETTINGS_KEY must be a base64-encoded 32-byte key before saving a proxy password',

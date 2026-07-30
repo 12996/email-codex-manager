@@ -94,6 +94,28 @@ test('saving a non-empty password requires a valid dedicated encryption key', ()
   );
 });
 
+test('saving a password rejects malformed Base64 encryption keys without writing a template', () => {
+  for (const invalidKey of [
+    `${TEST_KEY}!`,
+    TEST_KEY.slice(0, -1),
+    Buffer.alloc(31, 7).toString('base64'),
+  ]) {
+    const db = createTestDb();
+    const repo = createRoxyProxySettingsRepository(db, {
+      env: { ROXY_PROXY_SETTINGS_KEY: invalidKey },
+    });
+
+    assert.throws(
+      () => repo.saveRoxyProxyTemplate(templateInput),
+      /ROXY_PROXY_SETTINGS_KEY_INVALID/,
+    );
+    assert.equal(
+      db.prepare('SELECT COUNT(*) AS count FROM roxy_proxy_templates').get().count,
+      0,
+    );
+  }
+});
+
 test('template validation requires Roxy workspace and proxy check channel', () => {
   const repo = createRepository();
 
