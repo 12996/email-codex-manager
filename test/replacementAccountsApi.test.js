@@ -1539,3 +1539,260 @@ test('replacement automation run APIs list, read logs, and stop active runs', as
     await server.close();
   }
 });
+
+test('Roxy proxy configuration APIs require an administrator and never return the proxy password', async () => {
+  const saves = [];
+  const proxySettings = createRoxyProxySettingsStub();
+  proxySettings.saveRoxyProxyTemplate = (input) => {
+    saves.push(input);
+    return proxySettings.getRoxyProxyTemplate();
+  };
+  const { app } = createTestContext(undefined, { roxyProxySettings: proxySettings });
+  const server = await startTestServer(app);
+
+  try {
+    const anonymous = await fetch(`${server.baseUrl}/roxy-proxy-config`, { redirect: 'manual' });
+    assert.equal(anonymous.status, 302);
+
+    const read = await jsonRequest(server, 'GET', '/roxy-proxy-config');
+    assert.equal(read.response.status, 200);
+    assert.equal(read.body.template.passwordConfigured, true);
+    assert.equal(JSON.stringify(read.body).includes('proxy-secret'), false);
+    assert.equal(Object.hasOwn(read.body.template, 'password'), false);
+
+    const saved = await jsonRequest(server, 'PUT', '/roxy-proxy-config', {
+      host: 'us.arxlabs.io',
+      password: '',
+    });
+    assert.equal(saved.response.status, 200);
+    assert.equal(saves.length, 1);
+    assert.equal(saves[0].password, '');
+    assert.equal(JSON.stringify(saved.body).includes('proxy-secret'), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test('Roxy proxy APIs expose safe proxy and channel DTOs and map Roxy failures to 502', async () => {
+  const proxySettings = createRoxyProxySettingsStub();
+  const client = createRoxyClientStub();
+  const { app } = createTestContext(undefined, {
+    roxyProxySettings: proxySettings,
+    roxyClientFactory: async () => client,
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const proxies = await jsonRequest(server, 'GET', '/roxy-proxies');
+    assert.equal(proxies.response.status, 200);
+    assert.deepEqual(proxies.body.proxies.map((proxy) => proxy.id), [12]);
+    assert.equal(JSON.stringify(proxies.body).includes('proxy-secret'), false);
+
+    const channels = await jsonRequest(server, 'GET', '/roxy-proxy-channels');
+    assert.equal(channels.response.status, 200);
+    assert.deepEqual(channels.body.channels, [{ label: 'ARX', value: 'arx' }]);
+
+    client.listProxies = async () => { throw new Error('Roxy unavailable'); };
+    const failed = await jsonRequest(server, 'GET', '/roxy-proxies');
+    assert.equal(failed.response.status, 502);
+    assert.equal(failed.body.error, 'ROXY_PROXY_API_FAILED');
+  } finally {
+    await server.close();
+  }
+});
+
+test('Roxy browser proxy binding APIs use only explicit Roxy profile proxyId evidence', async () => {
+  const proxySettings = createRoxyProxySettingsStub();
+  const client = createRoxyClientStub();
+  const { app } = createTestContext(undefined, {
+    roxyProxySettings: proxySettings,
+    roxyClientFactory: async () => client,
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const saved = await jsonRequest(server, 'PUT', '/roxy-browser-proxy-bindings/dir-jp', { proxyId: 12 });
+    assert.equal(saved.response.status, 200);
+    assert.equal(saved.body.binding.dirId, 'dir-jp');
+    assert.equal(saved.body.binding.proxyId, 12);
+    assert.equal(saved.body.binding.sortNum, 7);
+    assert.equal(saved.body.binding.windowName, 'Japan 1');
+
+    const listed = await jsonRequest(server, 'GET', '/roxy-browser-proxy-bindings');
+    assert.deepEqual(listed.body.bindings.map((binding) => binding.dirId), ['dir-jp']);
+
+    client.getBrowserProfile = async () => ({ dirId: 'dir-jp', proxyId: 13, sortNum: 7, windowName: 'Japan 1' });
+    const mismatch = await jsonRequest(server, 'PUT', '/roxy-browser-proxy-bindings/dir-jp', { proxyId: 12 });
+    assert.equal(mismatch.response.status, 409);
+    assert.equal(mismatch.body.error, 'ROXY_BROWSER_PROXY_MISMATCH');
+
+    client.getBrowserProfile = async () => ({ dirId: 'dir-jp', proxyId: undefined });
+    const unavailable = await jsonRequest(server, 'PUT', '/roxy-browser-proxy-bindings/dir-jp', { proxyId: 12 });
+    assert.equal(unavailable.response.status, 400);
+    assert.equal(unavailable.body.error, 'ROXY_BROWSER_PROXY_ID_UNAVAILABLE');
+
+    const deleted = await jsonRequest(server, 'DELETE', '/roxy-browser-proxy-bindings/dir-jp');
+    assert.equal(deleted.response.status, 200);
+    assert.equal(deleted.body.deleted, true);
+  } finally {
+    await server.close();
+  }
+});
+
+test('Roxy proxy refresh rejects an occupied profile and returns only safe refresh metadata', async () => {
+  const proxySettings = createRoxyProxySettingsStub();
+  const refreshes = [];
+  const roxyProxyService = {
+    async refreshBrowserProxy({ dirId }) {
+      refreshes.push(dirId);
+      return {
+        dirId,
+        proxyId: 12,
+        username: 'sttj1150537-region-JP-sid-Ab12Cd34-t-5',
+        lastRefreshIp: '203.0.113.10',
+        refreshedAt: '2026-07-30T10:00:00.000Z',
+        cdpEndpoint: 'ws://must-not-leak',
+      };
+    },
+    isLeased() { return false; },
+  };
+  let activity = { active: true, owner: 'protocol-job-7' };
+  const { app } = createTestContext(undefined, {
+    roxyProxySettings: proxySettings,
+    roxyProxyService,
+    roxyProxyActivity: () => activity,
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const busy = await jsonRequest(server, 'POST', '/roxy-browser-proxy-bindings/dir-jp/refresh');
+    assert.equal(busy.response.status, 409);
+    assert.equal(busy.body.error, 'ROXY_PROXY_REFRESH_BUSY');
+    assert.deepEqual(refreshes, []);
+
+    activity = { active: false, owner: null };
+    const refreshed = await jsonRequest(server, 'POST', '/roxy-browser-proxy-bindings/dir-jp/refresh');
+    assert.equal(refreshed.response.status, 200);
+    assert.equal(refreshed.body.refresh.cdpStatus, 'ready');
+    assert.equal(refreshed.body.refresh.lastRefreshIp, '203.0.113.10');
+    assert.equal(JSON.stringify(refreshed.body).includes('ws://must-not-leak'), false);
+    assert.equal(JSON.stringify(refreshed.body).includes('proxy-secret'), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test('default protocol services receive the same injected Roxy proxy service as the manual refresh API', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-roxy-app-'));
+  const db = createDatabase(join(dir, 'test.db'));
+  const proxySettings = createRoxyProxySettingsStub();
+  const proxyService = {
+    isLeased() { return false; },
+    async refreshBrowserProxy({ dirId }) {
+      return { dirId, proxyId: 12, cdpEndpoint: 'ws://must-not-leak' };
+    },
+  };
+  let factoryOptions;
+  const app = createApp({
+    db,
+    roxyProxySettings: proxySettings,
+    roxyProxyService: proxyService,
+    replacementServicesFactory(options) {
+      factoryOptions = options;
+      return successfulServices();
+    },
+    accounts: { listAccounts() { return []; }, getAccountByGmailEmail() { return null; } },
+  });
+  const server = await startTestServer(app);
+
+  try {
+    assert.strictEqual(factoryOptions.roxyProxyService, proxyService);
+    const refreshed = await jsonRequest(server, 'POST', '/roxy-browser-proxy-bindings/dir-jp/refresh');
+    assert.equal(refreshed.response.status, 200);
+    assert.equal(JSON.stringify(refreshed.body).includes('ws://must-not-leak'), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test('missing Roxy proxy configuration leaves default protocol services on the legacy path', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-roxy-app-'));
+  const db = createDatabase(join(dir, 'test.db'));
+  const proxySettings = createRoxyProxySettingsStub();
+  proxySettings.getRoxyProxyTemplate = () => undefined;
+  let factoryOptions;
+
+  createApp({
+    db,
+    roxyProxySettings: proxySettings,
+    roxyProxyService: {
+      isLeased() { return false; },
+      async refreshBrowserProxy() { throw new Error('must not be used during startup'); },
+    },
+    replacementServicesFactory(options) {
+      factoryOptions = options;
+      return successfulServices();
+    },
+    accounts: { listAccounts() { return []; }, getAccountByGmailEmail() { return null; } },
+  });
+
+  assert.equal(Object.hasOwn(factoryOptions, 'roxyProxyService'), false);
+});
+
+function createRoxyProxySettingsStub() {
+  const bindings = new Map();
+  const template = {
+    id: 1,
+    workspaceId: 7,
+    host: 'us.arxlabs.io',
+    port: '3010',
+    accountPrefix: 'sttj1150537',
+    country: 'JP',
+    ttlMinutes: 5,
+    protocol: 'SOCKS5',
+    ipType: 'IPV4',
+    checkChannel: 'arx',
+    refreshUrl: null,
+    remark: null,
+    passwordConfigured: true,
+  };
+  return {
+    getRoxyProxyTemplate() { return { ...template }; },
+    saveRoxyProxyTemplate() { return { ...template }; },
+    listRoxyProxyBindings() { return [...bindings.values()]; },
+    getRoxyProxyBinding(dirId) { return bindings.get(dirId); },
+    upsertRoxyProxyBinding(input) {
+      const binding = {
+        dirId: input.dirId,
+        proxyId: input.proxyId,
+        sortNum: input.sortNum ?? null,
+        windowName: input.windowName ?? null,
+        templateId: input.templateId ?? null,
+      };
+      bindings.set(binding.dirId, binding);
+      return binding;
+    },
+    deleteRoxyProxyBinding(dirId) { return bindings.delete(dirId); },
+  };
+}
+
+function createRoxyClientStub() {
+  return {
+    async listProxies() {
+      return [{
+        id: 12,
+        host: 'us.arxlabs.io',
+        port: '3010',
+        protocol: 'SOCKS5',
+        username: 'sttj1150537-region-JP-sid-Ab12Cd34-t-5',
+        passwordConfigured: true,
+      }];
+    },
+    async detectProxyChannels() {
+      return [{ label: 'ARX', value: 'arx' }];
+    },
+    async getBrowserProfile(dirId) {
+      return { dirId, proxyId: 12, sortNum: 7, windowName: 'Japan 1' };
+    },
+  };
+}

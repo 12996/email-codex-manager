@@ -1,6 +1,7 @@
 import cookieParser from 'cookie-parser';
 import express from 'express';
 import { existsSync, readFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,11 +32,14 @@ import {
 } from './replacementActivationMethods.js';
 import { createReplacementServices } from './replacementServices.js';
 import { createProtocolRegistrationQueue } from './protocolRegistrationQueue.js';
+import { createRoxyProxySettingsRepository } from './roxyProxySettings.js';
+import { createRoxyProxyService } from './roxyProxyService.js';
 import { getTotpCodeInfo } from './totpService.js';
 import { accountsPage, editAccountPage, loginPage } from './views.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const webDir = join(__dirname, '..', 'web');
+const nodeRequire = createRequire(import.meta.url);
 
 export function createApp({
   db = createDatabase(config.databasePath),
@@ -46,7 +50,12 @@ export function createApp({
   replacementAutomationRuns = createReplacementAutomationRunRepository(db, {
     maxRuns: config.replacementAutomationLogMaxRuns,
   }),
-  replacementServices = createReplacementServices({ automationRuns: replacementAutomationRuns }),
+  replacementServices = null,
+  replacementServicesFactory = createReplacementServices,
+  roxyProxySettings = createRoxyProxySettingsRepository(db),
+  roxyClientFactory = createDefaultRoxyClient,
+  roxyProxyService = null,
+  roxyProxyActivity = null,
   mailService = { fetchMessages, testConnection },
   replacementEmailApiService = { fetchMessages: fetchReplacementEmailMessages },
   cpaCredentialMonitor = null,
@@ -57,7 +66,39 @@ export function createApp({
 } = {}) {
   const app = express();
   const requireAuth = createAuthMiddleware();
-  const protocolRegistrationQueue = createProtocolRegistrationQueue({
+  let protocolRegistrationQueue;
+  let activeRoxyProxyService;
+  const getRoxyProxyActivity = (dirId) => {
+    const configuredActivity = typeof roxyProxyActivity === 'function'
+      ? roxyProxyActivity(dirId)
+      : undefined;
+    if (isRoxyProxyActivityActive(configuredActivity)) return configuredActivity;
+
+    if (activeRoxyProxyService?.isLeased?.(dirId)) {
+      return { active: true, owner: 'roxy-proxy-lease' };
+    }
+
+    // Protocol registration currently shares the configured Roxy window. Until
+    // the queue records a per-job dirId, conservatively block manual changes.
+    const queueCurrent = protocolRegistrationQueue.getSnapshot().current;
+    if (queueCurrent) {
+      return { active: true, owner: `protocol-registration-queue:${queueCurrent.id}` };
+    }
+    return configuredActivity ?? { active: false, owner: null };
+  };
+  activeRoxyProxyService = roxyProxyService || createRoxyProxyService({
+    settingsRepository: roxyProxySettings,
+    roxyClientFactory,
+    isTaskActive: getRoxyProxyActivity,
+  });
+  if (!replacementServices) {
+    const template = roxyProxySettings.getRoxyProxyTemplate?.();
+    replacementServices = replacementServicesFactory({
+      automationRuns: replacementAutomationRuns,
+      ...(isRoxyProxyTemplateReady(template) ? { roxyProxyService: activeRoxyProxyService } : {}),
+    });
+  }
+  protocolRegistrationQueue = createProtocolRegistrationQueue({
     async worker(job) {
       const account = replacementAccounts.getAccount(job.account.id);
       if (!account) throw Object.assign(new Error('replacement account not found'), { code: 'ACCOUNT_NOT_FOUND' });
@@ -721,6 +762,121 @@ export function createApp({
     res.json({ ok: true, cleared, ...protocolRegistrationQueue.getSnapshot() });
   });
 
+  app.get('/roxy-proxy-config', requireAuth, (req, res) => {
+    try {
+      res.json({ ok: true, template: publicRoxyProxyTemplate(roxyProxySettings.getRoxyProxyTemplate()) });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
+  app.put('/roxy-proxy-config', requireAuth, (req, res) => {
+    try {
+      const template = roxyProxySettings.saveRoxyProxyTemplate(req.body || {});
+      res.json({ ok: true, template: publicRoxyProxyTemplate(template) });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
+  app.get('/roxy-proxies', requireAuth, async (req, res) => {
+    try {
+      const client = await roxyClientFactory(process.env);
+      const proxies = await client.listProxies();
+      res.json({ ok: true, proxies: Array.isArray(proxies) ? proxies.map(publicRoxyProxy) : [] });
+    } catch (error) {
+      sendApiError(res, asRoxyApiError(error));
+    }
+  });
+
+  app.get('/roxy-proxy-channels', requireAuth, async (req, res) => {
+    try {
+      const client = await roxyClientFactory(process.env);
+      const channels = await client.detectProxyChannels();
+      res.json({ ok: true, channels: Array.isArray(channels) ? channels : [] });
+    } catch (error) {
+      sendApiError(res, asRoxyApiError(error));
+    }
+  });
+
+  app.get('/roxy-browser-proxy-bindings', requireAuth, (req, res) => {
+    try {
+      const bindings = roxyProxySettings.listRoxyProxyBindings();
+      res.json({ ok: true, bindings: Array.isArray(bindings) ? bindings.map(publicRoxyProxyBinding) : [] });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
+  app.put('/roxy-browser-proxy-bindings/:dirId', requireAuth, async (req, res) => {
+    try {
+      const dirId = normalizeRoxyDirId(req.params.dirId);
+      const requestedProxyId = normalizeRoxyProxyId(req.body?.proxyId ?? req.body?.proxy_id, 'PROXY_ID_REQUIRED');
+      const client = await roxyClientFactory(process.env);
+      let profile;
+      try {
+        profile = await client.getBrowserProfile(dirId);
+      } catch (error) {
+        if (String(error?.message || '').includes('proxyId')) {
+          throw roxyCodedError(
+            'ROXY_BROWSER_PROXY_ID_UNAVAILABLE',
+            'Roxy browser profile does not expose an explicit proxyId; refusing to create a binding',
+          );
+        }
+        throw asRoxyApiError(error);
+      }
+      const profileProxyId = normalizeRoxyProxyId(profile?.proxyId, 'ROXY_BROWSER_PROXY_ID_UNAVAILABLE');
+      if (String(profile?.dirId || '') !== dirId) {
+        throw roxyCodedError('ROXY_BROWSER_PROFILE_MISMATCH', 'Roxy browser profile dirId does not match the requested binding');
+      }
+      if (profileProxyId !== requestedProxyId) {
+        throw roxyCodedError(
+          'ROXY_BROWSER_PROXY_MISMATCH',
+          'Requested proxyId does not match the browser profile explicit proxyId',
+        );
+      }
+
+      const template = roxyProxySettings.getRoxyProxyTemplate();
+      const binding = roxyProxySettings.upsertRoxyProxyBinding({
+        dirId,
+        proxyId: profileProxyId,
+        sortNum: profile.sortNum,
+        windowName: profile.windowName,
+        templateId: template?.id ?? null,
+      });
+      res.json({ ok: true, binding: publicRoxyProxyBinding(binding) });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
+  app.delete('/roxy-browser-proxy-bindings/:dirId', requireAuth, (req, res) => {
+    try {
+      const deleted = roxyProxySettings.deleteRoxyProxyBinding(normalizeRoxyDirId(req.params.dirId));
+      res.json({ ok: true, deleted });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
+  app.post('/roxy-browser-proxy-bindings/:dirId/refresh', requireAuth, async (req, res) => {
+    try {
+      const dirId = normalizeRoxyDirId(req.params.dirId);
+      if (isRoxyProxyActivityActive(getRoxyProxyActivity(dirId))) {
+        throw roxyCodedError('ROXY_PROXY_REFRESH_BUSY', `Roxy browser dirId=${dirId} is busy`);
+      }
+      const result = await activeRoxyProxyService.refreshBrowserProxy({ dirId });
+      const binding = roxyProxySettings.getRoxyProxyBinding(dirId);
+      res.json({
+        ok: true,
+        binding: publicRoxyProxyBinding(binding),
+        refresh: publicRoxyProxyRefresh(result),
+      });
+    } catch (error) {
+      sendApiError(res, error);
+    }
+  });
+
   app.post('/replacement-accounts/:id/register-protocol', requireAuth, (req, res) => {
     const account = replacementAccounts.getAccount(req.params.id);
     if (!account) {
@@ -1096,6 +1252,135 @@ function isLocalRequest(req) {
   return ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(remoteAddress);
 }
 
+function createDefaultRoxyClient(env = process.env) {
+  const { RoxyBrowserClient } = nodeRequire('./auto/roxy-browser-client.cjs');
+  return new RoxyBrowserClient({
+    apiBaseUrl: normalizeOptionalEnv(env.ROXY_API_BASE_URL) || undefined,
+    apiPort: normalizeOptionalEnv(env.ROXY_API_PORT) || undefined,
+    token: normalizeOptionalEnv(env.ROXY_API_TOKEN),
+    workspaceId: Number(env.ROXY_WORKSPACE_ID || 0),
+    dirId: normalizeOptionalEnv(env.ROXY_BROWSER_DIR_ID),
+    windowName: normalizeOptionalEnv(env.ROXY_BROWSER_WINDOW_NAME),
+    windowSortNum: normalizeOptionalEnv(env.ROXY_BROWSER_SORT_NUM),
+  });
+}
+
+function isRoxyProxyTemplateReady(template) {
+  return Boolean(
+    template?.passwordConfigured
+    && Number.isInteger(Number(template.workspaceId))
+    && Number(template.workspaceId) > 0
+    && normalizeOptionalEnv(template.host)
+    && normalizeOptionalEnv(template.port)
+    && normalizeOptionalEnv(template.accountPrefix)
+    && normalizeOptionalEnv(template.country)
+    && Number.isInteger(Number(template.ttlMinutes))
+    && Number(template.ttlMinutes) > 0
+    && normalizeOptionalEnv(template.protocol)
+    && normalizeOptionalEnv(template.ipType)
+    && normalizeOptionalEnv(template.checkChannel)
+  );
+}
+
+function publicRoxyProxyTemplate(template) {
+  if (!template) return null;
+  return {
+    id: template.id,
+    workspaceId: template.workspaceId,
+    host: template.host,
+    port: template.port,
+    accountPrefix: template.accountPrefix,
+    country: template.country,
+    ttlMinutes: template.ttlMinutes,
+    protocol: template.protocol,
+    ipType: template.ipType,
+    checkChannel: template.checkChannel,
+    refreshUrl: template.refreshUrl ?? null,
+    remark: template.remark ?? null,
+    passwordConfigured: Boolean(template.passwordConfigured),
+    createdAt: template.createdAt ?? null,
+    updatedAt: template.updatedAt ?? null,
+  };
+}
+
+function publicRoxyProxy(proxy = {}) {
+  return {
+    id: proxy.id,
+    ipType: proxy.ipType,
+    protocol: proxy.protocol,
+    host: proxy.host,
+    port: proxy.port,
+    username: proxy.username,
+    checkChannel: proxy.checkChannel,
+    refreshUrl: proxy.refreshUrl ?? null,
+    remark: proxy.remark ?? null,
+    passwordConfigured: Boolean(proxy.passwordConfigured),
+  };
+}
+
+function publicRoxyProxyBinding(binding) {
+  if (!binding) return null;
+  return {
+    dirId: binding.dirId,
+    proxyId: binding.proxyId,
+    sortNum: binding.sortNum ?? null,
+    windowName: binding.windowName ?? null,
+    templateId: binding.templateId ?? null,
+    lastGeneratedUsername: binding.lastGeneratedUsername ?? null,
+    lastRefreshIp: binding.lastRefreshIp ?? null,
+    lastCdpStatus: binding.lastCdpStatus ?? null,
+    lastRefreshedAt: binding.lastRefreshedAt ?? null,
+    createdAt: binding.createdAt ?? null,
+    updatedAt: binding.updatedAt ?? null,
+  };
+}
+
+function publicRoxyProxyRefresh(result = {}) {
+  return {
+    dirId: result.dirId,
+    proxyId: result.proxyId,
+    username: result.username,
+    lastRefreshIp: result.lastRefreshIp ?? null,
+    refreshedAt: result.refreshedAt ?? null,
+    // The endpoint itself is intentionally excluded from every HTTP response.
+    cdpStatus: result.cdpStatus || (result.cdpEndpoint ? 'ready' : 'missing'),
+  };
+}
+
+function normalizeRoxyDirId(value) {
+  const dirId = String(value || '').trim();
+  if (!dirId) throw roxyCodedError('DIR_ID_REQUIRED', 'dirId is required');
+  return dirId;
+}
+
+function normalizeRoxyProxyId(value, code) {
+  const proxyId = Number(value);
+  if (!Number.isInteger(proxyId) || proxyId <= 0) {
+    throw roxyCodedError(code, 'Roxy proxyId must be a positive integer');
+  }
+  return proxyId;
+}
+
+function isRoxyProxyActivityActive(activity) {
+  if (activity === true) return true;
+  return Boolean(activity && typeof activity === 'object' && activity.active !== false);
+}
+
+function asRoxyApiError(error) {
+  if (error?.code) return error;
+  return roxyCodedError('ROXY_PROXY_API_FAILED', 'Roxy browser API request failed');
+}
+
+function roxyCodedError(code, message) {
+  const error = new Error(`${code}: ${message}`);
+  error.code = code;
+  return error;
+}
+
+function normalizeOptionalEnv(value) {
+  return String(value || '').trim();
+}
+
 function sendAccountApiError(res, error) {
   const status = error.code === 'AUTH_FAILED' ? 401 : 400;
   res.status(status).json({
@@ -1162,8 +1447,11 @@ function statusForApiError(code) {
   if (code === 'EMAIL_DUPLICATE') return 409;
   if (code === 'ACTIVATION_METHOD_DUPLICATE') return 409;
   if (code === 'PROTOCOL_REGISTER_BUSY' || code === 'PROTOCOL_REGISTER_QUEUED') return 409;
+  if (code === 'ROXY_PROXY_REFRESH_BUSY') return 409;
+  if (code === 'ROXY_BROWSER_PROXY_MISMATCH' || code === 'ROXY_BROWSER_PROFILE_MISMATCH') return 409;
   if (code === 'ACCOUNT_NOT_FOUND') return 404;
   if (code === 'NOTIFICATION_NOT_FOUND') return 404;
+  if (code === 'ROXY_PROXY_BINDING_NOT_FOUND') return 404;
   if (
     code === 'SMS_FETCH_FAILED'
     || code === 'JSON_FETCH_FAILED'
@@ -1175,6 +1463,8 @@ function statusForApiError(code) {
     || code === 'PROTOCOL_REPLACE_FAILED'
     || code === 'RUN_NOT_ACTIVE'
     || code === 'RUN_STOP_FAILED'
+    || code === 'ROXY_PROXY_API_FAILED'
+    || code === 'ROXY_PROXY_REFRESH_FAILED'
   ) {
     return 502;
   }
@@ -1193,7 +1483,17 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const replacementAutomationRuns = createReplacementAutomationRunRepository(db, {
     maxRuns: config.replacementAutomationLogMaxRuns,
   });
-  const replacementServices = createReplacementServices({ automationRuns: replacementAutomationRuns });
+  const roxyProxySettings = createRoxyProxySettingsRepository(db);
+  const roxyProxyService = createRoxyProxyService({
+    settingsRepository: roxyProxySettings,
+    roxyClientFactory: createDefaultRoxyClient,
+  });
+  const replacementServices = createReplacementServices({
+    automationRuns: replacementAutomationRuns,
+    ...(isRoxyProxyTemplateReady(roxyProxySettings.getRoxyProxyTemplate())
+      ? { roxyProxyService }
+      : {}),
+  });
   const cpaClient = createCpaClient(config.cpa);
   const cpaRepairWorker = createCpaRepairWorker({
     cpaClient,
@@ -1219,6 +1519,8 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     replacementAccounts,
     replacementAutomationRuns,
     replacementServices,
+    roxyProxySettings,
+    roxyProxyService,
     cpaCredentialMonitor,
     cpaRepairWorker,
   }).listen(port, () => {
