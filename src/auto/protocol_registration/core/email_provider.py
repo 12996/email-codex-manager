@@ -70,7 +70,7 @@ def acquire_email() -> str:
     return account.email
 
 
-def wait_for_otp(email: str, after_ts: float) -> str:
+def wait_for_otp(email: str, after_ts: float, excluded_codes: set[str] | None = None) -> str:
     """
     等待并返回该邮箱最新的 ChatGPT OTP（6 位数字字符串）。
 
@@ -89,7 +89,9 @@ def wait_for_otp(email: str, after_ts: float) -> str:
                 account = client.selected_account
         if account is None:
             raise RuntimeError(f"未找到补号邮箱上下文: {email}")
-        return _get_replacement_client().wait_for_otp(account, after_ts=after_ts)
+        return _get_replacement_client().wait_for_otp(
+            account, after_ts=after_ts, excluded_codes=excluded_codes
+        )
 
     if OTP_PROVIDER == "gmail_imap":
         return fetch_gmail_imap_otp(email, after_ts)

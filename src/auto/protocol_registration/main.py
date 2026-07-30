@@ -27,6 +27,7 @@ from core.openai_auth import (
     build_sentinel_header,
     register_user,
     validate_email_otp,
+    EmailOtpRejectedError,
     create_account,
 )
 from core.account_export import (
@@ -62,6 +63,20 @@ def resolve_registration_password(env: dict | None = None) -> str:
     if not password:
         raise RuntimeError("ROXY_REGISTER_PASSWORD 未配置，协议注册无法设置账号密码")
     return password
+
+
+def validate_otp_with_retry(session, email: str, after_ts: float, sentinel_header: str) -> dict:
+    """错码后只接受本次尝试之后到达的新邮件，避免重复提交旧 OTP。"""
+    marker = after_ts
+    rejected_codes = set()
+    while True:
+        code = wait_for_otp(email, after_ts=marker, excluded_codes=rejected_codes)
+        try:
+            return validate_email_otp(session, code, sentinel_header)
+        except EmailOtpRejectedError:
+            rejected_codes.add(code)
+            marker = time.time()
+            logger.warning("[OTP] 当前验证码被拒绝，继续每 5 秒轮询新邮件")
 
 
 def _sync_replacement_registration_status(email: str) -> None:
@@ -278,14 +293,13 @@ def run_registration(
         time.sleep(0.5)
 
         # 步骤3: 发起 OAuth signin
-        # 不预填 login_hint，避免 Auth 在初始跳转中固定到无密码邮箱分支。
         authorize_url = signin_openai(
             session,
             csrf_token,
             email,
-            screen_hint="signup",
-            prompt="",
-            include_login_hint=False,
+            screen_hint="login_or_signup",
+            prompt="login",
+            include_login_hint=True,
         )
         time.sleep(0.5)
 
@@ -298,9 +312,8 @@ def run_registration(
         follow_authorize(session, authorize_url)
         time.sleep(2)
 
-        # 步骤5: 密码注册先由 Auth 页面切入 username_password_create。
-        # 不能预先调用 authorize/continue 或 email-otp/send，否则服务端会话会
-        # 进入 email_otp_verification，随后拒绝 user/register。
+        # 初始 email-verification 是页面过渡，不能在此调用 OTP validate。
+        # 真实服务端仅在密码提交后返回 email_otp_send。
         logger.info("[步骤5] Auth 会话已建立，进入创建密码阶段")
         get_create_account_page(session)
         time.sleep(0.5)
@@ -326,13 +339,13 @@ def run_registration(
             )
             if USE_EMAIL_SERVICE:
                 logger.info(f"[OTP] 等待验证码：{email}")
-                otp_code_post_password = otp_code or wait_for_otp(email, after_ts=otp_after_ts)
+                otp_code_post_password = otp_code
             else:
                 logger.info("[OTP] 密码提交后需要邮箱验证码:")
                 otp_code_post_password = otp_code or input(">>> 验证码: ").strip()
-            post_password_result = validate_email_otp(
-                session, otp_code_post_password, sentinel_header_post_password
-            )
+            post_password_result = validate_otp_with_retry(
+                session, email, time.time(), sentinel_header_post_password
+            ) if otp_code is None else validate_email_otp(session, otp_code_post_password, sentinel_header_post_password)
             follow_auth_continue(session, post_password_result, "about_you")
         else:
             raise RuntimeError(

@@ -629,7 +629,7 @@ input.on('line', (line) => {
         self.assertFalse(result["success"])
         self.assertTrue(session.closed)
 
-    def test_registration_opens_password_before_any_email_otp_authorization(self):
+    def test_registration_opens_password_before_email_otp(self):
         import main
 
         class FakeSession:
@@ -641,38 +641,63 @@ input.on('line', (line) => {
                 self.closed = True
 
         session = FakeSession()
-        password_result = {
-            "page": {"type": "email_otp_send"},
+        calls = []
+        password_stage = {
+            "page": {"type": "username_password_create"},
             "method": "GET",
-            "continue_url": "https://auth.openai.com/api/accounts/email-otp/send",
+            "continue_url": "https://auth.openai.com/create-account/password",
         }
+
+        def signin(*args, **kwargs):
+            calls.append(("signin", kwargs))
+            return "https://auth.openai.com/authorize"
+
+        def sentinel(_session, flow):
+            calls.append(("sentinel", flow))
+            return {"token": "challenge"}
+
+        def validate(*_args):
+            calls.append(("validate_email_otp",))
+            return password_stage
+
+        def follow_continue(_session, result, expected_page):
+            calls.append(("follow_auth_continue", result, expected_page))
+
+        def register(*_args):
+            calls.append(("register_user",))
+            raise RuntimeError("stop after password submission")
+
         with patch("main.resolve_registration_password", return_value="AccountPass12!"), patch(
             "main.BrowserSession", return_value=session
         ), patch("main.get_providers", return_value={}), patch(
             "main.get_csrf_token", return_value="csrf-token"
-        ), patch("main.signin_openai", return_value="https://auth.openai.com/authorize"), patch(
+        ), patch("main.signin_openai", side_effect=signin), patch(
             "main.follow_authorize"
-        ), patch(
-            "main.follow_auth_continue", side_effect=RuntimeError("stop after password result")
-        ) as follow_continue, patch("main.request_sentinel_token", return_value={"token": "challenge"}) as sentinel, patch(
+        ), patch("main.get_create_account_page"), patch("main.request_sentinel_token", side_effect=sentinel), patch(
             "main.build_sentinel_header", return_value=("sentinel-token", None)
-        ), patch(
-            "main.get_create_account_page"
-        ), patch("main.register_user", return_value=password_result) as register, patch(
-            "main.time.sleep"
-        ), patch("config.EMAIL_SOURCE", ""):
+        ), patch("main.validate_email_otp", side_effect=validate), patch(
+            "main.follow_auth_continue", side_effect=follow_continue
+        ), patch("main.register_user", side_effect=register
+        ), patch("main.time.sleep"), patch("config.EMAIL_SOURCE", ""):
             result = main.run_registration("user@example.test", "Test User", otp_code="123456")
 
         self.assertFalse(result["success"])
         self.assertEqual(
-            [call.args[1] for call in sentinel.call_args_list],
-            ["username_password_create"],
+            calls[0],
+            (
+                "signin",
+                {
+                    "screen_hint": "login_or_signup",
+                    "prompt": "login",
+                    "include_login_hint": True,
+                },
+            ),
         )
         self.assertEqual(
-            register.call_args.args,
-            (session, "user@example.test", "AccountPass12!", "sentinel-token", None),
+            [call[1] for call in calls if call[0] == "sentinel"],
+            ["username_password_create"],
         )
-        self.assertEqual(follow_continue.call_args.args[1], password_result)
+        self.assertIn(("register_user",), calls)
 
 
 if __name__ == "__main__":

@@ -379,6 +379,7 @@ class ReplacementServiceClient:
         after_ts: float | None = None,
         max_wait: float | None = None,
         poll_interval: float | None = None,
+        excluded_codes: set[str] | None = None,
     ) -> str:
         from config import REPLACEMENT_CODE_MAX_WAIT, REPLACEMENT_CODE_POLL_INTERVAL
 
@@ -390,10 +391,14 @@ class ReplacementServiceClient:
         )
         interval = poll_interval if poll_interval is not None else REPLACEMENT_CODE_POLL_INTERVAL
         last_error = "验证码未找到"
+        excluded = {str(code) for code in (excluded_codes or set())}
 
         while True:
             try:
-                return self.fetch_otp_for_account(current, after_ts=after_ts)
+                code = self.fetch_otp_for_account(current, after_ts=after_ts)
+                if code not in excluded:
+                    return code
+                last_error = "邮箱接口仍返回已拒绝的旧验证码"
             except ReplacementCodeNotFoundError as exc:
                 last_error = str(exc)
             except ReplacementServiceError as exc:

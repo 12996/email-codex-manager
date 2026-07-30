@@ -3,7 +3,7 @@ import unittest
 from urllib.parse import parse_qs, urlparse
 
 from core.chatgpt_auth import signin_openai
-from core.openai_auth import authorize_signup, get_create_account_page, register_user, send_email_otp
+from core.openai_auth import EmailOtpRejectedError, authorize_signup, get_create_account_page, register_user, send_email_otp, validate_email_otp
 from main import resolve_registration_password
 
 
@@ -170,6 +170,19 @@ class PasswordRegistrationTests(unittest.TestCase):
                 ),
             ],
         )
+
+    def test_validate_email_otp_classifies_wrong_code_for_retry(self):
+        class WrongCodeResponse(_FakeResponse):
+            status_code = 401
+            text = '{"error":{"code":"wrong_email_otp_code"}}'
+
+        class WrongCodeSession(_Session):
+            def post(self, url, headers=None, data=None):
+                self.calls.append(("post", url, headers, data))
+                return WrongCodeResponse()
+
+        with self.assertRaises(EmailOtpRejectedError):
+            validate_email_otp(WrongCodeSession(), "123456", "sentinel-token")
 
 
 

@@ -19,6 +19,10 @@ from core.sentinel_runner import generate_sentinel_token
 logger = logging.getLogger(__name__)
 
 
+class EmailOtpRejectedError(RuntimeError):
+    """服务端明确拒绝当前邮箱验证码，可继续等待新邮件后重试。"""
+
+
 # 步骤4 网络层临时性错误（代理抽风 / TLS 握手失败 / 重置等）的重试参数
 _FOLLOW_AUTH_MAX_ATTEMPTS = 3
 _FOLLOW_AUTH_BACKOFF_BASE = 2.0  # 第 N 次重试前等 2^(N-1) 秒
@@ -437,6 +441,8 @@ def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str 
     if resp.status_code != 200:
         logger.error(f"[步骤10] 请求失败, 状态码: {resp.status_code}")
         logger.error(f"[步骤10] 响应内容: {resp.text}")
+        if "wrong_email_otp_code" in str(resp.text):
+            raise EmailOtpRejectedError("邮箱验证码错误，等待新验证码后重试")
         resp.raise_for_status()
 
     data = resp.json()

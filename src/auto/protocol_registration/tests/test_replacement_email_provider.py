@@ -46,7 +46,7 @@ class FakeReplacementClient:
         self.calls.append(("acquire_account",))
         return dict(self.account)
 
-    def wait_for_otp(self, account, *, after_ts):
+    def wait_for_otp(self, account, *, after_ts, excluded_codes=None):
         self.calls.append(("wait_for_otp", account["id"], after_ts))
         return "654321"
 
@@ -135,6 +135,29 @@ class ReplacementEmailProviderTests(unittest.TestCase):
                     }),
                     expected,
                 )
+
+    def test_wait_for_otp_skips_a_previously_rejected_code(self):
+        request = FakeRequest([
+            FakeResponse(200, '{"code":"111111"}'),
+            FakeResponse(200, '{"code":"222222"}'),
+        ])
+        sleeps = []
+        client = ReplacementServiceClient(
+            base_url="http://127.0.0.1:13100",
+            admin_password="admin",
+            request_fn=request,
+            sleep_fn=sleeps.append,
+        )
+
+        code = client.wait_for_otp(
+            {"email": "user@example.com", "email_code_api": "https://example.invalid/code"},
+            excluded_codes={"111111"},
+            max_wait=120,
+            poll_interval=5,
+        )
+
+        self.assertEqual(code, "222222")
+        self.assertEqual(sleeps, [5])
 
     def test_local_icloud_and_gmail_endpoints_are_selected_by_domain(self):
         for email, path in (

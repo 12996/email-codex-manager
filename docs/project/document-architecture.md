@@ -156,6 +156,12 @@ CPA_HEALTH_MONITOR_ENABLED=true
 - 顶部铃铛入口存在于 `/accounts` 和 `/replacement-ui` 页面。
 - 当前主要告警类型是 `cpa_repair_circuit_breaker`。
 
+### 5.7 协议注册流程
+
+协议注册的 Auth、双邮箱 OTP、OAuth callback 和 TOTP 2FA 接口参数、阶段约束与旧码重试规则见：
+`docs/project/protocol-registration-flow.md`。该文档以 2026-07-30 的 Roxy `617-3` 手动端到端录制为证据，
+运行入口为 `src/auto/protocol_registration/main.py`。
+
 ## 6. 关键配置与存储
 
 ### 6.1 环境变量

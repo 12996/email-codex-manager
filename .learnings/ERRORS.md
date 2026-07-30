@@ -385,6 +385,62 @@ Roxy 页面请求失败: HTTP 401 https://auth.openai.com/api/accounts/email-otp
 
 ---
 
+## [ERR-20260728-004] cdp-asset-regex-escaping
+
+**Logged**: 2026-07-28T01:47:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+An inline Node asset-search command failed because PowerShell consumed the JavaScript regular-expression escaping.
+
+### Error
+```text
+SyntaxError: Invalid regular expression: missing /
+```
+
+### Context
+- The command queried the currently served Auth bundle through the Roxy CDP page.
+- The required endpoint had already been found with a fixed-string search; no retry is needed for the failed regex query.
+
+### Suggested Fix
+Prefer fixed-string extraction or a temporary script file for complex JavaScript regular expressions invoked from PowerShell.
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/roxy_register_openai_cdp_network_recorder.cjs`
+
+---
+
+## [ERR-20260728-003] roxy-browser-open-timeout
+
+**Logged**: 2026-07-28T01:40:00+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: infra
+
+### Summary
+RoxyBrowser `/browser/open` exceeded its 15-second client timeout while restarting the protocol profile for a second manual recording.
+
+### Error
+```text
+/browser/open 调用失败: timeout of 15000ms exceeded
+```
+
+### Context
+- The first recording had just stopped and the profile had been closed, cache-cleared, and fingerprint-randomized.
+- The timeout may leave the Roxy profile opened asynchronously; query its CDP connection before retrying open.
+
+### Suggested Fix
+Poll `/browser/connection_info` for the configured profile before issuing another `/browser/open`, and raise the open timeout only if no connection becomes available.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: `src/auto/roxy-browser-client.cjs`, `src/auto/roxy_oauth_login.js`
+
+---
+
 ## [ERR-20260724-001] powershell-empty-pipeline
 
 **Logged**: 2026-07-24T00:10:00+08:00
@@ -982,5 +1038,161 @@ npm error Missing script: "test"
 ### Resolution
 - **Resolved**: 2026-07-28T01:14:00+08:00
 - **Notes**: 已分别在正确工作目录运行专项测试。
+
+---
+
+## [ERR-20260730-001] protocol-registration-readme-assumption
+
+**Logged**: 2026-07-30T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+检查协议注册运行说明时假定模块目录存在 README.md，导致读取命令失败。
+
+### Error
+```text
+Cannot find path 'src\\auto\\protocol_registration\\README.md' because it does not exist.
+```
+
+### Context
+- 当前模块没有独立 README；运行状态以 `docs/work/handoff.md` 和实际 `main.py` 为准。
+
+### Suggested Fix
+读取模块说明前先用 `rg --files src/auto/protocol_registration` 确认文档入口。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `docs/work/handoff.md`, `src/auto/protocol_registration/main.py`
+
+### Resolution
+- **Resolved**: 2026-07-30T00:00:00+08:00
+- **Notes**: 已改为依据交接记录和当前提交代码判断可执行条件。
+
+---
+
+## [ERR-20260730-002] roxy-cdp-passive-inspection-timeout
+
+**Logged**: 2026-07-30T00:00:00+08:00
+**Priority**: low
+**Status**: pending
+**Area**: infra
+
+### Summary
+已确认 Roxy CDP endpoint 可用，但附着后读取现有页面状态超时。
+
+### Error
+```text
+command timed out after 19033 milliseconds
+```
+
+### Context
+- `GET /browser/connection_info` 返回 code=0，目标 dirId 有本地 CDP endpoint。
+- Playwright `connectOverCDP` 后读取页面标题、body 和控件元数据未在 19 秒内完成；未执行导航、点击或写操作。
+
+### Suggested Fix
+后续若需继续取证，先把连接、页面枚举和单页 DOM 读取分成独立且短超时的步骤，定位具体阻塞点。
+
+### Metadata
+- Reproducible: unknown
+- Related Files: `src/auto/protocol_registration/scripts/roxy_cdp_bridge.cjs`
+
+---
+
+## [ERR-20260730-003] protocol-test-interpreter-mismatch
+
+**Logged**: 2026-07-30T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+系统 Python 缺少协议注册测试依赖 `pyotp`，不能用于该模块的回归测试。
+
+### Error
+```text
+ModuleNotFoundError: No module named 'pyotp'
+```
+
+### Context
+- 直接执行 `python -m unittest` 调用了系统解释器。
+- 协议注册服务日志指定 `F:\\anaconda\\anaconda3\\envs\\tilian\\python.exe`，该环境才包含运行依赖。
+
+### Suggested Fix
+协议注册 Python 测试和编译均显式使用 `tilian` 环境解释器。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_registration/tests/`
+
+### Resolution
+- **Resolved**: 2026-07-30T00:00:00+08:00
+- **Notes**: 已切换至服务实际使用的 `tilian` Python 环境。
+
+---
+
+## [ERR-20260730-004] invalid-parallel-tool-dispatch
+
+**Logged**: 2026-07-30T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+尝试用等待工具并行执行独立验证，传入了不存在的执行单元 ID。
+
+### Error
+```text
+cell invalid not found
+```
+
+### Context
+- `functions.wait` 只能继续已由 `functions.exec` 返回的运行中 cell。
+- 该调用未执行任何项目命令，也未改变项目状态。
+
+### Suggested Fix
+独立 shell 验证应在单个 `functions.exec` 内顺序执行，或先创建真实的运行中 cell 再等待。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/auto/protocol_registration/tests/`
+
+### Resolution
+- **Resolved**: 2026-07-30T00:00:00+08:00
+- **Notes**: 后续验证改为单个受控命令执行。
+
+---
+
+## [ERR-20260730-005] powershell-wildcard-file-read
+
+**Logged**: 2026-07-30T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+PowerShell `Get-Content` 未展开日志路径通配符，且后续命令试图读取空路径。
+
+### Error
+```text
+An object at the specified path ... does not exist
+Cannot bind argument to parameter 'Path' because it is null.
+```
+
+### Context
+- 运行日志文件名的毫秒部分与假设值不一致。
+- 改用按修改时间列出文件，再读取实际存在的日志。
+
+### Suggested Fix
+日志诊断先以 `Get-ChildItem -Filter` 定位真实文件，再将明确路径交给 `Get-Content`。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `data/automation-logs/`
+
+### Resolution
+- **Resolved**: 2026-07-30T00:00:00+08:00
+- **Notes**: 已读取实际运行日志 `protocol-registration-209-2026-07-30T09-17-16-870Z.log`。
 
 ---

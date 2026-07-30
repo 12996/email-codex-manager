@@ -32,3 +32,17 @@ OpenAI HTTP 业务错误。Roxy bridge 的单次导航和 Python 外层等待都
 - 密码流程不再在 `user/register` 之前跟随步骤 5 返回的 `email-otp/send` continuation；该请求会把 Auth 会话提前推进到 OTP 阶段并导致 `invalid_auth_step`。
 - 自动化验证：Node bridge 12/12、Python 协议相关 33/33 通过。
 - 待办：从协议注册入口重新执行账号 `210`，以运行日志确认 `user/register` 不再返回 `invalid_auth_step`。
+
+## 01:46 真实前端手动录制与顺序修正
+
+- 两次新鲜 Roxy 手动流程均到达 `create-account/password`。真实 OAuth 初始参数是
+  `screen_hint=login_or_signup`、`prompt=login` 与 `login_hint=<email>`；此前协议为规避分支
+  人为改成 `signup`、空 prompt、无 login hint，解释了移除邮箱提交后出现的 `409 invalid_state`。
+- 在线 `emailVerification.shared` bundle 明确使用 `POST /email-otp/validate` 和 `{code}`。
+  现有协议已有同名实现，但错误地在密码提交后调用。
+- 已修正为：先验证邮箱 OTP，随后仅跟随验证响应的
+  `username_password_create` continuation，再提交密码。不会再以密码页 URL 作为状态成功依据。
+- 回归测试 `test_registration_verifies_email_before_submitting_password` 先 RED 后 GREEN；
+  `python -m unittest tests.test_roxy_bridge tests.test_password_registration` 为 33/33 通过，
+  `py_compile` 通过。
+- 待办：以新的未注册邮箱执行一次协议注册；不要复用已人工走到密码页的两个邮箱。

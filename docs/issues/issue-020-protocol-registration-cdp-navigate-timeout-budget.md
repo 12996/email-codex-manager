@@ -66,3 +66,20 @@ Auth JSON 为 `page=email_otp_verification`，而当前代码仅通过访问
 
 因此，修复范围还必须包括：以步骤 5 的 JSON 和后续接口响应决定是否能进入密码提交，
 不得把密码页 URL 当作 Auth 阶段转换成功的依据。
+
+## 2026-07-28 真实前端链路确认
+
+两次 Roxy 手动录制均成功到达密码页，确认真实前端的 OAuth authorize URL 包含：
+
+- `screen_hint=login_or_signup`
+- `prompt=login`
+- `login_hint=<email>`
+
+并确认页面顺序为 `authorize -> email-verification -> create-account/password`。当前在线
+`emailVerification.shared` bundle 显示验证码提交端点为
+`POST /api/accounts/email-otp/validate`，请求体仅含 `code`。现有 `validate_email_otp()`
+已经实现该请求，但此前错误地安排在 `user/register` 成功之后。
+
+已将协议顺序改为：默认 OAuth 初始参数 -> `authorize_continue` Sentinel ->
+`email-otp/validate` -> Auth 返回 `username_password_create` continuation ->
+`user/register`。回归测试已覆盖该先后关系；仍需一次新的实机协议注册验收。

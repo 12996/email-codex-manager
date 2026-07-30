@@ -2,6 +2,34 @@
 
 状态：active
 
+## 2026-07-30 协议注册状态机恢复
+
+- 因误将协议目录恢复到 `ab37db5`，2026-07-28 尚未提交的 CHG-100 代码被覆盖；账号
+  `210` 随后直接请求 `user/register` 并收到 HTTP 409 `invalid_state`。
+- Git 历史没有完整正确版本，已依据 `CHG-100` 与 `issue-020` 恢复：真实 OAuth 参数 ->
+  `authorize_continue` Sentinel -> OTP validate -> `username_password_create` continuation ->
+  `user/register`。
+- 回归：`tests.test_roxy_bridge` + `tests.test_password_registration` 33/33 通过，
+  `py_compile` 通过。
+- 已在 Roxy `617-3` 手动完成一枚新账号的前置 OTP、密码、密码后 OTP、资料页、OAuth
+  callback 和 TOTP 2FA；Auth 状态机已真实验收。
+- 待办：修复自动流程的外部 `email_code_api` 旧码首次命中问题；不要复用账号 210 或录制邮箱。
+- 实施前阅读 `docs/project/protocol-registration-flow.md`；其中已明确双 OTP 各自的时间下界、
+  120 秒/5 秒轮询和 `wrong_email_otp_code` 后等待新邮件的规则。
+- 自动代码已实现错码后的继续轮询和 5 秒默认间隔；待使用全新邮箱验证自动错码恢复分支。
+- 已提交 OTP 会在同一阶段被排除；接口重复返回相同旧码时只会继续轮询，避免重复提交。
+
+## 2026-07-28 协议注册邮箱验证先于密码提交
+
+- 两次 Roxy 手动录制确认真实前端 OAuth 初始参数为 `screen_hint=login_or_signup`、
+  `prompt=login` 和 `login_hint=<email>`，流程到密码页前先经过 `email-verification`。
+- 当前在线 Auth bundle 确认验证码确认接口为 `POST /api/accounts/email-otp/validate`，请求体为 `{code}`。
+- `main.py` 已恢复真实 OAuth 参数，并改为 `authorize_continue` Sentinel -> OTP validate ->
+  `username_password_create` continuation -> `user/register`；禁止直接访问密码页后提交密码。
+- 回归：`tests.test_roxy_bridge` + `tests.test_password_registration` 33/33 通过，`py_compile` 通过。
+- 待办：用新的未注册邮箱执行一次完整协议注册验收；不要复用两个手动录制邮箱。关联
+  `CHG-100` 和 active `issue-020`。
+
 ## 2026-07-25 PRD-003 基线合并
 
 - 已将 `CHG-091` 至 `CHG-099` 合并进 PRD-003，并将这些 change 标记为 `merged`。
