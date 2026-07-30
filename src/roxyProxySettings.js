@@ -284,8 +284,9 @@ function decryptPassword(value, env) {
 }
 
 function getPasswordEncryptionKey(env) {
-  const encoded = String(env?.ROXY_PROXY_SETTINGS_KEY || '').trim();
-  const isStandardBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded);
+  const encoded = String(env?.ROXY_PROXY_SETTINGS_KEY || '');
+  const isStandardBase64 = encoded === encoded.trim()
+    && /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded);
   const key = isStandardBase64 ? Buffer.from(encoded, 'base64') : Buffer.alloc(0);
   if (key.length !== 32 || key.toString('base64') !== encoded) {
     throw codedError(

@@ -97,6 +97,7 @@ test('saving a non-empty password requires a valid dedicated encryption key', ()
 test('saving a password rejects malformed Base64 encryption keys without writing a template', () => {
   for (const invalidKey of [
     `${TEST_KEY}!`,
+    `${TEST_KEY} `,
     TEST_KEY.slice(0, -1),
     Buffer.alloc(31, 7).toString('base64'),
   ]) {
