@@ -195,6 +195,38 @@ test('replacement protocol live log panel is placed below the replacement table'
   assert.ok(registrationLogPanel > replacementLogPanel);
 });
 
+test('replacement frontend exposes a complete disabled Roxy proxy configuration panel without password echo', () => {
+  const html = readFileSync(join(process.cwd(), 'web', 'index.html'), 'utf8');
+
+  for (const id of [
+    'roxyProxyPanel', 'roxyProxyConfigForm', 'roxyProxyWorkspaceId', 'roxyProxyHost', 'roxyProxyPort',
+    'roxyProxyAccountPrefix', 'roxyProxyPassword', 'roxyProxyCountry',
+    'roxyProxyTtl', 'roxyProxyProtocol', 'roxyProxyIpType', 'roxyProxyCheckChannel',
+    'roxyProxyRefreshUrl', 'roxyProxyRemark', 'saveRoxyProxyConfigButton',
+    'createRoxyProxyButton', 'refreshRoxyProxyListButton', 'roxyProxyList',
+    'roxyProxyListTable', 'roxyProxyListBody', 'roxyBrowserProxyBindings',
+    'roxyBrowserProxyBindingsTable', 'roxyBrowserProxyBindingsBody',
+    'saveRoxyBrowserProxyBindingsButton', 'refreshRoxyBrowserProxyButton',
+  ]) assert.match(html, new RegExp(`id="${id}"`));
+
+  assert.match(html, /id="roxyProxyPassword"[^>]*type="password"/);
+  assert.doesNotMatch(html, /id="roxyProxyPassword"[^>]*\bvalue=/);
+  assert.match(html, /尚未配置/);
+  assert.match(html, /暂无窗口/);
+
+  for (const id of [
+    'roxyProxyWorkspaceId', 'roxyProxyHost', 'roxyProxyPort', 'roxyProxyAccountPrefix',
+    'roxyProxyPassword', 'roxyProxyCountry', 'roxyProxyTtl', 'roxyProxyProtocol',
+    'roxyProxyIpType', 'roxyProxyCheckChannel', 'roxyProxyRefreshUrl', 'roxyProxyRemark',
+    'saveRoxyProxyConfigButton', 'createRoxyProxyButton', 'refreshRoxyProxyListButton',
+    'saveRoxyBrowserProxyBindingsButton', 'refreshRoxyBrowserProxyButton',
+  ]) assert.match(html, new RegExp(`id="${id}"[^>]*\\bdisabled`));
+
+  for (const label of ['团队 ID', 'Host', 'Port', '账号前缀', '代理密码', '国家', '时长（分钟）', '协议', 'IP 类型', '查询渠道', '刷新 URL', '备注']) {
+    assert.match(html, new RegExp(`<label[^>]*>${label}`));
+  }
+});
+
 test('protocol registration queue refreshes account rows after a job completes', () => {
   const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
   const queueLoader = appJs.indexOf('async function loadProtocolRegistrationQueue()');

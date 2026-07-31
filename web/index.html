@@ -102,6 +102,76 @@
       </div>
     </section>
 
+    <section id="roxyProxyPanel" class="panel">
+      <div class="protocol-live-header">
+        <div>
+          <h2>Roxy 代理配置</h2>
+          <p id="roxyProxyPanelStatus" class="muted">尚未配置代理模板；请在启用页面交互后保存配置。</p>
+        </div>
+        <button id="refreshRoxyProxyListButton" class="ghost" type="button" disabled>刷新列表</button>
+      </div>
+
+      <form id="roxyProxyConfigForm">
+        <label>团队 ID <input id="roxyProxyWorkspaceId" name="workspace_id" type="number" min="1" disabled></label>
+        <label>Host <input id="roxyProxyHost" name="host" placeholder="us.arxlabs.io" disabled></label>
+        <label>Port <input id="roxyProxyPort" name="port" type="number" min="1" max="65535" placeholder="3010" disabled></label>
+        <label>账号前缀 <input id="roxyProxyAccountPrefix" name="account_prefix" placeholder="sttj1150537" disabled></label>
+        <label>代理密码 <input id="roxyProxyPassword" name="password" type="password" placeholder="仅服务端保存" disabled></label>
+        <label>国家 <input id="roxyProxyCountry" name="country" value="JP" maxlength="2" disabled></label>
+        <label>时长（分钟）<input id="roxyProxyTtl" name="ttl_minutes" type="number" value="5" min="1" disabled></label>
+        <label>协议
+          <select id="roxyProxyProtocol" name="protocol" disabled>
+            <option value="SOCKS5">SOCKS5</option>
+            <option value="HTTP">HTTP</option>
+            <option value="HTTPS">HTTPS</option>
+          </select>
+        </label>
+        <label>IP 类型
+          <select id="roxyProxyIpType" name="ip_type" disabled>
+            <option value="IPV4">IPV4</option>
+            <option value="IPV6">IPV6</option>
+          </select>
+        </label>
+        <label>查询渠道
+          <select id="roxyProxyCheckChannel" name="check_channel" disabled>
+            <option value="">尚未加载渠道</option>
+          </select>
+        </label>
+        <label>刷新 URL <input id="roxyProxyRefreshUrl" name="refresh_url" type="url" disabled></label>
+        <label>备注 <textarea id="roxyProxyRemark" name="remark" rows="2" disabled></textarea></label>
+        <div class="toolbar">
+          <button id="saveRoxyProxyConfigButton" class="primary" type="submit" disabled>保存代理模板</button>
+          <button id="createRoxyProxyButton" class="ghost" type="button" disabled>创建代理</button>
+        </div>
+      </form>
+
+      <h3 id="roxyProxyListHeading">Roxy 代理列表</h3>
+      <div id="roxyProxyList" class="table-wrap" aria-labelledby="roxyProxyListHeading">
+        <table id="roxyProxyListTable">
+          <thead>
+            <tr><th>proxyId</th><th>地址</th><th>协议</th><th>当前用户名</th><th>备注</th></tr>
+          </thead>
+          <tbody id="roxyProxyListBody"><tr><td colspan="5">尚未配置代理或尚未加载列表</td></tr></tbody>
+        </table>
+      </div>
+
+      <div class="protocol-live-header">
+        <h3 id="roxyBrowserProxyBindingsHeading">窗口代理绑定</h3>
+        <div>
+          <button id="saveRoxyBrowserProxyBindingsButton" class="ghost" type="button" disabled>保存绑定</button>
+          <button id="refreshRoxyBrowserProxyButton" class="ghost" type="button" disabled>刷新并重开窗口</button>
+        </div>
+      </div>
+      <div id="roxyBrowserProxyBindings" class="table-wrap" aria-labelledby="roxyBrowserProxyBindingsHeading">
+        <table id="roxyBrowserProxyBindingsTable">
+          <thead>
+            <tr><th>窗口名</th><th>sortNum</th><th>dirId</th><th>绑定 proxyId</th><th>最近用户名</th><th>最近刷新时间</th><th>操作</th></tr>
+          </thead>
+          <tbody id="roxyBrowserProxyBindingsBody"><tr><td colspan="7">暂无窗口</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+
     <section id="protocolReplacementLivePanel" class="panel protocol-live-panel">
       <div class="protocol-live-header">
         <div>
