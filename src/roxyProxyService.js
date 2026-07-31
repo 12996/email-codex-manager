@@ -33,15 +33,20 @@ export function createRoxyProxyService({
 
   /**
    * Used only by the protocol child-process preparation path. If no binding
-   * exists, it performs no mutation so the caller can use its legacy prepare path.
-   */
+  * exists, it performs no mutation so the caller can use its legacy prepare path.
+  */
   async function prepareBoundBrowser({ env = {}, openArgs = [], owner } = {}) {
-    const client = await roxyClientFactory(buildClientEnv(env));
-    const targetDirId = requireText(
-      await client.resolveDirId(),
-      'DIR_ID_REQUIRED',
-      'Roxy client did not resolve a browser dirId',
-    );
+    let client;
+    let resolvedDirId;
+    try {
+      client = await roxyClientFactory(buildClientEnv(env));
+      resolvedDirId = await client.resolveDirId();
+    } catch {
+      // This error reaches queue state and account history. Do not preserve a
+      // downstream client message because it may contain proxy credentials or CDP URLs.
+      throw codedError('ROXY_PROXY_API_FAILED', 'Roxy browser API request failed');
+    }
+    const targetDirId = requireText(resolvedDirId, 'DIR_ID_REQUIRED', 'Roxy client did not resolve a browser dirId');
     const binding = settingsRepository.getRoxyProxyBinding(targetDirId);
     if (!binding) return undefined;
 

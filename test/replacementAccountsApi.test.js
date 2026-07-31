@@ -1753,6 +1753,53 @@ test('Roxy route failures replace downstream secrets and CDP endpoints with a st
   }
 });
 
+test('protocol queue redacts early Roxy client and dir resolution failures', async () => {
+  const sensitiveMessage = 'proxy-secret v1:ciphertext ROXY_PROXY_SETTINGS_KEY=key ws://private-cdp wss://private-cdp';
+  const clientFactories = [
+    async () => { throw new Error(sensitiveMessage); },
+    async () => ({ async resolveDirId() { throw new Error(sensitiveMessage); } }),
+  ];
+
+  for (const roxyClientFactory of clientFactories) {
+    const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-roxy-queue-redaction-'));
+    const db = createDatabase(join(dir, 'test.db'));
+    const replacementAccounts = createReplacementAccountRepository(db);
+    const app = createApp({
+      db,
+      replacementAccounts,
+      roxyProxySettings: createRoxyProxySettingsStub(),
+      roxyClientFactory,
+      replacementServicesFactory({ roxyProxyService }) {
+        return {
+          registerProtocolAccount(account, { roxyProxyOwner }) {
+            return roxyProxyService.prepareBoundBrowser({
+              env: { ROXY_BROWSER_DIR_ID: 'dir-jp' },
+              owner: roxyProxyOwner,
+            });
+          },
+        };
+      },
+      accounts: { listAccounts() { return []; }, getAccountByGmailEmail() { return null; } },
+    });
+    const account = replacementAccounts.createAccount({ email: 'redaction@example.com' });
+    const server = await startTestServer(app);
+
+    try {
+      const queued = await jsonRequest(server, 'POST', `/replacement-accounts/${account.id}/register-protocol`);
+      assert.equal(queued.response.status, 202);
+      await waitForAsync(async () => {
+        const snapshot = await jsonRequest(server, 'GET', '/protocol-registration-queue');
+        return snapshot.body.recent.length === 1;
+      });
+      const snapshot = await jsonRequest(server, 'GET', '/protocol-registration-queue');
+      assert.equal(snapshot.body.recent[0].error, 'ROXY_PROXY_API_FAILED: Roxy browser API request failed');
+      assert.doesNotMatch(JSON.stringify([queued.body, snapshot.body]), /proxy-secret|ciphertext|ROXY_PROXY_SETTINGS_KEY|wss?:\/\//);
+    } finally {
+      await server.close();
+    }
+  }
+});
+
 test('protocol queue reuses its saved Roxy owner for the real proxy service and rejects a different owner', async () => {
   const gate = createDeferred();
   const proxySettings = createRoxyProxySettingsStub();
