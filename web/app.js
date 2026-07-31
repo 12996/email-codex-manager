@@ -6,6 +6,12 @@ const state = {
   activity: [],
   protocolRegistrationQueue: { current: null, waiting: [], recent: [] },
   seenProtocolRegistrationTerminalJobs: new Set(),
+  roxyProxyConfig: null,
+  roxyProxies: [],
+  roxyProxyChannels: [],
+  roxyBrowserProxyBindings: [],
+  roxyProxyPanelReady: false,
+  roxyRefreshingDirIds: new Set(),
   pagination: {
     page: 1,
     pageSize: 10,
@@ -58,6 +64,7 @@ let protocolReplacementRunning = false;
 
 document.addEventListener('DOMContentLoaded', () => {
   bindEvents();
+  renderRoxyProxyPanel();
   loadInitialData();
 });
 
@@ -97,6 +104,8 @@ function bindEvents() {
   $('#clearProtocolLiveLog').addEventListener('click', clearProtocolLiveLog);
   $('#clearProtocolRegistrationQueue').addEventListener('click', clearProtocolRegistrationQueue);
   $('#clearProtocolReplacementLiveLog').addEventListener('click', clearProtocolReplacementLiveLog);
+  $('#roxyProxyConfigForm').addEventListener('submit', saveRoxyProxyConfig);
+  $('#refreshRoxyProxyListButton').addEventListener('click', loadRoxyProxyConfiguration);
   document.querySelectorAll('[data-close]').forEach((button) => {
     button.addEventListener('click', () => button.closest('dialog').close());
   });
@@ -110,6 +119,7 @@ async function loadInitialData() {
   await loadActivationMethods();
   await loadAccounts();
   await loadProtocolRegistrationQueue();
+  await loadRoxyProxyConfiguration();
 }
 
 async function loadActivationMethods() {
@@ -168,6 +178,281 @@ function renderAccounts() {
   bindRowEvents();
   renderStats();
   renderActivity();
+}
+
+function renderRoxyProxyPanel() {
+  const form = $('#roxyProxyConfigForm');
+  const proxyListBody = $('#roxyProxyListBody');
+  const bindingsBody = $('#roxyBrowserProxyBindingsBody');
+  if (!form || !proxyListBody || !bindingsBody) return;
+
+  const template = state.roxyProxyConfig;
+  const values = {
+    roxyProxyWorkspaceId: template?.workspaceId ?? '',
+    roxyProxyHost: template?.host ?? '',
+    roxyProxyPort: template?.port ?? '',
+    roxyProxyAccountPrefix: template?.accountPrefix ?? '',
+    roxyProxyCountry: template?.country ?? 'JP',
+    roxyProxyTtl: template?.ttlMinutes ?? 5,
+    roxyProxyProtocol: template?.protocol ?? 'SOCKS5',
+    roxyProxyIpType: template?.ipType ?? 'IPV4',
+    roxyProxyRefreshUrl: template?.refreshUrl ?? '',
+    roxyProxyRemark: template?.remark ?? '',
+  };
+  for (const [id, value] of Object.entries(values)) {
+    const node = $(`#${id}`);
+    if (node && document.activeElement !== node) node.value = String(value);
+  }
+  const password = $('#roxyProxyPassword');
+  if (password) {
+    password.value = '';
+    password.placeholder = template?.passwordConfigured ? '已配置；留空则保持不变' : '仅服务端保存';
+  }
+
+  renderRoxyProxyChannels();
+  renderRoxyProxyList();
+  renderRoxyBrowserProxyBindings();
+  setRoxyProxyPanelControlsEnabled(state.roxyProxyPanelReady);
+  const status = $('#roxyProxyPanelStatus');
+  if (status) {
+    status.textContent = template
+      ? `模板已加载${template.passwordConfigured ? '；代理密码已在服务端保存。' : '；尚未设置代理密码。'}`
+      : '尚未配置代理模板。填写表单后保存即可开始使用。';
+  }
+}
+
+async function loadRoxyProxyConfiguration() {
+  state.roxyProxyPanelReady = false;
+  setRoxyProxyPanelControlsEnabled(false);
+  try {
+    const config = await api('/roxy-proxy-config');
+    state.roxyProxyConfig = config.template || null;
+    state.roxyProxyPanelReady = true;
+
+    if (state.roxyProxyConfig?.workspaceId) {
+      const [proxies, channels, bindings] = await Promise.allSettled([
+        api('/roxy-proxies'),
+        api('/roxy-proxy-channels'),
+        api('/roxy-browser-proxy-bindings'),
+      ]);
+      state.roxyProxies = proxies.status === 'fulfilled' ? (proxies.value.proxies || []) : [];
+      state.roxyProxyChannels = channels.status === 'fulfilled' ? (channels.value.channels || []) : [];
+      state.roxyBrowserProxyBindings = bindings.status === 'fulfilled' ? (bindings.value.bindings || []) : [];
+      if ([proxies, channels, bindings].some((result) => result.status === 'rejected')) {
+        reportRoxyProxyPanelFailure('加载部分 Roxy 代理数据');
+      }
+    } else {
+      state.roxyProxies = [];
+      state.roxyProxyChannels = [];
+      state.roxyBrowserProxyBindings = [];
+    }
+    renderRoxyProxyPanel();
+  } catch (error) {
+    state.roxyProxyPanelReady = false;
+    state.roxyProxies = [];
+    state.roxyProxyChannels = [];
+    state.roxyBrowserProxyBindings = [];
+    renderRoxyProxyPanel();
+    reportRoxyProxyPanelFailure('加载 Roxy 代理配置', error);
+  }
+}
+
+function renderRoxyProxyChannels() {
+  const select = $('#roxyProxyCheckChannel');
+  if (!select) return;
+  const configured = state.roxyProxyConfig?.checkChannel || '';
+  const channels = state.roxyProxyChannels;
+  const includesConfigured = channels.some((channel) => String(channel.value) === configured);
+  const options = [
+    '<option value="">请选择查询渠道</option>',
+    ...(configured && !includesConfigured
+      ? [`<option value="${escapeHtml(configured)}">${escapeHtml(configured)}（当前配置）</option>`]
+      : []),
+    ...channels.map((channel) => `<option value="${escapeHtml(channel.value)}">${escapeHtml(channel.label || channel.value)}</option>`),
+  ];
+  select.innerHTML = options.join('');
+  select.value = configured;
+}
+
+function renderRoxyProxyList() {
+  const body = $('#roxyProxyListBody');
+  if (!body) return;
+  if (!state.roxyProxies.length) {
+    body.innerHTML = '<tr><td colspan="5">暂无代理。保存模板后可刷新列表。</td></tr>';
+    return;
+  }
+  body.innerHTML = state.roxyProxies.map((proxy) => `
+    <tr>
+      <td>${escapeHtml(proxy.id)}</td>
+      <td>${escapeHtml(proxy.host)}:${escapeHtml(proxy.port)}</td>
+      <td>${escapeHtml(proxy.protocol || '-')}</td>
+      <td>${escapeHtml(proxy.username || '-')}</td>
+      <td>${escapeHtml(proxy.remark || '-')}</td>
+    </tr>
+  `).join('');
+}
+
+function renderRoxyBrowserProxyBindings() {
+  const body = $('#roxyBrowserProxyBindingsBody');
+  if (!body) return;
+  if (!state.roxyBrowserProxyBindings.length) {
+    body.innerHTML = '<tr><td colspan="7">暂无已保存的窗口代理绑定</td></tr>';
+    return;
+  }
+  body.innerHTML = state.roxyBrowserProxyBindings.map((binding) => {
+    const dirId = String(binding.dirId);
+    const refreshing = state.roxyRefreshingDirIds.has(dirId);
+    const proxyOptions = state.roxyProxies.map((proxy) => `
+      <option value="${escapeHtml(proxy.id)}" ${Number(proxy.id) === Number(binding.proxyId) ? 'selected' : ''}>#${escapeHtml(proxy.id)} ${escapeHtml(proxy.host)}:${escapeHtml(proxy.port)}</option>
+    `).join('');
+    return `
+      <tr>
+        <td>${escapeHtml(binding.windowName || '-')}</td>
+        <td>${escapeHtml(binding.sortNum ?? '-')}</td>
+        <td>${escapeHtml(dirId)}</td>
+        <td><select data-roxy-proxy-select="${escapeHtml(dirId)}" ${refreshing ? 'disabled' : ''}>${proxyOptions}</select></td>
+        <td>${escapeHtml(binding.lastGeneratedUsername || '-')}</td>
+        <td>${escapeHtml(formatRoxyTimestamp(binding.lastRefreshedAt))}</td>
+        <td>
+          <button type="button" data-roxy-binding-save="${escapeHtml(dirId)}" ${refreshing ? 'disabled' : ''}>保存绑定</button>
+          <button type="button" data-roxy-refresh="${escapeHtml(dirId)}" ${refreshing ? 'disabled' : ''}>${refreshing ? '正在刷新...' : '刷新并重开窗口'}</button>
+          <button type="button" data-roxy-binding-delete="${escapeHtml(dirId)}" ${refreshing ? 'disabled' : ''}>删除绑定</button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+  document.querySelectorAll('[data-roxy-binding-save]').forEach((button) => {
+    button.addEventListener('click', () => saveRoxyBrowserBinding(button.dataset.roxyBindingSave));
+  });
+  document.querySelectorAll('[data-roxy-refresh]').forEach((button) => {
+    button.addEventListener('click', () => refreshRoxyBrowserProxy(button.dataset.roxyRefresh, button));
+  });
+  document.querySelectorAll('[data-roxy-binding-delete]').forEach((button) => {
+    button.addEventListener('click', () => deleteRoxyBrowserBinding(button.dataset.roxyBindingDelete));
+  });
+}
+
+function setRoxyProxyPanelControlsEnabled(enabled) {
+  for (const id of [
+    'roxyProxyWorkspaceId', 'roxyProxyHost', 'roxyProxyPort', 'roxyProxyAccountPrefix',
+    'roxyProxyPassword', 'roxyProxyCountry', 'roxyProxyTtl', 'roxyProxyProtocol',
+    'roxyProxyIpType', 'roxyProxyCheckChannel', 'roxyProxyRefreshUrl', 'roxyProxyRemark',
+    'saveRoxyProxyConfigButton', 'refreshRoxyProxyListButton',
+  ]) {
+    const node = $(`#${id}`);
+    if (node) node.disabled = !enabled;
+  }
+  // The current server API deliberately has no create route. Do not imply that
+  // a click can create a Roxy proxy until that endpoint is available.
+  const createButton = $('#createRoxyProxyButton');
+  if (createButton) createButton.disabled = true;
+}
+
+async function saveRoxyProxyConfig(event) {
+  event?.preventDefault();
+  if (!state.roxyProxyPanelReady) return;
+  const password = $('#roxyProxyPassword').value.trim();
+  const payload = {
+    workspaceId: Number($('#roxyProxyWorkspaceId').value),
+    host: $('#roxyProxyHost').value.trim(),
+    port: Number($('#roxyProxyPort').value),
+    accountPrefix: $('#roxyProxyAccountPrefix').value.trim(),
+    country: $('#roxyProxyCountry').value.trim().toUpperCase(),
+    ttlMinutes: Number($('#roxyProxyTtl').value),
+    protocol: $('#roxyProxyProtocol').value,
+    ipType: $('#roxyProxyIpType').value,
+    checkChannel: $('#roxyProxyCheckChannel').value,
+    refreshUrl: $('#roxyProxyRefreshUrl').value.trim(),
+    remark: $('#roxyProxyRemark').value.trim(),
+  };
+  if (password) payload.password = password;
+  try {
+    const body = await api('/roxy-proxy-config', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+    state.roxyProxyConfig = body.template || state.roxyProxyConfig;
+    $('#roxyProxyPassword').value = '';
+    toast('Roxy 代理模板已保存');
+    addActivity('Roxy 代理模板已保存', '代理密码仅保存在服务端。');
+    await loadRoxyProxyConfiguration();
+  } catch (error) {
+    reportRoxyProxyPanelFailure('保存 Roxy 代理模板', error);
+  }
+}
+
+async function saveRoxyBrowserBinding(dirId) {
+  const select = [...document.querySelectorAll('[data-roxy-proxy-select]')]
+    .find((node) => node.dataset.roxyProxySelect === dirId);
+  const proxyId = Number(select?.value);
+  if (!Number.isInteger(proxyId) || proxyId <= 0) {
+    reportRoxyProxyPanelFailure('保存窗口代理绑定');
+    return;
+  }
+  try {
+    await api(`/roxy-browser-proxy-bindings/${encodeURIComponent(dirId)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ proxyId }),
+    });
+    toast('窗口代理绑定已保存');
+    addActivity('窗口代理绑定已保存', `窗口 ${safeRoxyDirLabel(dirId)} 已更新。`);
+    await loadRoxyProxyConfiguration();
+  } catch (error) {
+    reportRoxyProxyPanelFailure('保存窗口代理绑定', error);
+  }
+}
+
+async function deleteRoxyBrowserBinding(dirId) {
+  try {
+    await api(`/roxy-browser-proxy-bindings/${encodeURIComponent(dirId)}`, { method: 'DELETE' });
+    toast('窗口代理绑定已删除');
+    addActivity('窗口代理绑定已删除', `窗口 ${safeRoxyDirLabel(dirId)} 已移除。`);
+    await loadRoxyProxyConfiguration();
+  } catch (error) {
+    reportRoxyProxyPanelFailure('删除窗口代理绑定', error);
+  }
+}
+
+async function refreshRoxyBrowserProxy(dirId, button = null) {
+  if (state.roxyRefreshingDirIds.has(dirId)) return;
+  state.roxyRefreshingDirIds.add(dirId);
+  setRoxyBindingRowBusy(button, true);
+  try {
+    await api(`/roxy-browser-proxy-bindings/${encodeURIComponent(dirId)}/refresh`, { method: 'POST' });
+    toast('窗口代理已刷新并重开');
+    addActivity('窗口代理已刷新', `窗口 ${safeRoxyDirLabel(dirId)} 已使用新的代理会话。`);
+    await loadRoxyProxyConfiguration();
+  } catch (error) {
+    reportRoxyProxyPanelFailure('刷新窗口代理', error);
+  } finally {
+    state.roxyRefreshingDirIds.delete(dirId);
+    setRoxyBindingRowBusy(button, false);
+  }
+}
+
+function setRoxyBindingRowBusy(button, busy) {
+  if (!button) return;
+  button.closest?.('tr')?.querySelectorAll('button, select').forEach((node) => {
+    node.disabled = busy;
+  });
+  button.disabled = busy;
+  button.textContent = busy ? '正在刷新...' : '刷新并重开窗口';
+}
+
+function reportRoxyProxyPanelFailure(action) {
+  const message = `${action}失败，请检查 Roxy 配置或稍后重试。`;
+  toast(message);
+  addActivity(action, '请求未完成；未显示服务端错误详情。');
+}
+
+function formatRoxyTimestamp(value) {
+  if (!value) return '-';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '-' : date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function safeRoxyDirLabel(dirId) {
+  return String(dirId || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || '未知窗口';
 }
 
 function renderPager() {

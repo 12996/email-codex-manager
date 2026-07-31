@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import vm from 'node:vm';
 import signature from 'cookie-signature';
 
 import { config } from '../src/config.js';
@@ -226,6 +227,101 @@ test('replacement frontend exposes a complete disabled Roxy proxy configuration 
     assert.match(html, new RegExp(`<label[^>]*>${label}`));
   }
 });
+
+test('Roxy proxy panel calls the configured APIs without resending stored passwords and safely restores a failed refresh control', async () => {
+  const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
+  const requests = [];
+  const nodes = createRoxyPanelNodes();
+  const responses = [
+    { ok: true, template: {
+      workspaceId: 7, host: 'us.arxlabs.io', port: 3010, accountPrefix: 'sttj1150537',
+      country: 'JP', ttlMinutes: 5, protocol: 'SOCKS5', ipType: 'IPV4', checkChannel: 'arx',
+      passwordConfigured: true,
+    } },
+    { ok: true, proxies: [{ id: 12, host: 'us.arxlabs.io', port: 3010, protocol: 'SOCKS5', username: 'safe-user' }] },
+    { ok: true, channels: [{ value: 'arx', label: 'ARX' }] },
+    { ok: true, bindings: [{ dirId: 'dir-jp', proxyId: 12, windowName: 'Japan', sortNum: 1 }] },
+    { ok: true, template: {
+      workspaceId: 7, host: 'us.arxlabs.io', port: 3010, accountPrefix: 'sttj1150537',
+      country: 'JP', ttlMinutes: 5, protocol: 'SOCKS5', ipType: 'IPV4', checkChannel: 'arx',
+      passwordConfigured: true,
+    } },
+    { ok: true, template: {
+      workspaceId: 7, host: 'us.arxlabs.io', port: 3010, accountPrefix: 'sttj1150537',
+      country: 'JP', ttlMinutes: 5, protocol: 'SOCKS5', ipType: 'IPV4', checkChannel: 'arx',
+      passwordConfigured: true,
+    } },
+    { ok: true, proxies: [] },
+    { ok: true, channels: [] },
+    { ok: true, bindings: [{ dirId: 'dir-jp', proxyId: 12, windowName: 'Japan', sortNum: 1 }] },
+    { ok: false, message: 'proxy-secret ws://private-cdp must not reach UI' },
+  ];
+  const context = {
+    document: {
+      addEventListener() {},
+      querySelector(selector) { return nodes.get(selector) || null; },
+      querySelectorAll() { return []; },
+    },
+    window: { clearTimeout() {}, setTimeout() { return 1; } },
+    URLSearchParams,
+    fetch: async (path, options = {}) => {
+      requests.push({ path, options });
+      const body = responses.shift() || { ok: true };
+      return { ok: body.ok !== false, status: body.ok === false ? 500 : 200, json: async () => body };
+    },
+    console,
+  };
+  context.globalThis = context;
+  vm.runInNewContext(`${appJs}\nglobalThis.__roxyPanel = { state, loadRoxyProxyConfiguration, saveRoxyProxyConfig, refreshRoxyBrowserProxy, renderRoxyProxyPanel };`, context);
+
+  await context.__roxyPanel.loadRoxyProxyConfiguration();
+  assert.deepEqual(requests.slice(0, 4).map((request) => [request.path, request.options.method || 'GET']), [
+    ['/roxy-proxy-config', 'GET'],
+    ['/roxy-proxies', 'GET'],
+    ['/roxy-proxy-channels', 'GET'],
+    ['/roxy-browser-proxy-bindings', 'GET'],
+  ]);
+  assert.doesNotMatch(nodes.get('#roxyProxyListBody').innerHTML, /后端代理配置 API 尚未实现/);
+
+  nodes.get('#roxyProxyPassword').value = '';
+  await context.__roxyPanel.saveRoxyProxyConfig({ preventDefault() {} });
+  const saveRequest = requests.find((request) => request.path === '/roxy-proxy-config' && request.options.method === 'PUT');
+  assert.ok(saveRequest);
+  assert.equal(Object.hasOwn(JSON.parse(saveRequest.options.body), 'password'), false);
+
+  const refreshButton = nodes.get('[data-roxy-refresh="dir-jp"]');
+  await context.__roxyPanel.refreshRoxyBrowserProxy('dir-jp', refreshButton);
+  assert.deepEqual(requests.at(-1) && [requests.at(-1).path, requests.at(-1).options.method], [
+    '/roxy-browser-proxy-bindings/dir-jp/refresh', 'POST',
+  ]);
+  assert.equal(refreshButton.disabled, false);
+  assert.equal(refreshButton.textContent, '刷新并重开窗口');
+  assert.equal(nodes.get('#toast').textContent.includes('proxy-secret'), false);
+  assert.equal(nodes.get('#toast').textContent.includes('ws://'), false);
+});
+
+function createRoxyPanelNodes() {
+  const nodes = new Map();
+  const createNode = (value = '') => ({
+    value,
+    textContent: '',
+    innerHTML: '',
+    disabled: true,
+    classList: { add() {}, remove() {} },
+    addEventListener() {},
+  });
+  for (const id of [
+    'roxyProxyPanelStatus', 'roxyProxyWorkspaceId', 'roxyProxyHost', 'roxyProxyPort',
+    'roxyProxyAccountPrefix', 'roxyProxyPassword', 'roxyProxyCountry', 'roxyProxyTtl',
+    'roxyProxyProtocol', 'roxyProxyIpType', 'roxyProxyCheckChannel', 'roxyProxyRefreshUrl',
+    'roxyProxyRemark', 'saveRoxyProxyConfigButton', 'refreshRoxyProxyListButton',
+    'roxyProxyListBody', 'roxyBrowserProxyBindingsBody', 'activityList', 'toast',
+  ]) nodes.set(`#${id}`, createNode());
+  nodes.get('#roxyProxyProtocol').value = 'SOCKS5';
+  nodes.get('#roxyProxyIpType').value = 'IPV4';
+  nodes.set('[data-roxy-refresh="dir-jp"]', createNode());
+  return nodes;
+}
 
 test('protocol registration queue refreshes account rows after a job completes', () => {
   const appJs = readFileSync(join(process.cwd(), 'web', 'app.js'), 'utf8');
