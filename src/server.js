@@ -55,6 +55,7 @@ export function createApp({
   roxyProxySettings = createRoxyProxySettingsRepository(db),
   roxyClientFactory = createDefaultRoxyClient,
   roxyProxyService = null,
+  roxyProxyServiceFactory = createRoxyProxyService,
   roxyProxyActivity = null,
   mailService = { fetchMessages, testConnection },
   replacementEmailApiService = { fetchMessages: fetchReplacementEmailMessages },
@@ -68,6 +69,7 @@ export function createApp({
   const requireAuth = createAuthMiddleware();
   let protocolRegistrationQueue;
   let activeRoxyProxyService;
+  const protocolRegistrationRoxyOwners = new Map();
   const getRoxyProxyActivity = (dirId) => {
     const configuredActivity = typeof roxyProxyActivity === 'function'
       ? roxyProxyActivity(dirId)
@@ -78,15 +80,19 @@ export function createApp({
       return { active: true, owner: 'roxy-proxy-lease' };
     }
 
-    // Protocol registration currently shares the configured Roxy window. Until
-    // the queue records a per-job dirId, conservatively block manual changes.
-    const queueCurrent = protocolRegistrationQueue.getSnapshot().current;
+    // Protocol registration shares the configured Roxy window. Its owner is
+    // recorded before browser preparation so the task can acquire its lease.
+    const queueCurrent = protocolRegistrationQueue?.getSnapshot().current;
     if (queueCurrent) {
-      return { active: true, owner: `protocol-registration-queue:${queueCurrent.id}` };
+      return {
+        active: true,
+        owner: protocolRegistrationRoxyOwners.get(queueCurrent.id)
+          || `protocol-registration-queue:${queueCurrent.id}`,
+      };
     }
     return configuredActivity ?? { active: false, owner: null };
   };
-  activeRoxyProxyService = roxyProxyService || createRoxyProxyService({
+  activeRoxyProxyService = roxyProxyService || roxyProxyServiceFactory({
     settingsRepository: roxyProxySettings,
     roxyClientFactory,
     isTaskActive: getRoxyProxyActivity,
@@ -103,8 +109,15 @@ export function createApp({
       const account = replacementAccounts.getAccount(job.account.id);
       if (!account) throw Object.assign(new Error('replacement account not found'), { code: 'ACCOUNT_NOT_FOUND' });
 
+      // The activity callback and the protocol task must share this owner so
+      // the task may acquire its own pre-launch lease while manual refreshes wait.
+      const roxyProxyOwner = activeRoxyProxyService?.createTaskOwner?.()
+        || `protocol-registration-queue:${job.id}`;
+      job.roxyProxyOwner = roxyProxyOwner;
+      protocolRegistrationRoxyOwners.set(job.id, roxyProxyOwner);
       try {
         const result = await replacementServices.registerProtocolAccount(account, {
+          roxyProxyOwner,
           onLog(event) {
             protocolRegistrationQueue.appendLog(job, {
               level: event?.stream === 'stderr' ? 'error' : 'muted',
@@ -121,8 +134,13 @@ export function createApp({
         }
         replacementAccounts.markRegistrationSuccess(account.id, { codex_2fa: mfaSecret });
       } catch (error) {
-        replacementAccounts.recordOperationFailure(account.id, '协议注册', error.message);
-        throw error;
+        const publicError = String(error?.code || '').startsWith('ROXY_')
+          ? toPublicRoxyError(error)
+          : error;
+        replacementAccounts.recordOperationFailure(account.id, '协议注册', publicError.message);
+        throw publicError;
+      } finally {
+        protocolRegistrationRoxyOwners.delete(job.id);
       }
     },
   });
@@ -766,7 +784,7 @@ export function createApp({
     try {
       res.json({ ok: true, template: publicRoxyProxyTemplate(roxyProxySettings.getRoxyProxyTemplate()) });
     } catch (error) {
-      sendApiError(res, error);
+      sendRoxyApiError(res, error);
     }
   });
 
@@ -775,27 +793,27 @@ export function createApp({
       const template = roxyProxySettings.saveRoxyProxyTemplate(req.body || {});
       res.json({ ok: true, template: publicRoxyProxyTemplate(template) });
     } catch (error) {
-      sendApiError(res, error);
+      sendRoxyApiError(res, error);
     }
   });
 
   app.get('/roxy-proxies', requireAuth, async (req, res) => {
     try {
-      const client = await roxyClientFactory(process.env);
+      const client = await createConfiguredRoxyClient(roxyProxySettings, roxyClientFactory);
       const proxies = await client.listProxies();
       res.json({ ok: true, proxies: Array.isArray(proxies) ? proxies.map(publicRoxyProxy) : [] });
     } catch (error) {
-      sendApiError(res, asRoxyApiError(error));
+      sendRoxyApiError(res, error);
     }
   });
 
   app.get('/roxy-proxy-channels', requireAuth, async (req, res) => {
     try {
-      const client = await roxyClientFactory(process.env);
+      const client = await createConfiguredRoxyClient(roxyProxySettings, roxyClientFactory);
       const channels = await client.detectProxyChannels();
       res.json({ ok: true, channels: Array.isArray(channels) ? channels : [] });
     } catch (error) {
-      sendApiError(res, asRoxyApiError(error));
+      sendRoxyApiError(res, error);
     }
   });
 
@@ -804,7 +822,7 @@ export function createApp({
       const bindings = roxyProxySettings.listRoxyProxyBindings();
       res.json({ ok: true, bindings: Array.isArray(bindings) ? bindings.map(publicRoxyProxyBinding) : [] });
     } catch (error) {
-      sendApiError(res, error);
+      sendRoxyApiError(res, error);
     }
   });
 
@@ -812,7 +830,7 @@ export function createApp({
     try {
       const dirId = normalizeRoxyDirId(req.params.dirId);
       const requestedProxyId = normalizeRoxyProxyId(req.body?.proxyId ?? req.body?.proxy_id, 'PROXY_ID_REQUIRED');
-      const client = await roxyClientFactory(process.env);
+      const client = await createConfiguredRoxyClient(roxyProxySettings, roxyClientFactory);
       let profile;
       try {
         profile = await client.getBrowserProfile(dirId);
@@ -846,7 +864,7 @@ export function createApp({
       });
       res.json({ ok: true, binding: publicRoxyProxyBinding(binding) });
     } catch (error) {
-      sendApiError(res, error);
+      sendRoxyApiError(res, error);
     }
   });
 
@@ -855,7 +873,7 @@ export function createApp({
       const deleted = roxyProxySettings.deleteRoxyProxyBinding(normalizeRoxyDirId(req.params.dirId));
       res.json({ ok: true, deleted });
     } catch (error) {
-      sendApiError(res, error);
+      sendRoxyApiError(res, error);
     }
   });
 
@@ -873,7 +891,7 @@ export function createApp({
         refresh: publicRoxyProxyRefresh(result),
       });
     } catch (error) {
-      sendApiError(res, error);
+      sendRoxyApiError(res, error);
     }
   });
 
@@ -1366,8 +1384,43 @@ function isRoxyProxyActivityActive(activity) {
   return Boolean(activity && typeof activity === 'object' && activity.active !== false);
 }
 
+async function createConfiguredRoxyClient(settingsRepository, roxyClientFactory) {
+  const template = settingsRepository.getRoxyProxyTemplate?.();
+  const workspaceId = Number(template?.workspaceId);
+  if (!Number.isInteger(workspaceId) || workspaceId <= 0) {
+    throw roxyCodedError('ROXY_PROXY_TEMPLATE_NOT_CONFIGURED', 'Roxy proxy template workspace is not configured');
+  }
+  // Saved template settings are authoritative for all panel operations; an
+  // ambient ROXY_WORKSPACE_ID must not silently select another workspace.
+  return roxyClientFactory({ ...process.env, ROXY_WORKSPACE_ID: String(workspaceId) });
+}
+
 function asRoxyApiError(error) {
   if (error?.code) return error;
+  return roxyCodedError('ROXY_PROXY_API_FAILED', 'Roxy browser API request failed');
+}
+
+function sendRoxyApiError(res, error) {
+  const publicError = toPublicRoxyError(error);
+  res.status(statusForApiError(publicError.code)).json(
+    errorBody(publicError.code, stripErrorCodePrefix(publicError.message)),
+  );
+}
+
+function toPublicRoxyError(error) {
+  const code = String(error?.code || '');
+  const messages = {
+    DIR_ID_REQUIRED: 'Roxy browser dirId is required',
+    PROXY_ID_REQUIRED: 'Roxy proxyId is required',
+    ROXY_PROXY_TEMPLATE_NOT_CONFIGURED: 'Roxy proxy template is not configured',
+    ROXY_PROXY_TEMPLATE_INVALID: 'Roxy proxy template is invalid',
+    ROXY_PROXY_BINDING_NOT_FOUND: 'Roxy proxy binding was not found',
+    ROXY_PROXY_REFRESH_BUSY: 'Roxy browser is busy',
+    ROXY_BROWSER_PROXY_ID_UNAVAILABLE: 'Roxy browser profile does not expose an explicit proxyId',
+    ROXY_BROWSER_PROFILE_MISMATCH: 'Roxy browser profile does not match the requested binding',
+    ROXY_BROWSER_PROXY_MISMATCH: 'Requested proxyId does not match the browser profile',
+  };
+  if (Object.hasOwn(messages, code)) return roxyCodedError(code, messages[code]);
   return roxyCodedError('ROXY_PROXY_API_FAILED', 'Roxy browser API request failed');
 }
 

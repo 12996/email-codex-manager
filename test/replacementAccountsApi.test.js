@@ -10,6 +10,7 @@ import { config } from '../src/config.js';
 import { createDatabase } from '../src/db.js';
 import { createReplacementAutomationRunRepository } from '../src/replacementAutomationRuns.js';
 import { createReplacementAccountRepository } from '../src/replacementAccounts.js';
+import { createRoxyProxyService } from '../src/roxyProxyService.js';
 import { createApp } from '../src/server.js';
 
 async function startTestServer(app) {
@@ -36,6 +37,22 @@ function createDeferred() {
     resolve = resolvePromise;
   });
   return { promise, resolve };
+}
+
+async function waitFor(predicate, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) throw new Error('timed out waiting for expected state');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function waitForAsync(predicate, timeoutMs = 1_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!(await predicate())) {
+    if (Date.now() >= deadline) throw new Error('timed out waiting for expected asynchronous state');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 function createTestContext(replacementServices = successfulServices(), overrides = {}) {
@@ -1576,9 +1593,13 @@ test('Roxy proxy configuration APIs require an administrator and never return th
 test('Roxy proxy APIs expose safe proxy and channel DTOs and map Roxy failures to 502', async () => {
   const proxySettings = createRoxyProxySettingsStub();
   const client = createRoxyClientStub();
+  const clientEnvironments = [];
   const { app } = createTestContext(undefined, {
     roxyProxySettings: proxySettings,
-    roxyClientFactory: async () => client,
+    roxyClientFactory: async (env) => {
+      clientEnvironments.push(env);
+      return client;
+    },
   });
   const server = await startTestServer(app);
 
@@ -1587,6 +1608,7 @@ test('Roxy proxy APIs expose safe proxy and channel DTOs and map Roxy failures t
     assert.equal(proxies.response.status, 200);
     assert.deepEqual(proxies.body.proxies.map((proxy) => proxy.id), [12]);
     assert.equal(JSON.stringify(proxies.body).includes('proxy-secret'), false);
+    assert.equal(clientEnvironments[0].ROXY_WORKSPACE_ID, '7');
 
     const channels = await jsonRequest(server, 'GET', '/roxy-proxy-channels');
     assert.equal(channels.response.status, 200);
@@ -1596,6 +1618,33 @@ test('Roxy proxy APIs expose safe proxy and channel DTOs and map Roxy failures t
     const failed = await jsonRequest(server, 'GET', '/roxy-proxies');
     assert.equal(failed.response.status, 502);
     assert.equal(failed.body.error, 'ROXY_PROXY_API_FAILED');
+  } finally {
+    await server.close();
+  }
+});
+
+test('Roxy proxy list and browser binding evidence require a saved template workspace', async () => {
+  const proxySettings = createRoxyProxySettingsStub();
+  proxySettings.getRoxyProxyTemplate = () => undefined;
+  let clientCreated = false;
+  const { app } = createTestContext(undefined, {
+    roxyProxySettings: proxySettings,
+    roxyClientFactory: async () => {
+      clientCreated = true;
+      return createRoxyClientStub();
+    },
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const proxies = await jsonRequest(server, 'GET', '/roxy-proxies');
+    assert.equal(proxies.response.status, 400);
+    assert.equal(proxies.body.error, 'ROXY_PROXY_TEMPLATE_NOT_CONFIGURED');
+
+    const binding = await jsonRequest(server, 'PUT', '/roxy-browser-proxy-bindings/dir-jp', { proxyId: 12 });
+    assert.equal(binding.response.status, 400);
+    assert.equal(binding.body.error, 'ROXY_PROXY_TEMPLATE_NOT_CONFIGURED');
+    assert.equal(clientCreated, false);
   } finally {
     await server.close();
   }
@@ -1682,6 +1731,106 @@ test('Roxy proxy refresh rejects an occupied profile and returns only safe refre
   }
 });
 
+test('Roxy route failures replace downstream secrets and CDP endpoints with a stable public error', async () => {
+  const proxySettings = createRoxyProxySettingsStub();
+  const roxyProxyService = {
+    isLeased() { return false; },
+    async refreshBrowserProxy() {
+      throw new Error('proxy-secret v1:ciphertext ROXY_PROXY_SETTINGS_KEY=key ws://private-cdp wss://private-cdp');
+    },
+  };
+  const { app } = createTestContext(undefined, { roxyProxySettings: proxySettings, roxyProxyService });
+  const server = await startTestServer(app);
+
+  try {
+    const response = await jsonRequest(server, 'POST', '/roxy-browser-proxy-bindings/dir-jp/refresh');
+    assert.equal(response.response.status, 502);
+    assert.equal(response.body.error, 'ROXY_PROXY_API_FAILED');
+    assert.equal(response.body.message, 'Roxy browser API request failed');
+    assert.doesNotMatch(JSON.stringify(response.body), /proxy-secret|ciphertext|ROXY_PROXY_SETTINGS_KEY|wss?:\/\//);
+  } finally {
+    await server.close();
+  }
+});
+
+test('protocol queue reuses its saved Roxy owner for the real proxy service and rejects a different owner', async () => {
+  const gate = createDeferred();
+  const proxySettings = createRoxyProxySettingsStub();
+  const calls = [];
+  const client = {
+    ...createRoxyClientStub(),
+    async resolveDirId() { return 'dir-jp'; },
+    async modifyProxy() { calls.push('modify'); },
+    async closeBrowser() { calls.push('close'); },
+    async clearLocalCache() { calls.push('clear-local'); },
+    async clearServerCache() { calls.push('clear-server'); },
+    async randomFingerprint() { calls.push('fingerprint'); },
+    async openBrowser() { calls.push('open'); },
+    async getConnectionInfo() { return { ws: 'ws://private-cdp', ip: '203.0.113.10' }; },
+  };
+  let realRoxyProxyService;
+  const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-roxy-owner-'));
+  const db = createDatabase(join(dir, 'test.db'));
+  const replacementAccounts = createReplacementAccountRepository(db);
+  proxySettings.upsertRoxyProxyBinding({ dirId: 'dir-jp', proxyId: 12 });
+  const app = createApp({
+    db,
+    replacementAccounts,
+    roxyProxySettings: proxySettings,
+    roxyClientFactory: async () => client,
+    roxyProxyServiceFactory(options) {
+      realRoxyProxyService = createRoxyProxyService(options);
+      return realRoxyProxyService;
+    },
+    replacementServicesFactory({ roxyProxyService }) {
+      return {
+        async registerProtocolAccount(account, { roxyProxyOwner }) {
+          const prepared = await roxyProxyService.prepareBoundBrowser({
+            env: { ROXY_BROWSER_DIR_ID: 'dir-jp' },
+            owner: roxyProxyOwner,
+          });
+          await gate.promise;
+          prepared.release();
+          return { childResult: { registrationMfa: { secret: 'JBSWY3DPEHPK3PXP', enabled: true } } };
+        },
+      };
+    },
+    accounts: { listAccounts() { return []; }, getAccountByGmailEmail() { return null; } },
+  });
+  const account = replacementAccounts.createAccount({ email: 'owner@example.com' });
+  const server = await startTestServer(app);
+
+  try {
+    const queued = await jsonRequest(server, 'POST', `/replacement-accounts/${account.id}/register-protocol`);
+    assert.equal(queued.response.status, 202);
+    await waitFor(() => calls.length === 6);
+    assert.deepEqual(calls, ['modify', 'close', 'clear-local', 'clear-server', 'fingerprint', 'open']);
+
+    const busy = await jsonRequest(server, 'POST', '/roxy-browser-proxy-bindings/dir-jp/refresh');
+    assert.equal(busy.response.status, 409);
+    assert.equal(busy.body.error, 'ROXY_PROXY_REFRESH_BUSY');
+
+    await assert.rejects(
+      () => realRoxyProxyService.prepareBoundBrowser({
+        env: { ROXY_BROWSER_DIR_ID: 'dir-jp' },
+        owner: 'different-owner',
+      }),
+      /ROXY_PROXY_REFRESH_BUSY/,
+    );
+
+    gate.resolve();
+    await waitForAsync(async () => {
+      const snapshot = await jsonRequest(server, 'GET', '/protocol-registration-queue');
+      return snapshot.body.current === null;
+    });
+    const afterRelease = await jsonRequest(server, 'POST', '/roxy-browser-proxy-bindings/dir-jp/refresh');
+    assert.equal(afterRelease.response.status, 200);
+  } finally {
+    gate.resolve();
+    await server.close();
+  }
+});
+
 test('default protocol services receive the same injected Roxy proxy service as the manual refresh API', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'gmail-imap-roxy-app-'));
   const db = createDatabase(join(dir, 'test.db'));
@@ -1758,6 +1907,7 @@ function createRoxyProxySettingsStub() {
   };
   return {
     getRoxyProxyTemplate() { return { ...template }; },
+    getRoxyProxyTemplateCredentials() { return { ...template, password: 'proxy-secret' }; },
     saveRoxyProxyTemplate() { return { ...template }; },
     listRoxyProxyBindings() { return [...bindings.values()]; },
     getRoxyProxyBinding(dirId) { return bindings.get(dirId); },
@@ -1773,6 +1923,24 @@ function createRoxyProxySettingsStub() {
       return binding;
     },
     deleteRoxyProxyBinding(dirId) { return bindings.delete(dirId); },
+    recordRoxyProxyRefresh(dirId, result) {
+      const binding = bindings.get(dirId);
+      if (!binding) throw new Error('binding not found');
+      const updated = {
+        ...binding,
+        lastGeneratedUsername: result.username,
+        lastRefreshIp: result.ip,
+        lastCdpStatus: result.cdpStatus,
+        lastRefreshedAt: result.refreshedAt,
+      };
+      bindings.set(dirId, updated);
+      return updated;
+    },
+    recordRoxyProxyStatus(dirId, lastCdpStatus) {
+      const binding = bindings.get(dirId);
+      if (!binding) throw new Error('binding not found');
+      bindings.set(dirId, { ...binding, lastCdpStatus });
+    },
   };
 }
 
