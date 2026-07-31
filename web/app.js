@@ -212,6 +212,7 @@ function renderRoxyProxyPanel() {
   renderRoxyProxyChannels();
   renderRoxyProxyList();
   renderRoxyBrowserProxyBindings();
+  hideUnavailableRoxyBindingHeaderActions();
   setRoxyProxyPanelControlsEnabled(state.roxyProxyPanelReady);
   const status = $('#roxyProxyPanelStatus');
   if (status) {
@@ -426,6 +427,9 @@ async function refreshRoxyBrowserProxy(dirId, button = null) {
     reportRoxyProxyPanelFailure('刷新窗口代理', error);
   } finally {
     state.roxyRefreshingDirIds.delete(dirId);
+    // A successful reload replaces tbody, so restore the current DOM rather
+    // than only the now-detached button that initiated the refresh.
+    renderRoxyBrowserProxyBindings();
     setRoxyBindingRowBusy(button, false);
   }
 }
@@ -437,6 +441,13 @@ function setRoxyBindingRowBusy(button, busy) {
   });
   button.disabled = busy;
   button.textContent = busy ? '正在刷新...' : '刷新并重开窗口';
+}
+
+function hideUnavailableRoxyBindingHeaderActions() {
+  for (const id of ['saveRoxyBrowserProxyBindingsButton', 'refreshRoxyBrowserProxyButton']) {
+    const button = $(`#${id}`);
+    if (button) button.hidden = true;
+  }
 }
 
 function reportRoxyProxyPanelFailure(action) {
