@@ -1557,7 +1557,7 @@ test('replacement automation run APIs list, read logs, and stop active runs', as
   }
 });
 
-test('Roxy proxy configuration APIs require an administrator and never return the proxy password', async () => {
+test('Roxy proxy APIs require an administrator and never return the proxy password', async () => {
   const saves = [];
   const proxySettings = createRoxyProxySettingsStub();
   proxySettings.saveRoxyProxyTemplate = (input) => {
@@ -1570,6 +1570,13 @@ test('Roxy proxy configuration APIs require an administrator and never return th
   try {
     const anonymous = await fetch(`${server.baseUrl}/roxy-proxy-config`, { redirect: 'manual' });
     assert.equal(anonymous.status, 302);
+    const anonymousCreate = await fetch(`${server.baseUrl}/roxy-proxies`, {
+      method: 'POST',
+      redirect: 'manual',
+    });
+    assert.equal(anonymousCreate.status, 302);
+    const anonymousProfiles = await fetch(`${server.baseUrl}/roxy-browser-profiles`, { redirect: 'manual' });
+    assert.equal(anonymousProfiles.status, 302);
 
     const read = await jsonRequest(server, 'GET', '/roxy-proxy-config');
     assert.equal(read.response.status, 200);
@@ -1618,6 +1625,187 @@ test('Roxy proxy APIs expose safe proxy and channel DTOs and map Roxy failures t
     const failed = await jsonRequest(server, 'GET', '/roxy-proxies');
     assert.equal(failed.response.status, 502);
     assert.equal(failed.body.error, 'ROXY_PROXY_API_FAILED');
+  } finally {
+    await server.close();
+  }
+});
+
+test('Roxy proxy creation uses saved template credentials and returns only a safe proxy DTO', async () => {
+  const proxySettings = createRoxyProxySettingsStub();
+  const clientEnvironments = [];
+  let createPayload;
+  const { app } = createTestContext(undefined, {
+    roxyProxySettings: proxySettings,
+    roxyClientFactory: async (env) => {
+      clientEnvironments.push(env);
+      return {
+        async createProxy(payload) {
+          createPayload = payload;
+          return {
+            id: 34,
+            ...payload,
+            proxyPassword: 'proxy-secret',
+            cdpEndpoint: 'ws://must-not-leak',
+          };
+        },
+      };
+    },
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const created = await jsonRequest(server, 'POST', '/roxy-proxies');
+
+    assert.equal(created.response.status, 200);
+    assert.equal(clientEnvironments[0].ROXY_WORKSPACE_ID, '7');
+    assert.deepEqual({
+      workspaceId: createPayload.workspaceId,
+      checkChannel: createPayload.checkChannel,
+      ipType: createPayload.ipType,
+      protocol: createPayload.protocol,
+      host: createPayload.host,
+      port: createPayload.port,
+      proxyPassword: createPayload.proxyPassword,
+      refreshUrl: createPayload.refreshUrl,
+      remark: createPayload.remark,
+    }, {
+      workspaceId: 7,
+      checkChannel: 'arx',
+      ipType: 'IPV4',
+      protocol: 'SOCKS5',
+      host: 'us.arxlabs.io',
+      port: '3010',
+      proxyPassword: 'proxy-secret',
+      refreshUrl: '',
+      remark: '',
+    });
+    assert.match(createPayload.proxyUserName, /^sttj1150537-region-JP-sid-[A-Za-z0-9]{8}-t-5$/);
+    assert.equal(created.body.proxy.id, 34);
+    assert.equal(created.body.proxy.username, createPayload.proxyUserName);
+    assert.equal(JSON.stringify(created.body).includes('proxy-secret'), false);
+    assert.equal(JSON.stringify(created.body).includes('ws://must-not-leak'), false);
+    assert.equal(Object.hasOwn(created.body.proxy, 'proxyPassword'), false);
+  } finally {
+    await server.close();
+  }
+});
+
+test('Roxy proxy creation requires complete saved credentials and redacts downstream errors', async () => {
+  const missingCredentials = createRoxyProxySettingsStub();
+  missingCredentials.getRoxyProxyTemplateCredentials = () => ({
+    ...missingCredentials.getRoxyProxyTemplate(),
+    password: null,
+  });
+  let clientCreated = false;
+  const missing = createTestContext(undefined, {
+    roxyProxySettings: missingCredentials,
+    roxyClientFactory: async () => {
+      clientCreated = true;
+      return createRoxyClientStub();
+    },
+  });
+  const missingServer = await startTestServer(missing.app);
+
+  try {
+    const response = await jsonRequest(missingServer, 'POST', '/roxy-proxies');
+    assert.equal(response.response.status, 400);
+    assert.equal(response.body.error, 'ROXY_PROXY_TEMPLATE_NOT_CONFIGURED');
+    assert.equal(clientCreated, false);
+  } finally {
+    await missingServer.close();
+  }
+
+  const failed = createTestContext(undefined, {
+    roxyProxySettings: createRoxyProxySettingsStub(),
+    roxyClientFactory: async () => ({
+      async createProxy() {
+        throw new Error('proxy-secret v1:ciphertext ROXY_PROXY_SETTINGS_KEY=key ws://private-cdp');
+      },
+    }),
+  });
+  const failedServer = await startTestServer(failed.app);
+
+  try {
+    const response = await jsonRequest(failedServer, 'POST', '/roxy-proxies');
+    assert.equal(response.response.status, 502);
+    assert.equal(response.body.error, 'ROXY_PROXY_API_FAILED');
+    assert.doesNotMatch(JSON.stringify(response.body), /proxy-secret|ciphertext|ROXY_PROXY_SETTINGS_KEY|wss?:\/\//);
+  } finally {
+    await failedServer.close();
+  }
+});
+
+test('Roxy browser profile discovery returns only explicit top-level proxy IDs and safe profile DTOs', async () => {
+  const clientEnvironments = [];
+  const client = {
+    async listBrowsers() {
+      return {
+        data: {
+          rows: [
+            {
+              dirId: 'dir-explicit',
+              sortNum: 7,
+              windowName: 'Japan 1',
+              proxyId: 12,
+              proxyInfo: {
+                id: 999,
+                host: 'us.arxlabs.io',
+                port: '3010',
+                protocol: 'SOCKS5',
+                proxyUserName: 'sttj1150537-region-JP-sid-Ab12Cd34-t-5',
+                proxyPassword: 'proxy-secret',
+                ws: 'ws://must-not-leak',
+              },
+            },
+            {
+              dirId: 'dir-no-explicit-proxy',
+              sortNum: 8,
+              windowName: 'Japan 2',
+              proxyInfo: {
+                id: 12,
+                host: 'us.arxlabs.io',
+                proxyPassword: 'proxy-secret',
+                cdpEndpoint: 'ws://must-not-leak',
+              },
+            },
+          ],
+        },
+      };
+    },
+  };
+  const { app } = createTestContext(undefined, {
+    roxyProxySettings: createRoxyProxySettingsStub(),
+    roxyClientFactory: async (env) => {
+      clientEnvironments.push(env);
+      return client;
+    },
+  });
+  const server = await startTestServer(app);
+
+  try {
+    const profiles = await jsonRequest(server, 'GET', '/roxy-browser-profiles');
+
+    assert.equal(profiles.response.status, 200);
+    assert.equal(clientEnvironments[0].ROXY_WORKSPACE_ID, '7');
+    assert.deepEqual(profiles.body.profiles.map((profile) => ({
+      dirId: profile.dirId,
+      sortNum: profile.sortNum,
+      windowName: profile.windowName,
+      proxyId: profile.proxyId,
+    })), [
+      { dirId: 'dir-explicit', sortNum: 7, windowName: 'Japan 1', proxyId: 12 },
+      { dirId: 'dir-no-explicit-proxy', sortNum: 8, windowName: 'Japan 2', proxyId: null },
+    ]);
+    assert.equal(profiles.body.profiles[1].proxyInfo.id, undefined);
+    assert.doesNotMatch(JSON.stringify(profiles.body), /proxy-secret|wss?:\/\//);
+
+    client.listBrowsers = async () => {
+      throw new Error('proxy-secret v1:ciphertext ROXY_PROXY_SETTINGS_KEY=key ws://private-cdp');
+    };
+    const failed = await jsonRequest(server, 'GET', '/roxy-browser-profiles');
+    assert.equal(failed.response.status, 502);
+    assert.equal(failed.body.error, 'ROXY_PROXY_API_FAILED');
+    assert.doesNotMatch(JSON.stringify(failed.body), /proxy-secret|ciphertext|ROXY_PROXY_SETTINGS_KEY|wss?:\/\//);
   } finally {
     await server.close();
   }

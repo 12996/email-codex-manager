@@ -1,5 +1,6 @@
 import cookieParser from 'cookie-parser';
 import express from 'express';
+import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -807,11 +808,53 @@ export function createApp({
     }
   });
 
+  app.post('/roxy-proxies', requireAuth, async (req, res) => {
+    try {
+      const credentials = roxyProxySettings.getRoxyProxyTemplateCredentials?.();
+      if (!isRoxyProxyTemplateReady(credentials) || !normalizeOptionalEnv(credentials?.password)) {
+        throw roxyCodedError('ROXY_PROXY_TEMPLATE_NOT_CONFIGURED', 'Roxy proxy template credentials are not configured');
+      }
+
+      const username = generateRoxyProxyUsername(credentials);
+      // Password stays inside this payload and the downstream client request only.
+      const payload = {
+        workspaceId: Number(credentials.workspaceId),
+        checkChannel: credentials.checkChannel,
+        ipType: credentials.ipType,
+        protocol: credentials.protocol,
+        host: credentials.host,
+        port: credentials.port,
+        proxyUserName: username,
+        proxyPassword: credentials.password,
+        refreshUrl: credentials.refreshUrl ?? '',
+        remark: credentials.remark ?? '',
+      };
+      const client = await createConfiguredRoxyClient(roxyProxySettings, roxyClientFactory);
+      const proxy = await client.createProxy(payload);
+      res.json({ ok: true, proxy: publicRoxyProxy(proxy) });
+    } catch (error) {
+      sendRoxyApiError(res, error);
+    }
+  });
+
   app.get('/roxy-proxy-channels', requireAuth, async (req, res) => {
     try {
       const client = await createConfiguredRoxyClient(roxyProxySettings, roxyClientFactory);
       const channels = await client.detectProxyChannels();
       res.json({ ok: true, channels: Array.isArray(channels) ? channels : [] });
+    } catch (error) {
+      sendRoxyApiError(res, error);
+    }
+  });
+
+  app.get('/roxy-browser-profiles', requireAuth, async (req, res) => {
+    try {
+      const client = await createConfiguredRoxyClient(roxyProxySettings, roxyClientFactory);
+      const browserResponse = await client.listBrowsers();
+      res.json({
+        ok: true,
+        profiles: extractRoxyBrowserRows(browserResponse).map(publicRoxyBrowserProfile),
+      });
     } catch (error) {
       sendRoxyApiError(res, error);
     }
@@ -1328,11 +1371,45 @@ function publicRoxyProxy(proxy = {}) {
     protocol: proxy.protocol,
     host: proxy.host,
     port: proxy.port,
-    username: proxy.username,
+    username: proxy.proxyUserName ?? proxy.username,
     checkChannel: proxy.checkChannel,
     refreshUrl: proxy.refreshUrl ?? null,
     remark: proxy.remark ?? null,
-    passwordConfigured: Boolean(proxy.passwordConfigured),
+    passwordConfigured: Boolean(proxy.passwordConfigured ?? proxy.proxyPassword ?? proxy.password),
+  };
+}
+
+function extractRoxyBrowserRows(response) {
+  if (Array.isArray(response)) return response;
+  const data = response?.data;
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data?.list)) return data.list;
+  if (Array.isArray(data?.rows)) return data.rows;
+  if (Array.isArray(data?.data)) return data.data;
+  return [];
+}
+
+function publicRoxyBrowserProfile(profile = {}) {
+  const proxyInfo = profile?.proxyInfo && typeof profile.proxyInfo === 'object'
+    ? profile.proxyInfo
+    : {};
+  const proxyId = Object.hasOwn(profile, 'proxyId')
+    ? normalizeOptionalRoxyProxyId(profile.proxyId)
+    : null;
+  return {
+    dirId: String(profile.dirId || '').trim(),
+    sortNum: profile.sortNum ?? profile.windowSortNum ?? profile.SN ?? null,
+    windowName: profile.windowName ?? null,
+    // proxyInfo.id is not binding evidence and must never be used as proxyId.
+    proxyId,
+    proxyInfo: {
+      host: proxyInfo.host ?? null,
+      port: proxyInfo.port ?? null,
+      protocol: proxyInfo.protocol ?? proxyInfo.proxyCategory ?? null,
+      username: proxyInfo.proxyUserName ?? proxyInfo.username ?? '',
+      lastIp: proxyInfo.lastIp ?? null,
+      passwordConfigured: Boolean(proxyInfo.proxyPassword ?? proxyInfo.password),
+    },
   };
 }
 
@@ -1377,6 +1454,26 @@ function normalizeRoxyProxyId(value, code) {
     throw roxyCodedError(code, 'Roxy proxyId must be a positive integer');
   }
   return proxyId;
+}
+
+function normalizeOptionalRoxyProxyId(value) {
+  const proxyId = Number(value);
+  return Number.isInteger(proxyId) && proxyId > 0 ? proxyId : null;
+}
+
+function generateRoxyProxyUsername(template) {
+  const sid = generateRoxyProxySid();
+  return `${template.accountPrefix}-region-${template.country}-sid-${sid}-t-${template.ttlMinutes}`;
+}
+
+function generateRoxyProxySid() {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = randomBytes(8);
+  let sid = '';
+  for (const byte of bytes) {
+    sid += alphabet[byte % alphabet.length];
+  }
+  return sid;
 }
 
 function isRoxyProxyActivityActive(activity) {
