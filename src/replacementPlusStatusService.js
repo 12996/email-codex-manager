@@ -1,7 +1,7 @@
 import { fetchReplacementEmailMessages } from './replacementEmailApiService.js';
 import { htmlToText } from './verificationCodeService.js';
 
-const PLUS_STATUS_CHECK_LIMIT = 30;
+const PLUS_STATUS_CHECK_LIMIT = 5;
 const PLUS_STATUS_NOTE = 'Plus 状态查询命中订阅邮件';
 const PLUS_MARKERS = [
   "you've successfully subscribed to chatgpt plus",

@@ -4,6 +4,7 @@
 
 | 日期 | 主要工作 | 状态 | 入口 |
 |---|---|---|---|
+| 2026-07-31 | 补号邮箱 API 查询数量限制 | done | `2026-07-31-replacement-email-api-query-limit.md` |
 | 2026-07-30 | 恢复协议注册响应驱动状态机 | done | `2026-07-30-protocol-registration-state-recovery.md` |
 | 2026-07-25 | PRD-003 基线合并（CHG-091 至 CHG-099） | done | `../prd/PRD-003-account-management-system-2026-06-25-baseline.md` |
 | 2026-07-25 | 一键验活按状态筛选 | done | `../changes/CHG-099-healthcheck-filtered-status.md` |

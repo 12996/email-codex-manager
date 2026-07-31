@@ -1253,7 +1253,7 @@ keyword   可选，按邮箱、手机号、备注或状态模糊搜索
 
 邮箱 API 响应要求：
 
-- 请求方式为 `GET`，URL 使用补号账号行中保存的完整 `email_code_api`，系统不会再为该 URL 拼接邮箱参数。进度窗口为避免把 query 中的其他参数写入日志，只展示去掉 query/hash 的接口基址，并追加当前数据库账号邮箱；这不改变实际请求 URL。
+- 请求方式为 `GET`，URL 使用补号账号行中保存的完整 `email_code_api`，保留既有 query 参数并追加或覆盖 `limit=5`，以读取最近 5 封邮件；系统不会再为该 URL 拼接邮箱参数。进度窗口为避免把 query 中的其他参数写入日志，只展示去掉 query/hash 的接口基址，并追加当前数据库账号邮箱；这不改变除 `limit` 外的实际请求 URL。
 - 响应可以是完整邮件 JSON 对象、邮件数组、HTML 或纯文本；JSON 对象至少应包含 `subject`、`body`、`bodyHtml`、`bodyText`、`html`、`text`、`content` 中的一个字段。
 - 例如：`{"email":"user@icloud.com","subject":"ChatGPT - Your new plan","received_at":"2026-07-14T10:23:21Z","body":"<html>...</html>"}`。
 - 只有 `{ "code": "123456" }` 这类验证码-only 响应不能用于 Plus 状态判断，会计入失败，不会回退到 IMAP。

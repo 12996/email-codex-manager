@@ -2,6 +2,13 @@
 
 状态：active
 
+## 2026-07-31 Plus 状态查询读取最近 5 封邮件
+
+- 根因：`email_code_api` 默认只返回最近一封邮件；账号 `209`（`10-buff-tactile@icloud.com`）的最近邮件是“不再续订”，而初始 Plus 订阅确认邮件位于第 2 封，因此原逻辑没有命中。
+- 修复：`fetchReplacementEmailMessages()` 保留账号 URL 的既有 query 参数并追加/覆盖 `limit=5`；Plus 查询传入的读取数量同步为 5。
+- 验证：邮箱 API 实测返回 5 封邮件，`ChatGPT - Your new plan` 命中；单账号真实查询结果为 `plus=1`，账号状态已回写为 `plus_active`。专项 Node 测试 8/8 通过。
+- 关联：`CHG-101` 状态为 `implemented`；运行中的服务需重启后才会加载新逻辑。
+
 ## 2026-07-30 协议注册状态机恢复
 
 - 因误将协议目录恢复到 `ab37db5`，2026-07-28 尚未提交的 CHG-100 代码被覆盖；账号

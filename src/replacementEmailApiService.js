@@ -17,7 +17,9 @@ export async function fetchReplacementEmailMessages(account, {
 
   let response;
   try {
-    response = await fetchImpl(apiUrl, {
+    const requestUrl = new URL(apiUrl);
+    requestUrl.searchParams.set('limit', '5');
+    response = await fetchImpl(requestUrl.toString(), {
       method: 'GET',
       headers: {
         accept: 'application/json, text/plain, text/html',

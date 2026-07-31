@@ -108,3 +108,4 @@ PRD 合并提醒规则：未合并的 `implemented` change 达到 5 个时，AI 
 | CHG-098 | 协议注册提交补号账号密码 | merged | 2026-07-24 | PRD-003 | `src/auto/protocol_registration/`, `docs/work/` | `CHG-098-protocol-registration-password-api.md` |
 | CHG-099 | 一键验活遵循状态筛选 | merged | 2026-07-25 | PRD-003 | `web/app.js`, `src/server.js`, `src/accountHealthcheckService.js`, `src/replacementAccounts.js`, `test/` | `CHG-099-healthcheck-filtered-status.md` |
 | CHG-100 | 协议注册响应驱动导航与密码阶段顺序 | implemented | 2026-07-28 | PRD-003 | `src/auto/protocol_registration/`, `test/roxyCdpBridge.test.js`, `docs/issues/`, `docs/work/` | `CHG-100-protocol-registration-response-driven-navigation.md` |
+| CHG-101 | 补号邮箱 API 查询数量限制 | implemented | 2026-07-31 | PRD-003 | `src/replacementEmailApiService.js`, `src/replacementPlusStatusService.js`, `test/`, `docs/project/api.md`, `docs/work/` | `CHG-101-replacement-email-api-query-limit.md` |
