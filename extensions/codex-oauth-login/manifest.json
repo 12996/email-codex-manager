@@ -1,26 +1,18 @@
 {
   "manifest_version": 3,
-  "name": "Codex OAuth Login",
+  "name": "Codex JWT AT Login",
   "version": "0.1.0",
-  "description": "Use a browser OAuth flow to obtain a one-time refresh token download.",
+  "description": "Verify a Codex Agent Identity JWT locally and show redacted account status.",
   "incognito": "split",
-  "permissions": [
-    "alarms",
-    "downloads",
-    "offscreen",
-    "storage",
-    "tabs",
-    "webNavigation"
-  ],
+  "permissions": ["storage"],
   "host_permissions": [
-    "https://auth.openai.com/*",
-    "http://localhost:1455/*"
+    "https://chatgpt.com/*"
   ],
   "background": {
     "service_worker": "background.js",
     "type": "module"
   },
   "action": {
-    "default_title": "Codex OAuth Login"
+    "default_title": "Codex JWT AT Login"
   }
 }

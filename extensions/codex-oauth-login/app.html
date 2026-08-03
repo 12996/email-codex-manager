@@ -3,21 +3,20 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Codex OAuth 登录</title>
+    <title>Codex JWT AT 登录</title>
     <link rel="stylesheet" href="app.css">
   </head>
   <body>
     <main>
-      <h1>Codex OAuth 登录</h1>
-      <p class="hint">AT 仅在本页面做本地预检；网页登录不调用本机 Codex CLI。</p>
+      <h1>Codex JWT AT 登录</h1>
+      <p class="hint">仅验证 Codex Agent Identity JWT；不会登录 ChatGPT 网页，也不会创建 RT。</p>
 
-      <label for="access-token">AT（可选）</label>
+      <label for="access-token">JWT AT</label>
       <input id="access-token" type="password" autocomplete="off" spellcheck="false">
-      <p id="precheck" class="hint" aria-live="polite">未输入 AT</p>
+      <p id="precheck" class="hint" aria-live="polite">未输入 JWT AT</p>
 
       <div class="actions">
-        <button id="start-login" type="button">网页登录 Codex</button>
-        <button id="download-rt" type="button" disabled>下载 RT</button>
+        <button id="start-login" type="button">使用 JWT 登录</button>
         <button id="clear-state" type="button" class="secondary">清除</button>
       </div>
 

@@ -1,9 +1,8 @@
-import { precheckAccessToken } from './lib/oauth-core.js';
+import { inspectJwtInput } from './lib/jwt-auth-core.js';
 
 const atInput = document.querySelector('#access-token');
 const precheck = document.querySelector('#precheck');
 const startLoginButton = document.querySelector('#start-login');
-const downloadButton = document.querySelector('#download-rt');
 const clearButton = document.querySelector('#clear-state');
 const status = document.querySelector('#status');
 const email = document.querySelector('#email');
@@ -11,29 +10,22 @@ const plan = document.querySelector('#plan');
 
 function renderPrecheck(result) {
   const text = {
-    empty: '未输入 AT',
-    invalid: 'AT 格式不完整',
-    opaque: 'AT 无法作为 JWT 解析，未进行在线验证',
-    'jwt-valid': result.expiresAt ? `JWT 声明过期时间：${new Date(result.expiresAt).toLocaleString()}` : 'JWT 未声明过期时间',
-    'jwt-expired': `JWT 声明已过期：${new Date(result.expiresAt).toLocaleString()}`,
+    empty: '未输入 JWT AT',
+    'valid-format': 'JWT 格式可提交；登录时会进行本地验签',
+    'invalid-format': '请输入有效的 JWT AT',
   };
-  precheck.textContent = text[result.kind] || 'AT 无法解析';
+  precheck.textContent = text[result.kind] || '请输入有效的 JWT AT';
 }
 
 function renderState(state) {
   status.textContent = state?.message || '等待登录';
   email.textContent = state?.email || '未提供';
   plan.textContent = state?.plan || '未提供';
-  downloadButton.disabled = state?.canDownloadRt !== true;
 }
 
-async function refreshState() {
-  renderState(await sendAuthMessage('auth:get-state'));
-}
-
-async function sendAuthMessage(type) {
+async function sendAuthMessage(message) {
   try {
-    return await chrome.runtime.sendMessage({ type });
+    return await chrome.runtime.sendMessage(message);
   } catch {
     return {
       phase: 'failed',
@@ -46,23 +38,21 @@ async function sendAuthMessage(type) {
 }
 
 atInput.addEventListener('input', () => {
-  renderPrecheck(precheckAccessToken(atInput.value, Date.now()));
+  const value = atInput.value;
+  renderPrecheck(value ? inspectJwtInput(value) : { kind: 'empty' });
 });
 
 startLoginButton.addEventListener('click', async () => {
+  const jwt = atInput.value;
   atInput.value = '';
-  renderPrecheck(precheckAccessToken('', Date.now()));
-  renderState(await sendAuthMessage('auth:start'));
-});
-
-downloadButton.addEventListener('click', async () => {
-  renderState(await sendAuthMessage('auth:download-rt'));
+  renderPrecheck({ kind: 'empty' });
+  renderState(await sendAuthMessage({ type: 'auth:login-jwt', jwt }));
 });
 
 clearButton.addEventListener('click', async () => {
   atInput.value = '';
-  renderPrecheck(precheckAccessToken('', Date.now()));
-  renderState(await sendAuthMessage('auth:clear'));
+  renderPrecheck({ kind: 'empty' });
+  renderState(await sendAuthMessage({ type: 'auth:clear' }));
 });
 
 chrome.runtime.onMessage.addListener(message => {
@@ -71,4 +61,4 @@ chrome.runtime.onMessage.addListener(message => {
   }
 });
 
-void refreshState();
+void sendAuthMessage({ type: 'auth:get-state' }).then(renderState);
