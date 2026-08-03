@@ -28,6 +28,9 @@ dist/
 build/
 coverage/
 
+# Agent worktree scratch directories
+.worktrees/
+
 # OS / editor files
 .DS_Store
 Thumbs.db
