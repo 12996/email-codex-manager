@@ -170,12 +170,33 @@ export function createAuthController({ chromeApi, cryptoApi = globalThis.crypto,
     return getPublicState();
   }
 
+  async function takeRefreshTokenForDownload() {
+    const result = await readSession(RESULT_KEY);
+    if (typeof result?.refreshToken !== 'string' || !result.refreshToken.trim()) {
+      await fail('RT 不可用');
+      return null;
+    }
+
+    await chromeApi.storage.session.remove(RESULT_KEY);
+    await publish(createPublicState('downloading', '正在下载 RT'));
+    return result.refreshToken;
+  }
+
+  async function finishRefreshTokenDownload({ success }) {
+    if (success) {
+      return clear();
+    }
+    return fail('RT 下载失败');
+  }
+
   return {
     clear,
+    finishRefreshTokenDownload,
     getPublicState,
     handleAlarm,
     handleBeforeNavigate,
     handleTabRemoved,
     startAuthorization,
+    takeRefreshTokenForDownload,
   };
 }

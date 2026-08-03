@@ -242,3 +242,28 @@ test('state persistence does not depend on a visible extension page receiving no
   assert.equal(state.phase, 'authorizing');
   assert.equal(harness.chromeApi.data.codex_oauth_transaction.authTabId, 41);
 });
+
+test('starting an RT download removes the private result before the browser download runs', async () => {
+  const harness = createHarness();
+  const transaction = await startAndGetTransaction(harness);
+  await harness.controller.handleBeforeNavigate({
+    tabId: 41,
+    url: `http://localhost:1455/auth/callback?code=code-one&state=${transaction.state}`,
+  });
+
+  const refreshToken = await harness.controller.takeRefreshTokenForDownload();
+
+  assert.equal(refreshToken, 'rt-test-value');
+  assert.equal(harness.chromeApi.data.codex_oauth_result, undefined);
+  assert.deepEqual(await harness.controller.getPublicState(), {
+    phase: 'downloading',
+    message: '正在下载 RT',
+    email: null,
+    plan: null,
+    canDownloadRt: false,
+  });
+  assert.doesNotMatch(JSON.stringify(harness.chromeApi.messages), /rt-test-value/);
+
+  await harness.controller.finishRefreshTokenDownload({ success: true });
+  assert.equal((await harness.controller.getPublicState()).phase, 'idle');
+});

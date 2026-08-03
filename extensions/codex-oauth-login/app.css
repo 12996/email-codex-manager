@@ -1,0 +1,86 @@
+:root {
+  color: #182033;
+  font-family: "Segoe UI", sans-serif;
+}
+
+body {
+  background: #f5f7fb;
+  margin: 0;
+}
+
+main {
+  background: #fff;
+  border: 1px solid #dbe1ed;
+  border-radius: 12px;
+  margin: 32px auto;
+  max-width: 520px;
+  padding: 28px;
+}
+
+h1 {
+  font-size: 22px;
+  margin-top: 0;
+}
+
+label,
+input,
+button {
+  display: block;
+  width: 100%;
+}
+
+input {
+  box-sizing: border-box;
+  margin-top: 8px;
+  padding: 10px;
+}
+
+.hint {
+  color: #586174;
+  font-size: 13px;
+}
+
+.actions {
+  display: grid;
+  gap: 10px;
+  margin: 24px 0;
+}
+
+button {
+  background: #1565d8;
+  border: 0;
+  border-radius: 7px;
+  color: #fff;
+  cursor: pointer;
+  padding: 10px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+button.secondary {
+  background: #697386;
+}
+
+dl {
+  margin: 0;
+}
+
+dl div {
+  border-top: 1px solid #e6eaf1;
+  display: flex;
+  gap: 16px;
+  padding: 10px 0;
+}
+
+dt {
+  color: #586174;
+  width: 56px;
+}
+
+dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}

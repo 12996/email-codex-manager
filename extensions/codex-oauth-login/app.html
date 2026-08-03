@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Codex OAuth 登录</title>
+    <link rel="stylesheet" href="app.css">
+  </head>
+  <body>
+    <main>
+      <h1>Codex OAuth 登录</h1>
+      <p class="hint">AT 仅在本页面做本地预检；网页登录不调用本机 Codex CLI。</p>
+
+      <label for="access-token">AT（可选）</label>
+      <input id="access-token" type="password" autocomplete="off" spellcheck="false">
+      <p id="precheck" class="hint" aria-live="polite">未输入 AT</p>
+
+      <div class="actions">
+        <button id="start-login" type="button">网页登录 Codex</button>
+        <button id="download-rt" type="button" disabled>下载 RT</button>
+        <button id="clear-state" type="button" class="secondary">清除</button>
+      </div>
+
+      <dl>
+        <div><dt>状态</dt><dd id="status" aria-live="polite">等待登录</dd></div>
+        <div><dt>邮箱</dt><dd id="email">未提供</dd></div>
+        <div><dt>套餐</dt><dd id="plan">未提供</dd></div>
+      </dl>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>
