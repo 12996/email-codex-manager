@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Codex OAuth Login",
+  "version": "0.1.0",
+  "description": "Use a browser OAuth flow to obtain a one-time refresh token download.",
+  "incognito": "split",
+  "permissions": [
+    "alarms",
+    "downloads",
+    "offscreen",
+    "storage",
+    "tabs",
+    "webNavigation"
+  ],
+  "host_permissions": [
+    "https://auth.openai.com/*",
+    "http://localhost:1455/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_title": "Codex OAuth Login"
+  }
+}
