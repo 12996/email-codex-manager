@@ -14,8 +14,8 @@
 
 ### 断点模型
 
-CLI 接受 `--debug-stop-at <checkpoint>`；未传时保持既有注册行为。断点名称由核心状态机显式调用，
-而不是通过注释或捕获任意异常实现。初始可用名称为：
+核心状态机在每个阶段开头显式调用 `debug_pause(stage)` hook，并以注释说明该阶段的远端副作用与
+下一步请求。未配置时 hook 是 no-op，普通注册行为不变。初始可用名称为：
 
 ```text
 after-authorize
@@ -26,7 +26,13 @@ after-session-at
 after-at-save
 ```
 
-命中断点时抛出带断点名称的受控结果，调用方将其识别为 `debug-stopped`，而非注册成功或失败。
+用户可在 `src/auto/protocol_no_2fa_registration.py` 的集中配置/函数区选择断点，或调整
+`debug_pause()` 的命中条件；无需在协议状态机中搜索或删除请求代码。命中时 hook 抛出带断点名称的
+受控结果，调用方将其识别为 `debug-stopped`，而非注册成功或失败。
+
+网页操作由后台子进程启动，不能依赖 `input()` 等终端交互。因此默认调试语义是“在指定点终止并
+保留页面”，不是无限等待：这样不会永久占用单并发 Roxy 队列。需要同进程暂停/继续时，另行通过
+显式控制 API 或控制文件实现，不能把无限循环直接放进网页任务。
 
 ### AT 前断点
 
@@ -58,6 +64,13 @@ follow_oauth_callback
 
 调试停止是一次性结束：进程退出，页面留给人工观察。后续若需要从同一进程继续流程，
 再单独设计 pause/resume 控制 API；不能使用 stdin，因为注册由服务子进程启动。
+
+### 源码注释与可维护性
+
+`protocol_no_2fa_registration.py` 提供用户可编辑的 `debug_pause()` 控制点说明和阶段名称清单。
+`core/no_2fa_registration.py` 在以下位置保留阶段注释与 hook 调用：进入 OAuth、准备邮箱 OTP、
+提交资料、完成 OAuth callback、读取 AT、保存 AT。这样调试断点既贴近实际协议调用，也能从入口文件
+集中配置；用户若需要观察不同阶段，只改入口函数的匹配规则或阶段名称。
 
 ## 非目标
 
