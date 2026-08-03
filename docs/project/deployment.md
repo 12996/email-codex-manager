@@ -134,6 +134,48 @@ PROTOCOL_PYTHON_PATH=F:\anaconda\anaconda3\envs\tilian\python.exe
 
 协议注册固定按当前补号行传入 `REPLACEMENT_ACCOUNT_ID`，强制 `ROXY_CDP_ENABLED=1`，并以单线程执行 `src/auto/protocol_registration/main.py`。共享 profile 不支持并行协议注册。CDP 模式默认启用 `ROXY_IP_CHECK_ENABLED=1`：首次请求记录出口 IP，后续请求、导航和 Sentinel 生成前重新读取；IP 变化时立即终止本次注册，不刷新指纹、不继续提交旧 OAuth 状态。
 
+补号列表的“无2FA注册”动作执行 `src/auto/protocol_no_2fa_registration.py`，与上面的协议注册共用
+单线程队列。它只接受 `unregistered` 账号，并在 AT 文件写入后回写 `registered`，不会写入 TOTP。
+默认准备器需要 Roxy profile 的数据库代理绑定和模板；尚未配置时，服务进程必须显式继承以下覆盖：
+
+```env
+ROXY_NO_2FA_BROWSER_DIR_ID=<目标 profile dirId>
+ROXY_NO_2FA_PREPARER=F:\work\email\gmail_IMAP\test\manual-roxy-proxy-refresh.cjs
+PROTOCOL_NO2FA_PYTHON_PATH=F:\anaconda\anaconda3\envs\tilian\python.exe
+```
+
+`ROXY_NO_2FA_PREPARER` 仅用于无数据库绑定的过渡环境，不能改为包含代理凭据、Cookie 或 CDP endpoint
+的环境变量；服务重启后才会读取新的配置和操作路由。
+
+若需要直接以浏览器流程验证无 2FA 注册，可运行：
+
+```powershell
+node .\src\auto\roxy_no_2fa_register.js --email <unregistered-email>
+```
+
+该 runner 使用相同的 `ROXY_NO_2FA_*` 配置；可用 `--name`、`--birthday YYYY-MM-DD` 覆盖资料，
+并通过 `ROXY_NO_2FA_OTP_MAX_ATTEMPTS`、`ROXY_NO_2FA_OTP_POLL_ATTEMPTS`、
+`ROXY_NO_2FA_OTP_SUBMIT_WAIT_MS` 调整 OTP 等待。它先保存 AT、再回写 `registered`，不会输出 AT。
+当前补号管理“无2FA注册”操作仍运行 Python 协议 runner，需完成浏览器实机验收后才可切换。
+
+Roxy 浏览器连接不会直接依赖一次性取得的 CDP 地址：`RoxyBrowserClient` 会最多轮询
+`/browser/connection_info` 12 次（500ms 间隔），每次 Playwright 附着使用 10 秒 timeout，最多尝试
+3 次；每次重试前都重新读取 connection info。最终错误为
+`ROXY_CDP_CONNECTION_INFO_TIMEOUT` 或 `ROXY_CDP_ATTACH_FAILED`，不会打印 endpoint。排查时可在已打开
+的 profile 上运行只读命令：
+
+```powershell
+node .\test\manual-roxy-cdp-attach-probe.cjs
+```
+
+该探针不导航、不填表、不读取或输出 Cookie、OTP、AT、代理凭据或 CDP endpoint；`connection_info` 返回空时，
+应先按实际动作对应的 Roxy 刷新脚本重新打开 profile，再重试探针。
+
+2026-08-03 的真实无 2FA 页面录制确认：邮箱验证码控件是 `input[name="code"]`，资料页是
+`input[name="name"]` 和 `input[name="age"]`，提交按钮文本为 `Finish creating account`。因此 CLI 的
+`--birthday YYYY-MM-DD` 在年龄页会换算成当前年龄；格式非法、未满 18 岁或超过 120 岁会在填表前失败，
+不会随机改写为另一年龄。
+
 补号列表的“协议补号”动作使用独立 CPA 入口，不进入注册状态机：
 
 ```env

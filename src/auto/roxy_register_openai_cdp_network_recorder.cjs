@@ -138,7 +138,7 @@ async function attachPage(page) {
 }
 
 (async () => {
-  const browser = await chromium.connectOverCDP(endpoint);
+  const browser = await chromium.connectOverCDP(endpoint, { timeout: 10000 });
   for (const context of browser.contexts()) {
     context.on('page', (page) => attachPage(page).catch(() => {}));
     for (const page of context.pages()) await attachPage(page);
@@ -151,7 +151,11 @@ async function attachPage(page) {
   const interval = setInterval(async () => {
     if (!recordingStarted && fs.existsSync(startFile)) {
       recordingStarted = true;
-      write({ type: 'start', mode: 'cdp-network-schema-only' });
+      fs.writeFileSync(outFile, JSON.stringify({
+        type: 'start',
+        ts: new Date().toISOString(),
+        mode: 'cdp-network-schema-only',
+      }) + '\n');
       console.log(`CDP NETWORK STARTED outFile=${outFile}`);
     }
     if (fs.existsSync(stopFile)) {

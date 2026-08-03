@@ -313,10 +313,25 @@ class RoxyCdpBridge {
 
     const mapped = this.pagesByOrigin.get(targetOrigin);
     if (mapped && !mapped.isClosed()) {
-      this.page = mapped;
-      return mapped;
+      let mappedOrigin = '';
+      try {
+        mappedOrigin = new URL(String(mapped.url() || '')).origin;
+      } catch (_) {
+        // chrome-error:// and other non-HTTP error documents cannot safely
+        // host a retry for the original authenticated origin.
+      }
+      if (mappedOrigin === targetOrigin) {
+        this.page = mapped;
+        return mapped;
+      }
     }
-    if (mapped) this.pagesByOrigin.delete(targetOrigin);
+    if (mapped) {
+      this.pagesByOrigin.delete(targetOrigin);
+      if (this.ownedPages.has(mapped) && !mapped.isClosed()) {
+        await mapped.close().catch(() => {});
+        this.ownedPages.delete(mapped);
+      }
+    }
 
     let page = this.page && !this.page.isClosed() ? this.page : null;
     let currentOrigin = '';

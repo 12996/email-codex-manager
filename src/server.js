@@ -117,7 +117,18 @@ export function createApp({
       job.roxyProxyOwner = roxyProxyOwner;
       protocolRegistrationRoxyOwners.set(job.id, roxyProxyOwner);
       try {
-        const result = await replacementServices.registerProtocolAccount(account, {
+        const isNo2faRegistration = job.operation === 'no2fa-registration';
+        const result = await (isNo2faRegistration
+          ? replacementServices.registerNo2faAccount(account, {
+            roxyProxyOwner,
+            onLog(event) {
+              protocolRegistrationQueue.appendLog(job, {
+                level: event?.stream === 'stderr' ? 'error' : 'muted',
+                message: event?.type === 'log' ? event.text : event?.message,
+              });
+            },
+          })
+          : replacementServices.registerProtocolAccount(account, {
           roxyProxyOwner,
           onLog(event) {
             protocolRegistrationQueue.appendLog(job, {
@@ -125,20 +136,34 @@ export function createApp({
               message: event?.type === 'log' ? event.text : event?.message,
             });
           },
-        });
-        const mfaSecret = extractRegistrationMfaSecret(result);
-        if (!mfaSecret) {
-          throw Object.assign(
-            new Error('协议注册子进程未返回已激活的 2FA secret，拒绝写入 registered'),
-            { code: 'PROTOCOL_REGISTER_FAILED' },
-          );
+          }));
+        if (isNo2faRegistration) {
+          const updatedAccount = replacementAccounts.getAccount(account.id);
+          if (updatedAccount?.status !== 'registered') {
+            throw Object.assign(
+              new Error('无2FA注册未回写 registered 状态'),
+              { code: 'PROTOCOL_NO2FA_REGISTER_FAILED' },
+            );
+          }
+        } else {
+          const mfaSecret = extractRegistrationMfaSecret(result);
+          if (!mfaSecret) {
+            throw Object.assign(
+              new Error('协议注册子进程未返回已激活的 2FA secret，拒绝写入 registered'),
+              { code: 'PROTOCOL_REGISTER_FAILED' },
+            );
+          }
+          replacementAccounts.markRegistrationSuccess(account.id, { codex_2fa: mfaSecret });
         }
-        replacementAccounts.markRegistrationSuccess(account.id, { codex_2fa: mfaSecret });
       } catch (error) {
         const publicError = String(error?.code || '').startsWith('ROXY_')
           ? toPublicRoxyError(error)
           : error;
-        replacementAccounts.recordOperationFailure(account.id, '协议注册', publicError.message);
+        replacementAccounts.recordOperationFailure(
+          account.id,
+          job.operation === 'no2fa-registration' ? '无2FA注册' : '协议注册',
+          publicError.message,
+        );
         throw publicError;
       } finally {
         protocolRegistrationRoxyOwners.delete(job.id);
@@ -946,6 +971,24 @@ export function createApp({
     }
     try {
       const job = protocolRegistrationQueue.enqueue(account);
+      res.status(202).json({ ok: true, job, ...protocolRegistrationQueue.getSnapshot() });
+    } catch (error) {
+      sendApiError(res, error, { account });
+    }
+  });
+
+  app.post('/replacement-accounts/:id/register-no2fa', requireAuth, (req, res) => {
+    const account = replacementAccounts.getAccount(req.params.id);
+    if (!account) {
+      res.status(404).json(errorBody('ACCOUNT_NOT_FOUND', 'replacement account not found'));
+      return;
+    }
+    if (account.status !== 'unregistered') {
+      res.status(409).json(errorBody('ACCOUNT_NOT_UNREGISTERED', 'no2fa registration requires an unregistered account'));
+      return;
+    }
+    try {
+      const job = protocolRegistrationQueue.enqueue(account, { operation: 'no2fa-registration' });
       res.status(202).json({ ok: true, job, ...protocolRegistrationQueue.getSnapshot() });
     } catch (error) {
       sendApiError(res, error, { account });

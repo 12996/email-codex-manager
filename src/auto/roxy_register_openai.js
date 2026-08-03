@@ -1532,6 +1532,44 @@ const BIRTH_SINGLE_SELECTORS = [
     'input[placeholder*="月" i][placeholder*="日" i]'
 ];
 
+function deriveAgeFromBirthday(value, now = new Date()) {
+    const birthday = String(value || '').trim();
+    if (!birthday) return '';
+
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(birthday);
+    const current = now instanceof Date ? new Date(now.getTime()) : new Date(now);
+    if (!match || Number.isNaN(current.getTime())) {
+        const error = new Error('registration birthday is invalid');
+        error.code = 'REGISTRATION_BIRTHDAY_INVALID';
+        throw error;
+    }
+
+    const [, rawYear, rawMonth, rawDay] = match;
+    const year = Number(rawYear);
+    const month = Number(rawMonth);
+    const day = Number(rawDay);
+    const date = new Date(Date.UTC(year, month - 1, day));
+    const validDate = date.getUTCFullYear() === year
+        && date.getUTCMonth() === month - 1
+        && date.getUTCDate() === day;
+    if (!validDate) {
+        const error = new Error('registration birthday is invalid');
+        error.code = 'REGISTRATION_BIRTHDAY_INVALID';
+        throw error;
+    }
+
+    let age = current.getUTCFullYear() - year;
+    const birthdayHasNotOccurred = current.getUTCMonth() < month - 1
+        || (current.getUTCMonth() === month - 1 && current.getUTCDate() < day);
+    if (birthdayHasNotOccurred) age -= 1;
+    if (age < 18 || age > 120) {
+        const error = new Error('registration birthday is outside the supported age range');
+        error.code = 'REGISTRATION_BIRTHDAY_INVALID';
+        throw error;
+    }
+    return String(age);
+}
+
 /**
  * 健壮地点击「Continue/Submit」按钮，避免点中 Resend email 等同表单内的其他 submit。
  * 策略：
@@ -1675,10 +1713,18 @@ async function clickContinueButtonReliably(page, opts = {}) {
             console.warn(`⚠️  [Continue] 第 ${attempt} 次按钮未变可见`);
             continue;
         }
-        const disabled = await target.isDisabled().catch(() => false);
-        if (disabled) {
-            console.warn(`⚠️  [Continue] 第 ${attempt} 次按钮处于 disabled 状态，再等 1.5s`);
+        const disabled = await target.isDisabled().catch(() => true);
+        const operable = await target.evaluate((node) => {
+            const el = node instanceof HTMLElement ? node : null;
+            if (!el) return false;
+            return !el.matches(':disabled')
+                && el.getAttribute('aria-disabled') !== 'true'
+                && !el.closest?.('[aria-disabled="true"], [inert], fieldset[disabled]');
+        }).catch(() => false);
+        if (disabled || !operable) {
+            console.warn(`⚠️  [Continue] 第 ${attempt} 次按钮不可操作，等待后重新检测`);
             await page.waitForTimeout(1500);
+            if (opts.requireEnabled) continue;
         }
 
         // 通过 evaluate 拿到按钮文本/属性方便日志识别
@@ -1817,6 +1863,17 @@ async function safeFillByValue(page, selector, value) {
     if (!(await locator.isVisible().catch(() => false))) {
         return false;
     }
+    if (!(await locator.isEnabled().catch(() => false))) {
+        return false;
+    }
+    const usable = await locator.evaluate((node) => {
+        const el = node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement ? node : null;
+        if (!el || el.disabled || el.readOnly) return false;
+        return !el.closest?.('[aria-disabled="true"], [inert], fieldset[disabled]');
+    }).catch(() => false);
+    if (!usable) {
+        return false;
+    }
 
     // 先点击聚焦（也能解除自动 readonly 状态）
     await locator.click({ clickCount: 3, timeout: 5000 }).catch(() => { });
@@ -1862,22 +1919,34 @@ async function fillProfileFieldsIfPresent(page, opts = {}) {
     // 短姓名：First + 空格 + Last（11~14 字符内），更接近真人填写
     const firstNames = ['James', 'Mary', 'John', 'Lisa', 'Tom', 'Anna', 'Mike', 'Eva', 'Will', 'Kate'];
     const lastNames = ['Smith', 'Brown', 'Jones', 'Davis', 'Miller', 'Lee', 'Wilson', 'Walker', 'Hall', 'King'];
-    const randomName = `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
+    const configuredName = String(opts.name || '').trim();
+    const randomName = configuredName || `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
     console.log(`📝 [资料] (${label}) 命中姓名输入框 ${nameField.selector}，填写: ${randomName}`);
-    await safeFillByValue(page, nameField.selector, randomName);
+    if (!await safeFillByValue(page, nameField.selector, randomName)) {
+        return false;
+    }
 
     const ageField = await findFirstVisible(page, AGE_SELECTORS, 0);
     if (ageField) {
-        const randomAge = (Math.floor(Math.random() * 25) + 20).toString();
-        console.log(`📝 [资料] (${label}) 命中年龄输入框 ${ageField.selector}，填写: ${randomAge}`);
-        await safeFillByValue(page, ageField.selector, randomAge);
+        const configuredAge = deriveAgeFromBirthday(opts.birthday);
+        const age = configuredAge || (Math.floor(Math.random() * 25) + 20).toString();
+        console.log(`📝 [资料] (${label}) 命中年龄输入框 ${ageField.selector}，填写: ${age}`);
+        if (!await safeFillByValue(page, ageField.selector, age)) {
+            return false;
+        }
     } else {
         // 优先检测「单输入框 MM/DD/YYYY」（新版 /about-you 用这种）
         const singleBday = await findFirstVisible(page, BIRTH_SINGLE_SELECTORS, 0);
         if (singleBday) {
-            const year = (Math.floor(Math.random() * 25) + 1980); // 1980 ~ 2004
-            const month = Math.floor(Math.random() * 12) + 1;
-            const day = Math.floor(Math.random() * 28) + 1;
+            const configuredBirthday = /^\d{4}-\d{2}-\d{2}$/.test(String(opts.birthday || '').trim())
+                ? String(opts.birthday).trim()
+                : '';
+            const [configuredYear, configuredMonth, configuredDay] = configuredBirthday
+                ? configuredBirthday.split('-').map((part) => Number(part))
+                : [];
+            const year = configuredBirthday ? configuredYear : (Math.floor(Math.random() * 25) + 1980); // 1980 ~ 2004
+            const month = configuredBirthday ? configuredMonth : (Math.floor(Math.random() * 12) + 1);
+            const day = configuredBirthday ? configuredDay : (Math.floor(Math.random() * 28) + 1);
             const mm = String(month).padStart(2, '0');
             const dd = String(day).padStart(2, '0');
             const yyyy = String(year);
@@ -1885,6 +1954,14 @@ async function fillProfileFieldsIfPresent(page, opts = {}) {
             const raw = `${mm}${dd}${yyyy}`;
             console.log(`📝 [资料] (${label}) 命中生日单输入框 ${singleBday.selector}，输入: ${mm}/${dd}/${yyyy}`);
             const loc = page.locator(singleBday.selector).first();
+            const bdayOperable = await loc.isEnabled().catch(() => false)
+                && await loc.evaluate((node) => {
+                    const el = node instanceof HTMLInputElement ? node : null;
+                    return Boolean(el && !el.disabled && !el.readOnly && !el.closest?.('[aria-disabled="true"], [inert], fieldset[disabled]'));
+                }).catch(() => false);
+            if (!bdayOperable) {
+                return false;
+            }
             await loc.click({ clickCount: 3 }).catch(() => { });
             await loc.fill('').catch(async () => {
                 await page.keyboard.press('Control+A').catch(() => { });
@@ -1914,9 +1991,9 @@ async function fillProfileFieldsIfPresent(page, opts = {}) {
                 const day = (Math.floor(Math.random() * 28) + 1).toString().padStart(2, '0');
                 console.log(`📝 [资料] (${label}) 命中生日分段输入，填写: ${year}/${month}/${day}`);
                 // 注意：分段时按 month → day → year 的常见 DOM 顺序填，避免顺序错位
-                if (monthField) await safeFillByValue(page, monthField.selector, month);
-                if (dayField) await safeFillByValue(page, dayField.selector, day);
-                await safeFillByValue(page, yearField.selector, year);
+                if (monthField && !await safeFillByValue(page, monthField.selector, month)) return false;
+                if (dayField && !await safeFillByValue(page, dayField.selector, day)) return false;
+                if (!await safeFillByValue(page, yearField.selector, year)) return false;
             } else {
                 console.warn(`⚠️  [资料] (${label}) 未识别到年龄/生日输入，仅填了姓名`);
             }
@@ -2801,6 +2878,9 @@ module.exports = {
     fetchRegistrationEmailVerificationCodeOnce,
     fetchRegistrationEmailVerificationCode,
     classifyRegistrationPage,
+    clickContinueButtonReliably,
+    fillProfileFieldsIfPresent,
+    deriveAgeFromBirthday,
     findVisibleOtpSelector,
     findVisiblePasswordSelector,
     prepareChatGptEmailEntry,

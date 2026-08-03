@@ -495,17 +495,13 @@ function accountRow(account) {
           <button class="primary action-toggle" type="button" data-id="${account.id}">操作⌄</button>
           <div class="action-menu" hidden>
             <button type="button" data-action="register-protocol" data-id="${account.id}">⇄ 协议注册</button>
+            <button type="button" data-action="register-no2fa" data-id="${account.id}">⇄ 无2FA注册</button>
             <button type="button" data-action="replace-2fa-protocol" data-id="${account.id}">⟳ 协议补号</button>
             <button type="button" data-action="edit" data-id="${account.id}">✎ 编辑账号</button>
-            <button type="button" data-action="toggle-public-code" data-id="${account.id}">${account.public_code_enabled ? '停用公开验证码' : '启用公开验证码'}</button>
-            <button type="button" data-action="sms" data-id="${account.id}">▣ 获取验证码</button>
-            <button type="button" data-action="json" data-id="${account.id}">▣ 获取 JSON</button>
             <button type="button" data-action="register" data-id="${account.id}">✚ 注册</button>
             <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
             <button type="button" data-action="replace-2fa" data-id="${account.id}">⟳ 2FA补号</button>
-            <button type="button" data-action="login-2fa" data-id="${account.id}">🔑 2FA登录</button>
             ${account.circuit_breaker_at ? `<button type="button" data-action="reset-circuit-breaker" data-id="${account.id}">解除熔断</button>` : ''}
-            <button type="button" data-action="copy-public-code-url" data-id="${account.id}">⧉ 复制公开验证码 URL</button>
             <button class="danger" type="button" data-action="delete" data-id="${account.id}">🗑 删除账号</button>
           </div>
         </div>
@@ -651,6 +647,7 @@ async function handleAction(action, id, dataset = {}) {
   if (action === 'json') return fetchJson(account);
   if (action === 'register') return registerAccount(account);
   if (action === 'register-protocol') return registerProtocolAccount(account);
+  if (action === 'register-no2fa') return registerNo2faAccount(account);
   if (action === 'replace-2fa-protocol') return replaceAccountWith2FAProtocol(account);
   if (action === 'replace') return replaceAccount(account);
   if (action === 'replace-2fa') return replaceAccountWith2FA(account);
@@ -1009,11 +1006,26 @@ async function registerProtocolAccount(account) {
   }
 }
 
+async function registerNo2faAccount(account) {
+  try {
+    await api(`/replacement-accounts/${account.id}/register-no2fa`, { method: 'POST' });
+    toast('无2FA注册已加入队列');
+    await loadProtocolRegistrationQueue();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function renderProtocolQueueState(accountId) {
   const current = state.protocolRegistrationQueue.current;
-  if (current?.account?.id === accountId) return '<div class="muted">协议注册：注册中</div>';
-  if (state.protocolRegistrationQueue.waiting.some((job) => job.account?.id === accountId)) return '<div class="muted">协议注册：排队中</div>';
+  if (current?.account?.id === accountId) return `<div class="muted">${protocolJobLabel(current)}：注册中</div>`;
+  const waiting = state.protocolRegistrationQueue.waiting.find((job) => job.account?.id === accountId);
+  if (waiting) return `<div class="muted">${protocolJobLabel(waiting)}：排队中</div>`;
   return '';
+}
+
+function protocolJobLabel(job) {
+  return job?.operation === 'no2fa-registration' ? '无2FA注册' : '协议注册';
 }
 
 async function loadProtocolRegistrationQueue() {
@@ -1050,7 +1062,7 @@ function renderProtocolRegistrationQueue() {
     ...(queue.recent || []).map((job) => ({ ...job, label: job.state === 'succeeded' ? '完成' : '失败' })),
   ];
   $('#protocolRegistrationQueueList').innerHTML = items.length
-    ? items.map((job) => `<div class="progress-log-entry ${job.state === 'failed' ? 'error' : ''}">${escapeHtml(job.label)} · ${escapeHtml(job.account.email)}（ID: ${job.account.id}）</div>`).join('')
+    ? items.map((job) => `<div class="progress-log-entry ${job.state === 'failed' ? 'error' : ''}">${escapeHtml(protocolJobLabel(job))} · ${escapeHtml(job.label)} · ${escapeHtml(job.account.email)}（ID: ${job.account.id}）</div>`).join('')
     : '<div class="muted">暂无协议注册任务</div>';
 }
 
@@ -1065,7 +1077,7 @@ function renderCurrentProtocolRegistrationLog() {
   const isCurrent = job === queue.current;
   const outcome = job.state === 'failed' ? '失败' : job.state === 'succeeded' ? '完成' : '注册中';
   $('#protocolLiveAccount').textContent = `${isCurrent ? '当前账号' : '最近账号'}：${job.account.email}（ID: ${job.account.id}）`;
-  setProtocolLiveSummary(`协议注册${outcome}`, job.state === 'failed' ? 'error' : job.state === 'succeeded' ? 'success' : 'muted');
+  setProtocolLiveSummary(`${protocolJobLabel(job)}${outcome}`, job.state === 'failed' ? 'error' : job.state === 'succeeded' ? 'success' : 'muted');
   $('#protocolLiveLog').innerHTML = (job.logs || []).map((log) => (
     `<div class="progress-log-entry ${escapeHtml(log.level)}">${escapeHtml(log.message)}</div>`
   )).join('') || '<div class="muted">暂无日志输出</div>';

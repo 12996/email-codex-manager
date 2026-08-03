@@ -26,6 +26,29 @@ Roxy OpenAI 注册流程中，OTP 提交后曾把通用 Continue 点击函数返
 
 ---
 
+## [LRN-20260803-001] correction
+
+**Logged**: 2026-08-03T12:24:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+手动完成的浏览器注册不能表述为无 2FA runner 已完成自动化验收。
+
+### Details
+本次实机流程由用户完成邮箱 OTP 和资料页，随后仅验证了当前 ChatGPT session 的 AT 落盘及补号状态回写。虽然 `roxy_no_2fa_register.js` 已实现并通过单元测试，但尚未用新的 `unregistered` 账号跑完它的端到端自动流程。对用户报告时必须明确区分“手动流程成功”和“自动 runner 已验收”。
+
+### Suggested Action
+先以真实录制确认组件选择和状态机，再使用新的 `unregistered` 账号进行一次完整自动验收；只有 runner 自己完成 Roxy 准备、OTP、资料页、session AT 保存和状态回写后，才能报告自动化成功。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/roxy_no_2fa_register.js`, `test/manual-roxy-proxy-refresh.cjs`, `docs/changes/CHG-104-roxy-no2fa-browser-registration.md`
+- Tags: roxy, no2fa, automation, validation-boundary
+
+---
+
 ## [LRN-20260719-001] correction
 
 **Logged**: 2026-07-19T23:15:00+08:00

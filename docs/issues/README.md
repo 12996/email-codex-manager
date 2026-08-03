@@ -26,3 +26,6 @@
 | issue-018 | 协议注册 2FA 重认证回调返回 401 | active | `issue-018-protocol-registration-mfa-reauth-401.md` |
 | issue-019 | 协议 CPA phone-code 阶段跳过 add-phone/send | resolved | `issue-019-protocol-cpa-phone-add-request-skipped.md` |
 | issue-020 | 协议注册 CDP 导航重试超时预算不足 | active | `issue-020-protocol-registration-cdp-navigate-timeout-budget.md` |
+| issue-021 | 无2FA协议账号提链结算金额读取失败 | active | `issue-021-protocol-no2fa-trial-link-check.md` |
+| issue-022 | Roxy CDP 未就绪导致 Playwright 附着超时 | resolved | `issue-022-roxy-cdp-attach-readiness.md` |
+| issue-023 | Roxy 录制文件混入旧会话且 DOM recorder 泄露 endpoint | resolved | `issue-023-roxy-recorder-run-boundary.md` |

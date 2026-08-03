@@ -385,6 +385,131 @@ Roxy 页面请求失败: HTTP 401 https://auth.openai.com/api/accounts/email-otp
 
 ---
 
+## [ERR-20260803-003] apply-patch-add-file-prefix
+
+**Logged**: 2026-08-03T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: docs
+
+### Summary
+创建长 Markdown 计划时有一行遗漏 apply_patch 的新增行前缀，导致整份补丁被拒绝。
+
+### Error
+```text
+apply_patch verification failed: invalid hunk ... is not a valid hunk header
+```
+
+### Context
+- 目标是新增 `docs/superpowers/plans/` 下的实施计划。
+- Markdown 代码块中的 `git commit` 行未以 `+` 开头。
+
+### Suggested Fix
+长 Add File 补丁提交前逐行确认每个内容行均带 `+`，或按任务拆分为更小的补丁。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `docs/superpowers/plans/`
+
+### Resolution
+- **Resolved**: 2026-08-03T00:00:00+08:00
+- **Notes**: 已改用逐行带新增前缀的补丁重试。
+
+---
+
+## [ERR-20260803-001] parallel-git-review-timeout
+
+**Logged**: 2026-08-03T12:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+并发执行多个 Git 审查命令在当前 Windows 工作区超时，未得到审查结果。
+
+### Error
+```text
+git diff --check / git diff --stat / git status timed out while launched concurrently
+```
+
+### Context
+- 工作区包含大量未提交变更。
+- 三个 Git 命令被同一个工具调用并发启动；之后没有残留 git 进程或 `.git/index.lock`。
+
+### Suggested Fix
+对当前工作区的 Git 审查命令使用 `git --no-optional-locks` 串行执行，并限定到本次修改路径。
+
+### Metadata
+- Reproducible: unknown
+- Related Files: `.git/`, `src/auto/roxy-browser-client.cjs`
+
+### Resolution
+- **Resolved**: 2026-08-03T12:00:00+08:00
+- **Notes**: 后续路径限定的串行 `git --no-optional-locks status` 正常返回。
+
+---
+
+## [ERR-20260803-001] invalid-wait-cell
+
+**Logged**: 2026-08-03T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+一次工具调用尝试等待不存在的执行单元，未执行项目命令也未修改项目状态。
+
+### Error
+```text
+exec cell __invalid__ not found
+```
+
+### Context
+- `functions.wait` 只能用于前一条运行中 `functions.exec` 返回的 cell ID。
+- 后续验证均改为受控的单个 `functions.exec` 命令。
+
+### Suggested Fix
+仅在已获得运行中 cell ID 时调用等待工具。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `test/roxyNo2FaRegister.test.js`
+- See Also: ERR-20260730-004
+
+### Resolution
+- **Resolved**: 2026-08-03T00:00:00+08:00
+- **Notes**: 不影响本次实现或测试结果。
+
+---
+
+## [ERR-20260802-001] incorrect-roxy-bridge-test-path
+
+**Logged**: 2026-08-02T22:53:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: tests
+
+### Summary
+计划基线命令引用了不存在的 `test/roxyCdpBridge.test.js`。
+
+### Error
+```text
+Could not find 'test/roxyCdpBridge.test.js'
+```
+
+### Context
+- Roxy CDP bridge 的 Python 回归位于 `src/auto/protocol_registration/tests/`。
+- 当前根目录可发现的手动 Roxy 刷新测试是 `test/manualRoxyProxyRefreshRunner.test.js`。
+
+### Suggested Fix
+后续计划和验证命令使用实际存在的测试文件，且不将本次新功能绑定到无关的手动 runner 测试。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `docs/superpowers/plans/2026-08-02-protocol-no-2fa-registration.md`, `test/manualRoxyProxyRefreshRunner.test.js`
+
+---
+
 ## [ERR-20260728-004] cdp-asset-regex-escaping
 
 **Logged**: 2026-07-28T01:47:00+08:00

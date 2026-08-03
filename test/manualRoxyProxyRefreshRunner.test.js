@@ -23,7 +23,7 @@ test('manual Roxy refresh runner exposes the configured live target', () => {
     port: '3010',
     accountPrefix: 'sttj1150537',
     country: 'JP',
-    ttl: 5,
+    ttl: 10,
     proxyPassword: '4jvxcsadse',
     workspaceId: undefined,
     apiBaseUrl: undefined,
@@ -38,7 +38,7 @@ test('manual Roxy refresh runner maps the CLI ttl to the service ttlMinutes fiel
     { protocol: 'SOCKS5', ipType: 'IPV4', checkChannel: 'channel' },
   );
 
-  assert.equal(template.ttlMinutes, 5);
+  assert.equal(template.ttlMinutes, 10);
   assert.equal(template.ttl, undefined);
 });
 

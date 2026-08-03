@@ -14,6 +14,8 @@ const DEFAULT_ROXY_2FA_LOGIN_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_login.js
 const DEFAULT_ROXY_REGISTER_SCRIPT = join(__dirname, 'auto', 'roxy_register_openai.js');
 const DEFAULT_PROTOCOL_PROJECT_DIR = join(__dirname, 'auto', 'protocol_registration');
 const DEFAULT_PROTOCOL_MAIN_PATH = join(DEFAULT_PROTOCOL_PROJECT_DIR, 'main.py');
+const DEFAULT_PROTOCOL_NO2FA_PROJECT_DIR = join(__dirname, 'auto');
+const DEFAULT_PROTOCOL_NO2FA_MAIN_PATH = join(DEFAULT_PROTOCOL_NO2FA_PROJECT_DIR, 'protocol_no_2fa_registration.py');
 const DEFAULT_PROTOCOL_TWO_FA_PROJECT_DIR = join(__dirname, 'auto');
 const DEFAULT_PROTOCOL_TWO_FA_MAIN_PATH = join(DEFAULT_PROTOCOL_TWO_FA_PROJECT_DIR, 'protocol_cpa_replacement.py');
 const DEFAULT_PROTOCOL_PYTHON_PATH = 'F:\\anaconda\\anaconda3\\envs\\tilian\\python.exe';
@@ -39,6 +41,9 @@ export function createReplacementServices({
   protocolPythonPath,
   protocolProjectPath,
   protocolMainPath,
+  protocolNo2faPythonPath,
+  protocolNo2faProjectPath,
+  protocolNo2faMainPath,
   protocolTwoFaPythonPath,
   protocolTwoFaProjectPath,
   protocolTwoFaMainPath,
@@ -59,6 +64,9 @@ export function createReplacementServices({
     protocolPythonPath,
     protocolProjectPath,
     protocolMainPath,
+    protocolNo2faPythonPath,
+    protocolNo2faProjectPath,
+    protocolNo2faMainPath,
     protocolTwoFaPythonPath,
     protocolTwoFaProjectPath,
     protocolTwoFaMainPath,
@@ -156,6 +164,16 @@ export function createReplacementServices({
       return defaultAutomation.registerProtocolAccount(account, options);
     },
 
+    async registerNo2faAccount(account, options) {
+      if (automation?.registerNo2faAccount) {
+        return automation.registerNo2faAccount(account, options);
+      }
+      if (!defaultAutomation?.registerNo2faAccount) {
+        throw codedError('PROTOCOL_NO2FA_REGISTER_NOT_CONFIGURED', 'no2fa protocol registration is not configured');
+      }
+      return defaultAutomation.registerNo2faAccount(account, options);
+    },
+
     stopReplacementRun(runId) {
       return stopReplacementRun(runId);
     },
@@ -171,6 +189,9 @@ export function createRoxyOAuthChildProcessAutomation({
   protocolPythonPath,
   protocolProjectPath,
   protocolMainPath,
+  protocolNo2faPythonPath,
+  protocolNo2faProjectPath,
+  protocolNo2faMainPath,
   protocolTwoFaPythonPath,
   protocolTwoFaProjectPath,
   protocolTwoFaMainPath,
@@ -191,6 +212,9 @@ export function createRoxyOAuthChildProcessAutomation({
     protocolPythonPath,
     protocolProjectPath,
     protocolMainPath,
+    protocolNo2faPythonPath,
+    protocolNo2faProjectPath,
+    protocolNo2faMainPath,
     protocolTwoFaPythonPath,
     protocolTwoFaProjectPath,
     protocolTwoFaMainPath,
@@ -213,6 +237,12 @@ export function createRoxyChildProcessAutomation({
   protocolPythonPath = normalizeOptional(process.env.PROTOCOL_PYTHON_PATH) || DEFAULT_PROTOCOL_PYTHON_PATH,
   protocolProjectPath = normalizeOptional(process.env.PROTOCOL_PROJECT_PATH) || DEFAULT_PROTOCOL_PROJECT_DIR,
   protocolMainPath = normalizeOptional(process.env.PROTOCOL_MAIN_PATH) || join(protocolProjectPath, 'main.py'),
+  protocolNo2faPythonPath = normalizeOptional(process.env.PROTOCOL_NO2FA_PYTHON_PATH) || protocolPythonPath,
+  protocolNo2faProjectPath = normalizeOptional(process.env.PROTOCOL_NO2FA_PROJECT_PATH) || DEFAULT_PROTOCOL_NO2FA_PROJECT_DIR,
+  protocolNo2faMainPath = normalizeOptional(process.env.PROTOCOL_NO2FA_MAIN_PATH)
+    || (protocolNo2faProjectPath === DEFAULT_PROTOCOL_NO2FA_PROJECT_DIR
+      ? DEFAULT_PROTOCOL_NO2FA_MAIN_PATH
+      : join(protocolNo2faProjectPath, 'protocol_no_2fa_registration.py')),
   protocolTwoFaPythonPath = normalizeOptional(process.env.PROTOCOL_2FA_PYTHON_PATH) || protocolPythonPath,
   protocolTwoFaProjectPath = normalizeOptional(process.env.PROTOCOL_2FA_PROJECT_PATH) || DEFAULT_PROTOCOL_TWO_FA_PROJECT_DIR,
   protocolTwoFaMainPath = normalizeOptional(process.env.PROTOCOL_2FA_MAIN_PATH)
@@ -538,6 +568,60 @@ export function createRoxyChildProcessAutomation({
       });
     },
 
+    registerNo2faAccount(account, options = {}) {
+      if (protocolRegistrationInFlight) {
+        return Promise.reject(codedError('PROTOCOL_NO2FA_REGISTER_BUSY', 'no2fa registration is already running for the shared Roxy profile'));
+      }
+
+      const email = normalizeRequired(account?.email, 'PROTOCOL_NO2FA_REGISTER_FAILED', 'no2fa registration account email is required');
+      const accountId = normalizeRequired(account?.id, 'PROTOCOL_NO2FA_REGISTER_FAILED', 'no2fa registration account id is required');
+      if (!/^\d+$/.test(accountId)) {
+        return Promise.reject(codedError('PROTOCOL_NO2FA_REGISTER_FAILED', 'no2fa registration account id is invalid'));
+      }
+
+      protocolRegistrationInFlight = true;
+      return (async () => {
+        notifyAutomationLog(options?.onLog, {
+          type: 'step',
+          step: 'prepare-roxy',
+          message: '正在准备无2FA注册使用的 Roxy 浏览器环境',
+        });
+        const env = buildNo2faRegistrationEnv({
+          baseEnv,
+          account,
+          email,
+          accountId,
+        });
+        return runChildProcess({
+          spawnImpl,
+          command: protocolNo2faPythonPath,
+          args: [protocolNo2faMainPath, '--email', email],
+          cwd: protocolNo2faProjectPath,
+          env,
+          account: { ...account, email },
+          automationRuns,
+          logDir,
+          kind: 'protocol-no2fa-registration',
+          failureCode: 'PROTOCOL_NO2FA_REGISTER_FAILED',
+          envSummaryKeys: [
+            'OTP_PROVIDER',
+            'EMAIL_SOURCE',
+            'REPLACEMENT_ACCOUNT_ID',
+            'REPLACEMENT_API_BASE',
+            'ROXY_NO_2FA_PREPARER',
+            'ROXY_NO_2FA_BROWSER_DIR_ID',
+            'ROXY_CDP_ENABLED',
+            'ROXY_CDP_ORIGIN_ISOLATION',
+            'REGISTRATION_TOKEN_OUTPUT_DIR',
+            ...ROXY_TARGET_ENV_KEYS,
+          ],
+          onLog: options?.onLog,
+        });
+      })().finally(() => {
+        protocolRegistrationInFlight = false;
+      });
+    },
+
     registerAccount(account) {
       const email = normalizeRequired(account?.email, 'REGISTER_FAILED', 'registration account email is required');
       const emailCodeApi = normalizeEmailCodeApiForAccount(account);
@@ -639,6 +723,17 @@ function buildProtocolRegistrationEnv({ baseEnv, account, email, accountId }) {
   removeRoxyProxySecrets(env);
   if (!password) delete env.ROXY_REGISTER_PASSWORD;
   return applyActionRoxyTargetEnv(env, 'ROXY_PROTOCOL');
+}
+
+function buildNo2faRegistrationEnv({ baseEnv, account, email, accountId }) {
+  const env = buildProtocolRegistrationEnv({ baseEnv, account, email, accountId });
+  const configuredDirId = normalizeOptional(baseEnv.ROXY_NO_2FA_BROWSER_DIR_ID)
+    || normalizeOptional(baseEnv.ROXY_PROTOCOL_BROWSER_DIR_ID)
+    || normalizeOptional(env.ROXY_BROWSER_DIR_ID);
+  if (configuredDirId) {
+    env.ROXY_NO_2FA_BROWSER_DIR_ID = configuredDirId;
+  }
+  return env;
 }
 
 function removeRoxyProxySecrets(env) {

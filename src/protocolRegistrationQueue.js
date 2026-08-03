@@ -19,6 +19,7 @@ export function createProtocolRegistrationQueue({ worker, maxRecent = 20, maxLog
   function snapshotJob(job) {
     return {
       id: job.id,
+      operation: job.operation,
       account: { id: job.account.id, email: job.account.email },
       state: job.state,
       enqueuedAt: job.enqueuedAt,
@@ -71,7 +72,7 @@ export function createProtocolRegistrationQueue({ worker, maxRecent = 20, maxLog
     }
   }
 
-  function enqueue(account) {
+  function enqueue(account, { operation = 'protocol-registration' } = {}) {
     const accountId = String(account?.id || '').trim();
     if (!accountId) throw new ProtocolRegistrationQueueError('PROTOCOL_REGISTER_FAILED', 'protocol registration account id is required');
     if (String(current?.account?.id || '') === accountId || waiting.some((job) => String(job.account.id) === accountId)) {
@@ -79,6 +80,7 @@ export function createProtocolRegistrationQueue({ worker, maxRecent = 20, maxLog
     }
     const job = {
       id: `${Date.now()}-${accountId}`,
+      operation: String(operation || 'protocol-registration'),
       account: { id: account.id, email: account.email },
       state: 'queued',
       enqueuedAt: new Date().toISOString(),

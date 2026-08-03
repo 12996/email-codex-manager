@@ -1451,6 +1451,31 @@ ROXY_REGISTER_ENABLE_MFA=0
 - `/replacement-ui` 只在当前页面的“当前协议注册日志”面板中临时展示这些事件，不写入浏览器历史或“最近操作记录”。刷新页面或下一次启动时清空。
 - 不带 SSE 请求头的客户端继续使用上面的 JSON 响应格式。
 
+### POST `/replacement-accounts/:id/register-no2fa`
+
+按当前补号列表行启动无 2FA 的 OTP-first 协议注册。仅 `unregistered` 账号可入队；接口返回
+`202` 与既有协议注册队列快照，并与 `/register-protocol` 共享同一 Roxy 串行队列。
+
+队列子进程执行：
+
+```text
+src/auto/protocol_no_2fa_registration.py --email <account.email>
+```
+
+子进程在 session AT 文件落盘后通过本地补号服务把账号回写为 `registered`。worker 会复查该状态，
+但不会创建 TOTP、写入 `codex_2fa` 或调用密码注册接口。Roxy 准备默认要求目标 profile 的代理绑定和
+模板；无该配置时，服务启动环境必须显式提供 `ROXY_NO_2FA_PREPARER`。
+
+独立浏览器验证入口（不是新的 HTTP API）为：
+
+```text
+node src/auto/roxy_no_2fa_register.js --email <unregistered-email>
+```
+
+它以同一 Roxy profile 完成邮箱、OTP、资料页和 ChatGPT session；密码、TOTP 和
+`user/register` 都是禁止分支。session AT 文件保存成功后才通过本地服务回写 `registered`，CLI 不返回
+AT。当前本 HTTP 接口仍启动 Python 协议 runner，浏览器 runner 通过实机验收前不替换队列实现。
+
 ### POST `/replacement-accounts/:id/replace`
 
 执行自动补号。自动化运行时代码位于：

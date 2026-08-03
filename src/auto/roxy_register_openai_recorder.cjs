@@ -153,7 +153,7 @@ const recorderScript = `
 `;
 
 (async () => {
-  const browser = await chromium.connectOverCDP(endpoint);
+  const browser = await chromium.connectOverCDP(endpoint, { timeout: 10000 });
   const seenPages = new WeakSet();
 
   async function attach(page) {
@@ -203,7 +203,7 @@ const recorderScript = `
         type: 'start',
         ts: new Date().toISOString(),
         startedAt,
-        endpoint,
+        endpoint: '<redacted-cdp-endpoint>',
       })) + '\n');
       for (const context of browser.contexts()) {
         for (const page of context.pages()) {

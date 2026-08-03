@@ -2,6 +2,37 @@
 
 状态：active
 
+## 2026-08-03 Roxy CDP 附着就绪与无 2FA 浏览器 runner
+
+- 现象复核：Roxy 未打开时 `/browser/connection_info` 返回空；重新运行
+  `test/manual-roxy-proxy-refresh.cjs` 后，原生 CDP 和 `playwright-core@1.60.0` 对 Chrome 149 均可附着，
+  连续五次成功。因此不要把 Chrome 149 / Playwright 1.60 直接判为不兼容。
+- 修复：`RoxyBrowserClient` 现在先轮询 connection info（12 次、500ms），再以 10 秒 timeout 附着；
+  附着失败最多重试三次，且每次重新取得 endpoint。耗尽时抛出安全的
+  `ROXY_CDP_CONNECTION_INFO_TIMEOUT` 或 `ROXY_CDP_ATTACH_FAILED`，不会继续到注册页面操作。
+- `src/auto/roxy_no_2fa_register.js` 已使用 `connectReadyPlaywright()`；`test/manual-roxy-cdp-attach-probe.cjs`
+  是只读探针，不导航、不填表、不输出 endpoint、Cookie、OTP、AT 或代理凭据。
+- 验证：Node 专项 25/25 通过；新连接入口实机只读附着约 322ms 成功。后续用户已手动完成一次真实无 2FA
+  OTP-first 流程，AT 已落盘且对应补号状态已回写 `registered`；敏感值未输出。
+- 全量 `npm test`：48/48 通过。`test/manualRoxyProxyRefreshRunner.test.js` 的两项旧 TTL 断言已由 5
+  同步到仓库当前手动刷新配置的 10；未修改代理配置或注册流程。
+- 后续：CDP 层和无 2FA selector 已依据真实页面录制确认；下一次应使用新的 `unregistered` 账号执行完整
+  `roxy_no_2fa_register.js` 自动验收，不要复用本次已注册账号。
+
+## 2026-08-03 无 2FA 真实页面录制与账户结算
+
+- 实录页面状态：ChatGPT 邮箱入口 → `auth.openai.com/email-verification` → `/about-you` → ChatGPT。
+  OTP 是 `input[name="code"]`（6 位）；资料页是 `input[name="name"]` + `input[name="age"]`，提交按钮为
+  `Finish creating account`。
+- 实录接口：`email-otp/resend` 成功后，`email-otp/validate { code }` 返回
+  `page.type=about_you`；`create_account { name, birthdate }` 返回 `page.type=external_url`，随后 callback。
+  本次没有 password、`user/register` 或 TOTP。
+- 已安全读取 session AT，先写文件再将当前补号账号改为 `registered`；文件已验证非空无换行，未暴露 AT。
+- 修复：`fillProfileFieldsIfPresent()` 在年龄页会从 `--birthday` 换算年龄，不再随机忽略配置生日；
+  network recorder 新 run 覆盖旧输出，DOM recorder 不记录 endpoint，三个 recorder 都有 10 秒 CDP timeout。
+- 后续：不要复用本次已注册账号做 runner 自动验收。下一次需使用新的 `unregistered` 账号验证完整
+  `roxy_no_2fa_register.js` 自动流程，并继续确认 AT 先落盘再回写状态。
+
 ## 2026-07-31 Plus 状态查询读取最近 5 封邮件
 
 - 根因：`email_code_api` 默认只返回最近一封邮件；账号 `209`（`10-buff-tactile@icloud.com`）的最近邮件是“不再续订”，而初始 Plus 订阅确认邮件位于第 2 封，因此原逻辑没有命中。
@@ -736,3 +767,41 @@
 - 下一步：按命令 timeout 和最大重试次数调整 bridge 外层等待预算（或将重试移到 Python），补“第 1 次导航超时、bridge 进入第 2 次时外层不提前超时”的回归测试，再重试账号 `211`。审计发现同一模式还覆盖步骤 4 authorize、各 `follow_auth_continue()`、进入密码页、OAuth callback 及跨 origin warm-up；需统一修复，不能只针对 `email-otp/send`。
 - 2026-07-28 00:58 补充：账号 `210` 的 run `692` 没有导航超时，但步骤 7 `user/register` 返回 HTTP 400 `invalid_auth_step`。步骤 5 JSON 是 `email_otp_verification`，当前代码仅通过访问 `/create-account/password` 的 URL 认定已进入密码阶段，服务端响应证明该认定不成立。修复必须以 Auth JSON 和接口响应决定密码阶段，不得以 URL/DOM 推断。
 - 2026-07-28 实施：`CHG-100` 状态为 `implemented`。bridge 后台页导航改为等待 HTTP `commit` 并返回脱敏重定向链；Python 等待预算覆盖 bridge 重试；OAuth callback 校验 HTTP 响应后仍以 session `accessToken` 终态确认。另修正密码阶段顺序：步骤 5 的 `email-otp/send` continuation 只能在 `user/register` 成功后跟随，避免提前进入 OTP 状态导致 `invalid_auth_step`。自动化测试 Node 12/12、Python 33/33 通过；账号 `210` 仍待实机重跑验收。
+
+## 2026-07-31 精简补号账号操作菜单
+
+- 来源工作日志：`docs/work/2026-07-31-simplify-replacement-action-menu.md`
+- 当前进展：`web/app.js` 的补号账号操作菜单已移除公开验证码、获取验证码、获取 JSON、2FA 登录和公开验证码 URL 复制入口；相关前端函数及后端接口仍保留。
+- 验证：`node --test test/replacementActionMenu.test.js` 通过，2/2。
+- Change：`docs/changes/CHG-102-simplify-replacement-action-menu.md`，状态 `implemented`。
+
+## 2026-08-03 无 2FA Roxy OTP-first 协议注册
+
+- 来源工作日志：`docs/work/2026-08-03-protocol-no-2fa-registration.md`
+- Change：`docs/changes/CHG-103-protocol-no-2fa-registration.md`，状态 `implemented`。
+- 当前进展：已实现 `src/auto/protocol_no_2fa_registration.py` 的 OTP-first Auth 状态机；流程在
+  ChatGPT session 返回 AT 并写入注册产物后，将对应补号账号回写为 `registered`。不提交 password、
+  `user/register` 或 TOTP。状态回写失败不删除 AT，也不重放 Auth 请求。实机成功记录已补回状态，
+  敏感运行值未记录。
+- 网络恢复：CDP bridge 会在同 origin 页面落入 `chrome-error://` 时新建页面；`providers` 和
+  `csrf` 的临时失败有有限重试，OTP 和建号写请求不盲目重放。
+- Roxy 准备：默认准备器需要数据库中的 profile 代理绑定和模板。当前未配置时，只能显式以
+  `ROXY_NO_2FA_PREPARER` 指向已验证的手动刷新脚本；该脚本输出中的敏感值不得进入日志。
+- 操作入口：补号管理已新增“无2FA注册”，后端为
+  `POST /replacement-accounts/:id/register-no2fa`；它与旧协议注册共用串行队列，仅允许
+  `unregistered` 账号，子进程完成后复查 `registered` 状态。
+- 验证：Python 专项回归 52/52、Node 专项回归 10/10 通过；另新增 CSRF token 日志脱敏、AT 落盘后状态回写和无2FA操作入口测试。
+- 待诊断：手动 2FA 账号可提链而无2FA协议账号无法读取最终结算金额，见
+  `docs/issues/issue-021-protocol-no2fa-trial-link-check.md`。在取得同一提链操作的实际网络请求前，
+  不得猜测补 Auth 请求或把 2FA 设为根因。
+
+## 2026-08-03 无 2FA Roxy 浏览器注册
+
+- 新增 `src/auto/roxy_no_2fa_register.js`，可从真实 Roxy 页面完成邮箱、OTP、资料页和
+  ChatGPT session，无 password、`user/register` 或 TOTP 分支。
+- Roxy 默认复用 `prepare_roxy_no_2fa.cjs`；设定 `ROXY_NO_2FA_PREPARER` 时执行手动刷新脚本，
+  只从输出中保留 `dirId` 后连接新 profile。AT、OTP、Cookie、CDP endpoint 和代理凭据不进入 CLI 输出。
+- 成功条件是 session 的非空 AT，先落盘、再回写 `registered`；状态回写失败不会删除 AT。
+- 当前补号管理“无2FA注册”接口仍使用 Python 协议 runner，浏览器 runner 尚未用新邮箱做实机验收，
+  不要替换队列命令或复用已注册邮箱。
+- 回归入口：`node --test test/roxyNo2FaRegister.test.js test/prepareRoxyNo2FA.test.js`。

@@ -4,6 +4,7 @@
 
 | 日期 | 主要工作 | 状态 | 入口 |
 |---|---|---|---|
+| 2026-08-03 | Roxy 无 2FA 浏览器注册与 CDP 附着韧性 | done | `2026-08-03-roxy-no2fa-browser-registration.md` |
 | 2026-07-31 | 补号邮箱 API 查询数量限制 | done | `2026-07-31-replacement-email-api-query-limit.md` |
 | 2026-07-30 | 恢复协议注册响应驱动状态机 | done | `2026-07-30-protocol-registration-state-recovery.md` |
 | 2026-07-25 | PRD-003 基线合并（CHG-091 至 CHG-099） | done | `../prd/PRD-003-account-management-system-2026-06-25-baseline.md` |
@@ -118,3 +119,5 @@
 | 2026-07-21 | CPA 代理切换脚本与使用说明 | done | `2026-07-21-cpa-host-direct-egress.md`、`../project/cpa-proxy-operation.md` |
 | 2026-07-28 | 协议注册 CDP 导航超时诊断 | done | `2026-07-28-protocol-registration-cdp-timeout-diagnosis.md` |
 | 2026-07-28 | 协议注册响应驱动导航修复 | in progress | `2026-07-28-protocol-registration-cdp-timeout-diagnosis.md` |
+| 2026-07-31 | 精简补号账号操作菜单 | done | `2026-07-31-simplify-replacement-action-menu.md` |
+| 2026-08-03 | 无 2FA Roxy OTP-first 协议注册 | done | `2026-08-03-protocol-no-2fa-registration.md` |

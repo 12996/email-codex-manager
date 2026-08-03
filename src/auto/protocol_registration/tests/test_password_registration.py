@@ -184,6 +184,30 @@ class PasswordRegistrationTests(unittest.TestCase):
         with self.assertRaises(EmailOtpRejectedError):
             validate_email_otp(WrongCodeSession(), "123456", "sentinel-token")
 
+    def test_validate_email_otp_forwards_current_sentinel_so_token(self):
+        session = _Session()
+
+        validate_email_otp(
+            session,
+            "123456",
+            "sentinel-token",
+            "sentinel-so-token",
+        )
+
+        method, url, headers, body = session.calls[-1]
+        self.assertEqual(method, "post")
+        self.assertEqual(url, "https://auth.openai.com/api/accounts/email-otp/validate")
+        self.assertEqual(headers["openai-sentinel-token"], "sentinel-token")
+        self.assertEqual(headers["openai-sentinel-so-token"], "sentinel-so-token")
+        self.assertIn("x-access-flow-invocation-id", headers)
+        self.assertEqual(json.loads(body), {"code": "123456"})
+
+    def test_validate_email_otp_does_not_log_the_otp_value(self):
+        with self.assertLogs("core.openai_auth", level="INFO") as captured:
+            validate_email_otp(_Session(), "123456", "sentinel-token")
+
+        self.assertNotIn("123456", "\n".join(captured.output))
+
 
 
 if __name__ == "__main__":

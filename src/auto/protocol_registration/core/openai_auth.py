@@ -408,7 +408,12 @@ def send_email_otp(session: BrowserSession) -> None:
 #     logger.info(f"[步骤8] 验证码发送请求完成, 状态码: {resp.status_code}")
 
 
-def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str | None = None) -> dict:
+def validate_email_otp(
+    session: BrowserSession,
+    code: str,
+    sentinel_header: str | None = None,
+    so_header: str | None = None,
+) -> dict:
     """
     步骤10: 提交邮箱验证码验证。
     POST https://auth.openai.com/api/accounts/email-otp/validate
@@ -417,6 +422,7 @@ def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str 
         session: 浏览器会话
         code: 6位数字验证码
         sentinel_header: openai-sentinel-token 头的值（authorize_continue flow）
+        so_header: 当前 Roxy Sentinel SDK 返回的可选 SO token
 
     Returns:
         验证响应 JSON，例如:
@@ -431,11 +437,13 @@ def validate_email_otp(session: BrowserSession, code: str, sentinel_header: str 
     headers = session.get_auth_headers(referer="https://auth.openai.com/email-verification")
     if sentinel_header:
         headers["openai-sentinel-token"] = sentinel_header
+    if so_header:
+        headers["openai-sentinel-so-token"] = so_header
     headers["x-access-flow-invocation-id"] = str(uuid.uuid4())
 
     body = json.dumps({"code": code})
 
-    logger.info(f"[步骤10] 提交邮箱验证码: {code}")
+    logger.info("[步骤10] 提交邮箱验证码")
     resp = session.post(url, headers=headers, data=body)
 
     if resp.status_code != 200:

@@ -1,4 +1,9 @@
 const DEFAULT_API_HOST = '127.0.0.1';
+const DEFAULT_CDP_CONNECTION_INFO_ATTEMPTS = 12;
+const DEFAULT_CDP_CONNECTION_INFO_INTERVAL_MS = 500;
+const DEFAULT_CDP_CONNECT_ATTEMPTS = 3;
+const DEFAULT_CDP_CONNECT_RETRY_DELAY_MS = 750;
+const DEFAULT_CDP_CONNECT_TIMEOUT_MS = 10000;
 
 function trimTrailingSlash(value) {
     return String(value || '').replace(/\/+$/, '');
@@ -40,6 +45,26 @@ function assertRequired(value, name) {
     if (value === undefined || value === null || value === '') {
         throw new Error(`缺少必要参数: ${name}`);
     }
+}
+
+function positiveInteger(value, fallback) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function nonNegativeInteger(value, fallback) {
+    const parsed = Number(value);
+    return Number.isInteger(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
+function createCdpConnectionError(code, attempts) {
+    const error = new Error(`Roxy CDP connection failed after ${attempts} attempt(s)`);
+    error.code = code;
+    return error;
 }
 
 function extractConnectionInfo(response, dirId) {
@@ -382,24 +407,93 @@ class RoxyBrowserClient {
         });
         const info = extractConnectionInfo(response, this.dirId);
         if (!info || !info.ws) {
-            throw new Error(`/browser/connection_info 未返回窗口 ${this.dirId} 的 CDP ws 地址`);
+            const error = new Error(`/browser/connection_info 未返回窗口 ${this.dirId} 的 CDP ws 地址`);
+            error.code = 'ROXY_CDP_CONNECTION_INFO_UNAVAILABLE';
+            throw error;
         }
         return info;
     }
 
-    async connectPlaywright(cdpEndpoint) {
+    async waitForConnectionInfo(options = {}) {
+        const attempts = positiveInteger(options.attempts, DEFAULT_CDP_CONNECTION_INFO_ATTEMPTS);
+        const intervalMs = nonNegativeInteger(options.intervalMs, DEFAULT_CDP_CONNECTION_INFO_INTERVAL_MS);
+        for (let attempt = 1; attempt <= attempts; attempt += 1) {
+            try {
+                return await this.getConnectionInfo();
+            } catch (error) {
+                if (error?.code !== 'ROXY_CDP_CONNECTION_INFO_UNAVAILABLE') {
+                    throw error;
+                }
+                if (attempt === attempts) {
+                    throw createCdpConnectionError('ROXY_CDP_CONNECTION_INFO_TIMEOUT', attempt);
+                }
+                await wait(intervalMs);
+            }
+        }
+        throw createCdpConnectionError('ROXY_CDP_CONNECTION_INFO_TIMEOUT', attempts);
+    }
+
+    async connectPlaywright(cdpEndpoint, options = {}) {
         assertRequired(cdpEndpoint, 'cdpEndpoint');
         const playwright = this.playwright || require('playwright-core');
-        const browser = await playwright.chromium.connectOverCDP(cdpEndpoint);
-        let context = browser.contexts()[0];
-        if (!context) {
-            context = await browser.newContext();
+        const timeoutMs = positiveInteger(options.timeoutMs, DEFAULT_CDP_CONNECT_TIMEOUT_MS);
+        const browser = await playwright.chromium.connectOverCDP(cdpEndpoint, { timeout: timeoutMs });
+        try {
+            let context = browser.contexts()[0];
+            if (!context) {
+                context = await browser.newContext();
+            }
+            let page = context.pages()[0];
+            if (!page) {
+                page = await context.newPage();
+            }
+            return { browser, context, page };
+        } catch (error) {
+            await browser.close().catch(() => {});
+            throw error;
         }
-        let page = context.pages()[0];
-        if (!page) {
-            page = await context.newPage();
+    }
+
+    async connectReadyPlaywright(options = {}) {
+        const connectionInfoAttempts = positiveInteger(
+            options.connectionInfoAttempts,
+            DEFAULT_CDP_CONNECTION_INFO_ATTEMPTS
+        );
+        const connectionInfoIntervalMs = nonNegativeInteger(
+            options.connectionInfoIntervalMs,
+            DEFAULT_CDP_CONNECTION_INFO_INTERVAL_MS
+        );
+        const connectAttempts = positiveInteger(options.connectAttempts, DEFAULT_CDP_CONNECT_ATTEMPTS);
+        const retryDelayMs = nonNegativeInteger(options.retryDelayMs, DEFAULT_CDP_CONNECT_RETRY_DELAY_MS);
+        const timeoutMs = positiveInteger(options.timeoutMs, DEFAULT_CDP_CONNECT_TIMEOUT_MS);
+        let fallbackCdpEndpoint = String(options.fallbackCdpEndpoint || '').trim();
+
+        for (let attempt = 1; attempt <= connectAttempts; attempt += 1) {
+            let connection;
+            try {
+                connection = await this.waitForConnectionInfo({
+                    attempts: connectionInfoAttempts,
+                    intervalMs: connectionInfoIntervalMs
+                });
+            } catch (error) {
+                if (error?.code !== 'ROXY_CDP_CONNECTION_INFO_TIMEOUT' || !fallbackCdpEndpoint) {
+                    throw error;
+                }
+                connection = { ws: fallbackCdpEndpoint };
+                fallbackCdpEndpoint = '';
+            }
+
+            try {
+                const connected = await this.connectPlaywright(connection.ws, { timeoutMs });
+                return { ...connected, cdpEndpoint: connection.ws };
+            } catch (error) {
+                if (attempt === connectAttempts) {
+                    throw createCdpConnectionError('ROXY_CDP_ATTACH_FAILED', attempt);
+                }
+                await wait(retryDelayMs);
+            }
         }
-        return { browser, context, page };
+        throw createCdpConnectionError('ROXY_CDP_ATTACH_FAILED', connectAttempts);
     }
 
     async launchAndConnect(options = {}) {
@@ -435,21 +529,11 @@ class RoxyBrowserClient {
         }
 
         const openResponse = await this.openBrowser(args);
-        let cdpEndpoint = '';
-        try {
-            const info = await this.getConnectionInfo();
-            cdpEndpoint = info.ws;
-        } catch (error) {
-            cdpEndpoint = extractCdpEndpoint(openResponse, this.dirId);
-            if (!cdpEndpoint) {
-                throw error;
-            }
-        }
-
-        const connected = await this.connectPlaywright(cdpEndpoint);
+        const connected = await this.connectReadyPlaywright({
+            fallbackCdpEndpoint: extractCdpEndpoint(openResponse, this.dirId)
+        });
         return {
             ...connected,
-            cdpEndpoint,
             dirId: this.dirId,
             workspaceId: this.workspaceId,
             close: async ({ closeRoxy = false } = {}) => {
