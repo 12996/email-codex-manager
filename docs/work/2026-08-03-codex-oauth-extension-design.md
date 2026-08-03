@@ -14,7 +14,13 @@
 
 - 设计说明：`docs/superpowers/specs/2026-08-03-codex-oauth-extension-design.md`
 - Change：`docs/changes/CHG-108-codex-oauth-extension.md`（accepted）
+- 扩展实现：`extensions/codex-oauth-login/`
+- 用户安装说明：`extensions/codex-oauth-login/README.md`
 
 ## 下一步
 
-- 用户审核设计文件后，先编写详细实现计划，再进行浏览器回调可观测性和 token exchange 的最小验证。
+- 已完成 Node 自动化测试和静态检查；仍需在用户的 Chrome/Edge 中手动加载未打包扩展、
+  启用无痕权限并完成真实 OAuth 验收。
+- 本次浏览器控制通道拒绝访问 `chrome://extensions`，因此尚未得到 1455 callback 捕获或
+  token exchange 的真实运行证据；CHG-108 继续保持 `accepted`，未将连接失败或页面跳转
+  误判为登录成功。
