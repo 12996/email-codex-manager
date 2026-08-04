@@ -37,3 +37,13 @@ Agent Identity 合约的 JWT AT，并显示脱敏的登录状态、邮箱和套�
 
 格式无效、JWKS 获取失败、签名不匹配、issuer/audience 不匹配、过期或缺少必要 claim 时，扩展不应
 显示成功，也不得显示账户信息。
+
+## 安全失败提示
+
+失败提示不会包含 JWT、claim、HTTP 响应或浏览器错误详情。重新加载扩展后，页面会区分以下类别：
+
+| 页面提示 | 含义 |
+| --- | --- |
+| `无法获取 JWKS，请检查 chatgpt.com 网络连接后重试` | 扩展无法获取公开签名密钥；检查网络、代理或防火墙。 |
+| `JWT 签名与当前 Codex Agent Identity 不匹配` | JWT 不是由当前 Agent Identity 签名密钥签发。 |
+| `JWT 不符合 Codex Agent Identity 要求，可能不是此类凭证或已过期` | JWT 不是此扩展要求的 Codex Agent Identity JWT，或其必要声明/有效期不满足要求。 |

@@ -21,6 +21,12 @@ const VALIDATING_STATE = Object.freeze({
   plan: null,
 });
 
+function createControllerError(code) {
+  const error = new Error(code);
+  error.code = code;
+  return error;
+}
+
 function createPublicState(phase, message, { email = null, plan = null } = {}) {
   return { phase, message, email, plan };
 }
@@ -29,6 +35,32 @@ function createDefaultAttemptId(cryptoApi) {
   const bytes = new Uint8Array(16);
   cryptoApi.getRandomValues(bytes);
   return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function fetchJwks(fetchImpl) {
+  try {
+    const response = await fetchImpl(AGENT_IDENTITY_JWKS_URL, { credentials: 'omit' });
+    if (!response?.ok) {
+      throw createControllerError('jwks_request_failed');
+    }
+    return await response.json();
+  } catch {
+    throw createControllerError('jwks_request_failed');
+  }
+}
+
+function getFailureMessage(error) {
+  switch (error?.code) {
+    case 'jwks_request_failed':
+      return '无法获取 JWKS，请检查 chatgpt.com 网络连接后重试';
+    case 'jwt_claims_invalid':
+      return 'JWT 不符合 Codex Agent Identity 要求，可能不是此类凭证或已过期';
+    case 'jwt_signing_key_missing':
+    case 'jwt_signature_invalid':
+      return 'JWT 签名与当前 Codex Agent Identity 不匹配';
+    default:
+      return 'AT 校验失败，请检查凭证或稍后重试';
+  }
 }
 
 export function createJwtAuthController({
@@ -88,11 +120,7 @@ export function createJwtAuthController({
     await publish(VALIDATING_STATE);
 
     try {
-      const response = await fetchImpl(AGENT_IDENTITY_JWKS_URL, { credentials: 'omit' });
-      if (!response?.ok) {
-        throw new Error('jwks_request_failed');
-      }
-      const jwks = await response.json();
+      const jwks = await fetchJwks(fetchImpl);
       const display = await verifyJwt({
         rawJwt,
         jwks,
@@ -104,11 +132,11 @@ export function createJwtAuthController({
       }
       await clearAttempt();
       return publish(createPublicState('authenticated', '已登录（JWT AT 已验证）', display));
-    } catch {
+    } catch (error) {
       if (!await isCurrentAttempt(attemptId)) {
         return getPublicState();
       }
-      return fail('AT 校验失败，请检查凭证或稍后重试');
+      return fail(getFailureMessage(error));
     }
   }
 

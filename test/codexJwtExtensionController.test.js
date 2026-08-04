@@ -122,20 +122,60 @@ test('local JWT format errors fail without requesting JWKS', async () => {
   assert.equal(harness.verifyCalls.length, 0);
 });
 
-test('JWKS and verification failures publish only a generic failure', async () => {
+test('JWKS retrieval failures publish a safe network diagnostic', async () => {
   const failedResponse = createHarness({ response: { ok: false } });
   const responseState = await failedResponse.controller.startJwtLogin(syntheticJwt());
   assert.deepEqual(responseState, {
     phase: 'failed',
-    message: 'AT 校验失败，请检查凭证或稍后重试',
+    message: '无法获取 JWKS，请检查 chatgpt.com 网络连接后重试',
     email: null,
     plan: null,
   });
 
-  const failedVerification = createHarness({ verifyError: new Error('sensitive verification detail') });
+  const failedRequest = createHarness({
+    fetchImpl: async () => {
+      throw new Error('network detail that must not reach the UI');
+    },
+  });
+  const requestState = await failedRequest.controller.startJwtLogin(syntheticJwt());
+  assert.deepEqual(requestState, {
+    phase: 'failed',
+    message: '无法获取 JWKS，请检查 chatgpt.com 网络连接后重试',
+    email: null,
+    plan: null,
+  });
+});
+
+test('claim validation failures identify an unsupported or expired JWT without leaking details', async () => {
+  const verificationError = Object.assign(new Error('sensitive verification detail'), {
+    code: 'jwt_claims_invalid',
+  });
+  const failedVerification = createHarness({ verifyError: verificationError });
   const verificationState = await failedVerification.controller.startJwtLogin(syntheticJwt());
-  assert.equal(verificationState.phase, 'failed');
+  assert.deepEqual(verificationState, {
+    phase: 'failed',
+    message: 'JWT 不符合 Codex Agent Identity 要求，可能不是此类凭证或已过期',
+    email: null,
+    plan: null,
+  });
   assert.doesNotMatch(JSON.stringify(failedVerification.chromeApi.messages), /sensitive verification detail/);
+});
+
+test('signature failures identify a JWT that was not issued for this Codex flow', async () => {
+  for (const code of ['jwt_signing_key_missing', 'jwt_signature_invalid']) {
+    const verificationError = Object.assign(new Error('sensitive verification detail'), { code });
+    const harness = createHarness({ verifyError: verificationError });
+
+    const state = await harness.controller.startJwtLogin(syntheticJwt());
+
+    assert.deepEqual(state, {
+      phase: 'failed',
+      message: 'JWT 签名与当前 Codex Agent Identity 不匹配',
+      email: null,
+      plan: null,
+    });
+    assert.doesNotMatch(JSON.stringify(harness.chromeApi.messages), /sensitive verification detail/);
+  }
 });
 
 test('controller state persists when no visible extension page is listening', async () => {
