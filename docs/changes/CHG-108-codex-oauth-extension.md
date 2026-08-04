@@ -1,6 +1,6 @@
 # CHG-108 纯 Chrome 扩展 Codex OAuth 登录与 RT 下载
 
-状态：accepted
+状态：superseded
 创建日期：2026-08-03
 关联 PRD：PRD-003
 
@@ -40,4 +40,4 @@
 
 - 合并目标 PRD：
 - 合并日期：
-- 备注：
+- 备注：2026-08-03 被 CHG-109 的 JWT AT 直连校验方案取代；OAuth、1455 callback 和 RT 下载不再是该扩展目标。

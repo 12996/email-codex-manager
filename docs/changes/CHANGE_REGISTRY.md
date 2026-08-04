@@ -112,4 +112,5 @@ PRD 合并提醒规则：未合并的 `implemented` change 达到 5 个时，AI 
 | CHG-102 | 精简补号账号操作菜单 | implemented | 2026-07-31 | PRD-003 | `web/app.js`, `test/replacementActionMenu.test.js` | `CHG-102-simplify-replacement-action-menu.md` |
 | CHG-103 | 无 2FA 的 Roxy OTP-first 协议注册 | implemented | 2026-08-02 | PRD-003 | `src/auto/protocol_no_2fa_registration.py`, `src/auto/protocol_registration/`, `test/`, `docs/work/` | `CHG-103-protocol-no-2fa-registration.md` |
 | CHG-104 | Roxy 无 2FA 浏览器注册脚本 | implemented | 2026-08-03 | PRD-003 | `src/auto/roxy_no_2fa_register.js`, `src/auto/roxy-browser-client.cjs`, `src/auto/roxy_register_openai.js`, `src/auto/prepare_roxy_no_2fa.cjs`, `test/`, `docs/` | `CHG-104-roxy-no2fa-browser-registration.md` |
-| CHG-108 | 纯 Chrome 扩展 Codex OAuth 登录与 RT 下载 | accepted | 2026-08-03 | PRD-003 | `extensions/codex-oauth-login/`, `test/`, `docs/` | `CHG-108-codex-oauth-extension.md` |
+| CHG-108 | 纯 Chrome 扩展 Codex OAuth 登录与 RT 下载 | superseded | 2026-08-03 | PRD-003 | `extensions/codex-oauth-login/`, `test/`, `docs/` | `CHG-108-codex-oauth-extension.md` |
+| CHG-109 | 纯 Chrome 扩展 JWT AT 直连校验 | accepted | 2026-08-03 | PRD-003 | `extensions/codex-oauth-login/`, `test/`, `docs/` | `CHG-109-codex-jwt-at-extension.md` |

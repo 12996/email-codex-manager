@@ -1,6 +1,6 @@
 # CHG-109 纯 Chrome 扩展 JWT AT 直连校验
 
-状态：draft
+状态：accepted
 创建日期：2026-08-03
 关联 PRD：PRD-003
 关联 Issue：无
