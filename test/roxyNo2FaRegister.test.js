@@ -10,6 +10,7 @@ const {
   createReplacementAccountGateway,
   openPreparedRoxyBrowser,
   fillUsableInput,
+  generateProfileBirthday,
   waitForOtpOutcome,
   submitNo2FaOtp,
   runCli,
@@ -20,6 +21,7 @@ const {
   readSessionAccessToken,
   waitForNo2FaState,
 } = require('../src/auto/roxy_no_2fa_register.js');
+const { deriveAgeFromBirthday } = require('../src/auto/roxy_register_openai.js');
 
 test('no2fa state guard rejects a password stage instead of continuing with a password flow', () => {
   assert.throws(
@@ -27,6 +29,13 @@ test('no2fa state guard rejects a password stage instead of continuing with a pa
     (error) => error?.code === 'NO2FA_PASSWORD_STAGE',
   );
   assert.equal(assertNo2FaState({ state: 'otp' }, ['otp']), true);
+});
+
+test('no2fa state guard rejects a ChatGPT auth error before AT extraction', () => {
+  assert.throws(
+    () => assertNo2FaState({ state: 'auth-error' }, ['chatgpt-session']),
+    (error) => error?.code === 'NO2FA_AUTH_ERROR',
+  );
 });
 
 test('prepared Roxy output exposes only the prepared profile id', () => {
@@ -139,6 +148,46 @@ test('CLI parser takes only email, name, and birthday for the no2fa browser flow
   );
 });
 
+test('CLI generates both profile name and birthday when no profile arguments are supplied', async () => {
+  const output = [];
+  let receivedProfile = null;
+  const proc = {
+    argv: ['node', 'roxy_no_2fa_register.js', '--email', 'new.user@example.test'],
+    env: {},
+    stdout: { write: (line) => output.push(line) },
+    stderr: { write: (line) => output.push(`stderr:${line}`) },
+    exitCode: 0,
+  };
+
+  const exitCode = await runCli(proc, {
+    loadEnv: () => {},
+    generateProfileName: () => 'Random Name',
+    generateProfileBirthday: () => '1994-06-15',
+    runNo2FaRegistrationFlow: async (profile) => {
+      receivedProfile = profile;
+      return {
+        email: profile.email,
+        registrationTokenFile: 'F:/tokens/new.user@example.test.txt',
+      };
+    },
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(
+    { name: receivedProfile.name, birthday: receivedProfile.birthday },
+    { name: 'Random Name', birthday: '1994-06-15' },
+  );
+});
+
+test('generated no2fa profile birthday maps to a valid random adult age', () => {
+  const now = new Date('2026-08-03T12:00:00.000Z');
+  const birthday = generateProfileBirthday({ random: () => 0.5, now });
+  const age = Number(deriveAgeFromBirthday(birthday, now));
+
+  assert.match(birthday, /^\d{4}-\d{2}-\d{2}$/);
+  assert.ok(age >= 20 && age <= 44);
+});
+
 test('no2fa state wait does not treat email-verification URL alone as an OTP success', async () => {
   let classifications = 0;
   const state = await waitForNo2FaState({}, ['otp'], {
@@ -161,43 +210,118 @@ test('no2fa state wait does not treat email-verification URL alone as an OTP suc
   assert.equal(classifications, 2);
 });
 
-test('session access token reader retries an empty session instead of treating ChatGPT URL as success', async () => {
+test('session access token reader leaves the same-context session tab open after reading the token', async () => {
+  const navigations = [];
+  let sessionTabClosed = 0;
+  let sessionTabOpened = 0;
+  let mainPageEvaluateCalls = 0;
   let requests = 0;
-  const page = {
-    url() {
-      return 'https://chatgpt.com/';
-    },
-    async evaluate() {
+  const sessionPage = {
+    async goto(url, options) {
+      navigations.push({ url, options });
       requests += 1;
-      return requests === 1
-        ? { status: 200, body: '{}' }
-        : { status: 200, body: '{"accessToken":"access-token"}' };
+      const body = requests === 1 ? '{}' : '{"accessToken":"access-token"}';
+      return {
+        status() { return 200; },
+        async text() { return body; },
+      };
     },
     async waitForTimeout() {},
+    async close() { sessionTabClosed += 1; },
+  };
+  const context = {
+    async newPage() {
+      sessionTabOpened += 1;
+      return sessionPage;
+    },
+  };
+  const page = {
+    context() { return context; },
+    async goto() {
+      throw new Error('the registration main page must not navigate to session');
+    },
+    async evaluate() {
+      mainPageEvaluateCalls += 1;
+      throw new Error('the registration main page must not fetch session');
+    },
   };
 
   const accessToken = await readSessionAccessToken(page, { attempts: 2, intervalMs: 0 });
   assert.equal(accessToken, 'access-token');
   assert.equal(requests, 2);
+  assert.equal(sessionTabOpened, 1);
+  assert.equal(sessionTabClosed, 0);
+  assert.equal(mainPageEvaluateCalls, 0);
+  assert.deepEqual(navigations.map(({ url }) => url), [
+    'https://chatgpt.com/api/auth/session',
+    'https://chatgpt.com/api/auth/session',
+  ]);
+  assert.equal(navigations[0].options.waitUntil, 'domcontentloaded');
 });
 
-test('session access token reader retries a transient browser fetch failure', async () => {
+test('session access token reader retries a transient session navigation failure', async () => {
   let requests = 0;
-  const page = {
-    url() {
-      return 'https://chatgpt.com/';
-    },
-    async evaluate() {
+  let sessionTabClosed = 0;
+  const sessionPage = {
+    async goto(url) {
+      assert.equal(url, 'https://chatgpt.com/api/auth/session');
       requests += 1;
       if (requests === 1) throw new Error('net::ERR_CONNECTION_RESET');
-      return { status: 200, body: '{"accessToken":"access-token"}' };
+      return {
+        status() { return 200; },
+        async text() { return '{"accessToken":"access-token"}'; },
+      };
     },
     async waitForTimeout() {},
+    async close() { sessionTabClosed += 1; },
+  };
+  const context = {
+    async newPage() { return sessionPage; },
+  };
+  const page = {
+    context() { return context; },
+    async goto() {
+      throw new Error('the registration main page must not navigate to session');
+    },
   };
 
   const accessToken = await readSessionAccessToken(page, { attempts: 2, intervalMs: 0 });
   assert.equal(accessToken, 'access-token');
   assert.equal(requests, 2);
+  assert.equal(sessionTabClosed, 0);
+});
+
+test('session access token reader refuses to navigate the main page when a same-context tab is unavailable', async () => {
+  let mainPageNavigated = false;
+  const page = {
+    context() { return null; },
+    async goto() { mainPageNavigated = true; },
+  };
+
+  await assert.rejects(
+    readSessionAccessToken(page, { attempts: 1, intervalMs: 0 }),
+    (error) => error?.code === 'NO2FA_SESSION_TAB_UNAVAILABLE',
+  );
+  assert.equal(mainPageNavigated, false);
+});
+
+test('session access token reader closes a newly opened unusable session tab', async () => {
+  let sessionTabClosed = 0;
+  const page = {
+    context() {
+      return {
+        async newPage() {
+          return { async close() { sessionTabClosed += 1; } };
+        },
+      };
+    },
+  };
+
+  await assert.rejects(
+    readSessionAccessToken(page, { attempts: 1, intervalMs: 0 }),
+    (error) => error?.code === 'NO2FA_SESSION_TAB_UNAVAILABLE',
+  );
+  assert.equal(sessionTabClosed, 1);
 });
 
 test('Roxy browser connection uses the ready connection entrypoint without returning its CDP endpoint', async () => {
@@ -335,9 +459,27 @@ test('replacement account gateway patches registered only for the selected unreg
 
 test('browser flow uses OTP and profile stages before requesting the session token', async () => {
   const calls = [];
+  const profileResponse = {
+    url() { return 'https://auth.openai.com/api/accounts/create_account'; },
+    status() { return 200; },
+    request() {
+      return {
+        method() { return 'POST'; },
+        postData() { return 'name=Jane%20Doe&birthdate=2000-01-01'; },
+      };
+    },
+    async text() {
+      return JSON.stringify({ page: { type: 'external_url' } });
+    },
+  };
   const page = {
     async goto(url) {
       calls.push(`goto:${url}`);
+    },
+    async waitForResponse(predicate) {
+      calls.push('wait-create-account');
+      assert.equal(predicate(profileResponse), true);
+      return profileResponse;
     },
   };
   const states = [
@@ -391,10 +533,138 @@ test('browser flow uses OTP and profile stages before requesting the session tok
     'otp:new.user@example.test',
     'wait:profile,chatgpt-session:profile',
     'profile:Jane Doe:2000-01-01',
+    'wait-create-account',
     'submit:profile',
     'wait:chatgpt-session:chatgpt-session',
     'session',
   ]);
+});
+
+test('browser flow retries profile field discovery once after a delayed about-you render', async () => {
+  let profileFillAttempts = 0;
+  const response = {
+    url() { return 'https://auth.openai.com/api/accounts/create_account'; },
+    status() { return 200; },
+    request() {
+      return {
+        method() { return 'POST'; },
+        postData() { return 'name=Jane%20Doe&birthdate=1994-06-15'; },
+      };
+    },
+    async text() { return JSON.stringify({ page: { type: 'external_url' } }); },
+  };
+  const page = {
+    async goto() {},
+    async waitForResponse(predicate) {
+      assert.equal(predicate(response), true);
+      return response;
+    },
+  };
+  const states = [
+    { state: 'otp' },
+    { state: 'profile' },
+    { state: 'profile' },
+    { state: 'chatgpt-session' },
+  ];
+
+  const accessToken = await completeBrowserRegistration({
+    page,
+    email: 'new.user@example.test',
+    name: 'Jane Doe',
+    birthday: '1994-06-15',
+    env: {},
+    deps: {
+      async prepareChatGptEmailEntry() {},
+      async fillEmailInput() {},
+      async submitPrimaryAction() {},
+      async waitForNo2FaState() { return states.shift(); },
+      async submitNo2FaOtp() {},
+      async fillProfileFields() {
+        profileFillAttempts += 1;
+        return profileFillAttempts === 2;
+      },
+      async readSessionAccessToken() { return 'access-token'; },
+    },
+  });
+
+  assert.equal(accessToken, 'access-token');
+  assert.equal(profileFillAttempts, 2);
+});
+
+test('browser flow assigns a stable stage code to an untyped profile-fill failure', async () => {
+  const page = { async goto() {} };
+  const states = [{ state: 'otp' }, { state: 'profile' }];
+
+  await assert.rejects(
+    completeBrowserRegistration({
+      page,
+      email: 'new.user@example.test',
+      name: 'Jane Doe',
+      birthday: '1994-06-15',
+      env: {},
+      logger: { error() {} },
+      deps: {
+        async prepareChatGptEmailEntry() {},
+        async fillEmailInput() {},
+        async submitPrimaryAction() {},
+        async waitForNo2FaState() { return states.shift(); },
+        async submitNo2FaOtp() {},
+        async fillProfileFields() { throw new Error('detached profile input'); },
+        async readSessionAccessToken() { return 'access-token'; },
+      },
+    }),
+    (error) => error?.code === 'NO2FA_PROFILE_FILL_FAILED' && error?.no2faStage === 'profile-fill',
+  );
+});
+
+test('browser flow rejects an about-you submission without a birthdate payload', async () => {
+  const response = {
+    url() { return 'https://auth.openai.com/api/accounts/create_account'; },
+    status() { return 200; },
+    request() {
+      return {
+        method() { return 'POST'; },
+        postData() { return 'name=Jane%20Doe'; },
+      };
+    },
+    async text() {
+      return JSON.stringify({ page: { type: 'external_url' } });
+    },
+  };
+  const page = {
+    async goto() {},
+    async waitForResponse(predicate) {
+      assert.equal(predicate(response), true);
+      return response;
+    },
+  };
+  const states = [
+    { state: 'otp' },
+    { state: 'profile' },
+  ];
+
+  await assert.rejects(
+    completeBrowserRegistration({
+      page,
+      email: 'new.user@example.test',
+      name: 'Jane Doe',
+      birthday: '2000-01-01',
+      env: {},
+      logger: { error() {} },
+      deps: {
+        async prepareChatGptEmailEntry() {},
+        async fillEmailInput() {},
+        async submitPrimaryAction() {},
+        async waitForNo2FaState() {
+          return states.shift();
+        },
+        async submitNo2FaOtp() {},
+        async fillProfileFields() { return true; },
+        async readSessionAccessToken() { return 'access-token'; },
+      },
+    }),
+    (error) => error?.code === 'NO2FA_PROFILE_PAYLOAD_INVALID',
+  );
 });
 
 test('default browser helpers pass the requested profile data and require an operable submit button', async () => {
@@ -531,6 +801,88 @@ test('OTP submission waits for a verified post-submit state and does not invoke 
   ]);
 });
 
+test('OTP retry resends the email before accepting a replacement code', async () => {
+  const calls = [];
+  let value = '';
+  const input = {
+    first() { return this; },
+    async waitFor() {},
+    async isVisible() { return true; },
+    async isEnabled() { return true; },
+    async evaluate() { return true; },
+    async click() { calls.push('input-click'); },
+    async fill(next) { value = next; calls.push(`fill:${next}`); },
+    async inputValue() { return value; },
+  };
+  const resend = {
+    first() { return this; },
+    async isVisible() { return true; },
+    async isEnabled() { return true; },
+    async evaluate() { return true; },
+    async click() { calls.push('resend-click'); },
+  };
+  const page = {
+    locator(selector) {
+      return selector.includes('value="resend"') ? resend : input;
+    },
+    async waitForTimeout() { calls.push('resend-wait'); },
+  };
+  let outcomes = 0;
+
+  await submitNo2FaOtp({
+    page,
+    email: 'new.user@example.test',
+    name: 'Jane Doe',
+    birthday: '2000-01-01',
+    env: {},
+    legacy: {
+      async findVisibleOtpSelector() {
+        calls.push('find-otp');
+        return 'input[autocomplete="one-time-code"]';
+      },
+      async fetchRegistrationEmailVerificationCode(_, __, options, excludedCode) {
+        calls.push(`fetch:${excludedCode}`);
+        if (excludedCode) {
+          await options.onNoNewCodeFor30Seconds();
+          return '222222';
+        }
+        return '111111';
+      },
+      async fillProfileFieldsIfPresent() {
+        calls.push('profile');
+        return false;
+      },
+      async clickContinueButtonReliably() {
+        calls.push('continue');
+      },
+    },
+    waitForOutcome: async () => {
+      outcomes += 1;
+      calls.push('outcome');
+      return outcomes === 1 ? { status: 'incorrect' } : { status: 'success' };
+    },
+  });
+
+  assert.deepEqual(calls, [
+    'find-otp',
+    'fetch:',
+    'input-click',
+    'fill:111111',
+    'profile',
+    'continue',
+    'outcome',
+    'find-otp',
+    'fetch:111111',
+    'resend-click',
+    'resend-wait',
+    'input-click',
+    'fill:222222',
+    'profile',
+    'continue',
+    'outcome',
+  ]);
+});
+
 test('CLI reports only the email and token file, never the access token', async () => {
   const output = [];
   const proc = {
@@ -557,4 +909,33 @@ test('CLI reports only the email and token file, never the access token', async 
   assert.match(output[0], /new\.user@example\.test/);
   assert.match(output[0], /new\.user@example\.test\.txt/);
   assert.doesNotMatch(output[0], /must-not-be-printed/);
+});
+
+test('CLI reports a safe failed stage without printing the raw browser error', async () => {
+  const output = [];
+  const proc = {
+    argv: ['node', 'roxy_no_2fa_register.js', '--email', 'new.user@example.test'],
+    env: {},
+    stdout: { write: (line) => output.push(line) },
+    stderr: { write: (line) => output.push(`stderr:${line}`) },
+    exitCode: 0,
+  };
+
+  const exitCode = await runCli(proc, {
+    loadEnv: () => {},
+    generateProfileName: () => 'Jane Doe',
+    generateProfileBirthday: () => '1994-06-15',
+    runNo2FaRegistrationFlow: async () => {
+      const error = new Error('raw browser error must stay private');
+      error.code = 'NO2FA_PROFILE_FILL_FAILED';
+      error.no2faStage = 'profile-fill';
+      throw error;
+    },
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(proc.exitCode, 1);
+  assert.equal(output.length, 1);
+  assert.match(output[0], /code=NO2FA_PROFILE_FILL_FAILED stage=profile-fill/);
+  assert.doesNotMatch(output[0], /raw browser error/);
 });

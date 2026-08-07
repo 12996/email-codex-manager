@@ -54,6 +54,17 @@ POST /replacement-accounts/:id/register-no2fa
 `src/auto/protocol_no_2fa_registration.py --email <account.email>`，并在子进程返回后复查该账号已由
 脚本回写为 `registered`；不要求或生成 TOTP secret。
 
+补号管理还提供独立的浏览器操作：
+
+```text
+POST /replacement-accounts/:id/register-no2fa-browser
+```
+
+该接口同样仅接受 `unregistered` 账号，并与上述接口共用同一单线程队列。worker 启动
+`src/auto/roxy_no_2fa_register.js --email <account.email>`；该 runner 在可见 Roxy tab 顶层导航到
+`https://chatgpt.com/api/auth/session` 后读取 AT，先落盘、再回写 `registered`。队列和前端显示操作名为
+“自动化无2FA注册”，它不替换已有的 Python 协议“无2FA注册”操作。
+
 服务进程必须具备可用的 Roxy 准备配置：优先使用数据库 profile 代理绑定/模板；若尚未配置，需在
 服务启动环境中显式设置 `ROXY_NO_2FA_PREPARER` 指向已验证的手动刷新脚本。不得在接口请求体、
 前端响应或运行日志中传递 AT、代理凭据、Cookie 或 CDP endpoint。
@@ -135,4 +146,13 @@ node .\src\auto\roxy_no_2fa_register.js --email <unregistered-email>
 它只允许邮箱、OTP、资料页和 session 阶段；遇到密码页、CAPTCHA、已注册邮箱、不可操作控件或未确认的
 下一阶段时停止。`ROXY_NO_2FA_PREPARER` 可指定手动刷新脚本，runner 只从其 stdout 读取新 profile 的
 `dirId`，不会转发准备器原始输出。AT 落盘后才回写 `registered`。该 runner 当前用于浏览器实机验证，
-不会替换 `POST /replacement-accounts/:id/register-no2fa` 的 Python 协议 runner。
+不会替换 `POST /replacement-accounts/:id/register-no2fa` 的 Python 协议 runner；补号管理的
+`POST /replacement-accounts/:id/register-no2fa-browser` 会显式调用它。
+
+外部邮箱验证码 API 的瞬时读取错误在既有轮询上限内重试；旧 OTP 被拒绝且未出现新码时，runner 会点击
+`Resend email` 后继续等待。`chatgpt.com/auth/error` 或 session 未返回 `accessToken` 都是失败终态，
+不会生成 AT 文件或回写 `registered`。
+
+about-you 不能以 click、URL 变化或表单消失判定成功：runner 在点击前监听
+`POST /api/accounts/create_account`，仅当该请求包含 `name`、`birthdate`，响应为 2xx 且
+`page.type=external_url` 时才等待 ChatGPT callback。

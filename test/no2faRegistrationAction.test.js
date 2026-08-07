@@ -75,6 +75,48 @@ test('no2fa automation launches the dedicated runner with the selected replaceme
   assert.equal(launched.options.env.ROXY_NO_2FA_PREPARER, 'C:/scripts/manual-roxy-refresh.cjs');
 });
 
+test('browser no2fa automation launches the visible-session browser runner with the selected replacement account', async (t) => {
+  const logDir = mkdtempSync(join(tmpdir(), 'browser-no2fa-registration-action-'));
+  t.after(() => rmSync(logDir, { recursive: true, force: true }));
+  let launched;
+  const spawnImpl = (command, args, options) => {
+    launched = { command, args, options };
+    const child = new EventEmitter();
+    child.pid = 124;
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    queueMicrotask(() => {
+      child.stdout.end('[无2FA] 已保存 AT 文件\n');
+      child.stderr.end();
+      child.emit('close', 0);
+    });
+    return child;
+  };
+  const automation = createRoxyChildProcessAutomation({
+    spawnImpl,
+    nodePath: 'node-browser.exe',
+    no2faBrowserRegisterScriptPath: 'C:/auto/roxy_no_2fa_register.js',
+    baseEnv: {
+      PORT: '13400',
+      ROXY_NO_2FA_PREPARER: 'C:/scripts/manual-roxy-refresh.cjs',
+    },
+    logDir,
+  });
+
+  const result = await automation.registerNo2faBrowserAccount({ id: 9, email: 'new.user@example.test' });
+
+  assert.equal(result.ok, true);
+  assert.equal(launched.command, 'node-browser.exe');
+  assert.deepEqual(launched.args, [
+    'C:/auto/roxy_no_2fa_register.js',
+    '--email',
+    'new.user@example.test',
+  ]);
+  assert.equal(launched.options.env.REPLACEMENT_ACCOUNT_ID, '9');
+  assert.equal(launched.options.env.REPLACEMENT_API_BASE, 'http://127.0.0.1:13400');
+  assert.equal(launched.options.env.ROXY_NO_2FA_PREPARER, 'C:/scripts/manual-roxy-refresh.cjs');
+});
+
 test('protocol queue retains a no2fa registration operation marker', async () => {
   const observed = [];
   const queue = createProtocolRegistrationQueue({
@@ -141,12 +183,56 @@ test('no2fa registration API queues an unregistered account and verifies its reg
   assert.equal(repeatedResponse.status, 409);
 });
 
-test('replacement action menu and server expose the no2fa registration endpoint', () => {
+test('browser no2fa registration API queues an unregistered account and verifies its registered status', async (t) => {
+  const workspace = mkdtempSync(join(tmpdir(), 'browser-no2fa-registration-api-'));
+  const database = createDatabase(join(workspace, 'app.db'));
+  const replacementAccounts = createReplacementAccountRepository(database);
+  const account = replacementAccounts.createAccount({ email: 'browser.user@example.test' });
+  const calls = [];
+  const replacementServices = {
+    async registerNo2faBrowserAccount(target) {
+      calls.push(target.id);
+      replacementAccounts.markRegistrationSuccess(target.id);
+      return { ok: true };
+    },
+  };
+  const server = createApp({ db: database, replacementAccounts, replacementServices }).listen(0);
+  await once(server, 'listening');
+  const { port } = server.address();
+  const baseUrl = `http://127.0.0.1:${port}`;
+  t.after(() => {
+    server.close();
+    database.close();
+    rmSync(workspace, { recursive: true, force: true });
+  });
+
+  const loginResponse = await fetch(`${baseUrl}/login`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ password: config.adminPassword }),
+    redirect: 'manual',
+  });
+  const cookie = String(loginResponse.headers.get('set-cookie') || '').split(';')[0];
+  const response = await fetch(`${baseUrl}/replacement-accounts/${account.id}/register-no2fa-browser`, {
+    method: 'POST',
+    headers: { cookie },
+  });
+  const payload = await response.json();
+
+  assert.equal(response.status, 202);
+  assert.equal(payload.job.operation, 'browser-no2fa-registration');
+  await waitFor(() => calls.length === 1);
+  assert.equal(replacementAccounts.getAccount(account.id).status, 'registered');
+});
+
+test('replacement action menu and server expose both no2fa registration endpoints', () => {
   const appSource = readFileSync(new URL('../web/app.js', import.meta.url), 'utf8');
   const serverSource = readFileSync(new URL('../src/server.js', import.meta.url), 'utf8');
 
   assert.equal(appSource.includes('data-action="register-no2fa"'), true);
+  assert.equal(appSource.includes('data-action="register-no2fa-browser"'), true);
   assert.equal(serverSource.includes('/replacement-accounts/:id/register-no2fa'), true);
+  assert.equal(serverSource.includes('/replacement-accounts/:id/register-no2fa-browser'), true);
 });
 
 async function waitFor(condition, timeoutMs = 1000) {

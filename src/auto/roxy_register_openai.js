@@ -947,7 +947,19 @@ async function fetchRegistrationEmailVerificationCode(page, email, options = {},
         if (onBeforePoll) {
             await onBeforePoll(attempt);
         }
-        lastResult = await fetchRegistrationEmailVerificationCodeOnce(page, email, options, attempt, maxAttempts);
+        try {
+            lastResult = await fetchRegistrationEmailVerificationCodeOnce(page, email, options, attempt, maxAttempts);
+        } catch (_) {
+            // A fresh Roxy/CDP request can reset while the browser is still settling.
+            registerWarn(options.logger, 'email-code-request', 'action=request-failed', `attempt=${attempt}/${maxAttempts}`);
+            if (attempt < maxAttempts) {
+                await sleep(intervalMs);
+                continue;
+            }
+            const error = new Error(`邮箱验证码 API 请求失败，attempts=${maxAttempts}`);
+            error.code = 'REGISTRATION_EMAIL_CODE_REQUEST_FAILED';
+            throw error;
+        }
         if (lastResult.code && lastResult.code !== excludeCode) {
             return lastResult.code;
         }
@@ -1133,6 +1145,12 @@ async function classifyRegistrationPage(page, options = {}) {
         || bodyLower.includes('this site can’t be reached')
         || bodyLower.includes('this site cannot be reached')) {
         return { state: 'connection-closed', evidence };
+    }
+
+    if (evidence.url.includes('/auth/error')
+        || evidence.url.includes('chatgpt.com/api/auth/error')
+        || /oops! we ran into an issue while signing you in/.test(bodyLower)) {
+        return { state: 'auth-error', evidence };
     }
 
     if (/already exists|already have an account|user_already_exists|该邮箱已被注册|已存在/.test(bodyLower)) {

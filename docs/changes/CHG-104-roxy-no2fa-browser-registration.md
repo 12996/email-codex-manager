@@ -3,7 +3,8 @@
 状态：implemented
 创建日期：2026-08-03
 关联 PRD：PRD-003
-关联 Issue：`issue-021-protocol-no2fa-trial-link-check.md`
+关联 Issue：`issue-021-protocol-no2fa-trial-link-check.md`、`issue-024-roxy-no2fa-chatgpt-auth-error.md`、
+`issue-025-roxy-no2fa-create-account-response-variant.md`
 
 ## 背景
 
@@ -17,7 +18,14 @@
 - Roxy 准备默认复用 `prepare_roxy_no_2fa.cjs` 的绑定代理刷新顺序；配置
   `ROXY_NO_2FA_PREPARER` 时，执行手动准备器并只读取其新 profile 的 `dirId`，随后连接该 profile。
 - 明确拒绝密码页、CAPTCHA、已注册邮箱和无效阶段；不调用 password、`user/register` 或 TOTP。
-- 仅 `/api/auth/session` 返回非空 `accessToken` 才成功。AT 先写入
+- 外部邮箱验证码 API 的瞬时读取错误按现有轮询上限重试；验证码被拒绝且持续返回旧码时，自动点击真实的
+  `Resend email` 后继续等待新码。
+- about-you 资料页在点击前预先监听 `POST /api/accounts/create_account`；只有响应为 2xx、请求字段包含
+  `name` 和 `birthdate`、响应 `page.type=external_url` 时才继续 callback/session 阶段。
+- `chatgpt.com/auth/error` 及对应登录失败文案是终态错误，不得按 ChatGPT session 处理、读取 AT 或回写
+  `registered`。
+- AT 阶段会将可见 Roxy 页面显式导航到 `https://chatgpt.com/api/auth/session`，从该顶层文档响应读取
+  非空 `accessToken`；不再通过 `page.evaluate()` 发后台 fetch。AT 先写入
   `REGISTRATION_TOKEN_OUTPUT_DIR/<email>.txt`，再经本地补号服务回写 `registered`。
 - CLI stdout 只输出邮箱和 AT 文件路径；不输出 AT、OTP、Cookie、CDP endpoint 或代理凭据。
 - 为复用资料页逻辑，`roxy_register_openai.js` 的 Continue/输入操作增加可操作性检查，并导出资料页和
@@ -50,6 +58,16 @@
 - [x] 实录确认 OTP-first 无密码路径：`email-otp/resend` → `email-otp/validate`（`page.type=about_you`）
   → `create_account`（`page.type=external_url`）→ ChatGPT callback → session AT；未发生 `user/register` 或 TOTP。
 - [x] 手动完成的真实 session 已验证 AT 落盘后回写 `registered`；AT 不输出到 CLI、日志或文档。
+- [x] 外部邮箱验证码 API 的瞬时异常会重试；旧 OTP 被拒绝后会通过 `Resend email` 请求新码。
+- [x] about-you 不再以按钮 click 或 `formGone` 判定提交；`create_account` 的字段和响应契约必须确认。
+- [x] ChatGPT `auth/error` 不再误判为 session，遇到时以 `NO2FA_AUTH_ERROR` 停止且不写 AT/状态。
+- [x] 使用新的未注册账号完成修复后的 browser runner 全程自动验收：Roxy 准备、OTP、about-you、
+  `create_account` 契约、callback、session AT 落盘和 `registered` 回写均已验证。
+- [x] AT 读取会在可见 Roxy 页面导航至 `/api/auth/session`，并仅从该导航响应的非空 `accessToken` 继续落盘。
+- [ ] 已发现另一种运行态：资料提交后实际到达 ChatGPT，但 `create_account` body 未识别为 `external_url`，
+  详见 `issue-025`；在完成录制和回归前不得放宽该 guard。
+
+验证：2026-08-03 全量 `npm test` 为 55/55 通过。
 
 ## 合并记录
 

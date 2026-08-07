@@ -12,6 +12,7 @@ const DEFAULT_ROXY_OAUTH_SCRIPT = join(__dirname, 'auto', 'roxy_oauth_login.js')
 const DEFAULT_ROXY_2FA_AUTH_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_auth_login.js');
 const DEFAULT_ROXY_2FA_LOGIN_SCRIPT = join(__dirname, 'auto', 'roxy_2fa_login.js');
 const DEFAULT_ROXY_REGISTER_SCRIPT = join(__dirname, 'auto', 'roxy_register_openai.js');
+const DEFAULT_ROXY_NO2FA_BROWSER_REGISTER_SCRIPT = join(__dirname, 'auto', 'roxy_no_2fa_register.js');
 const DEFAULT_PROTOCOL_PROJECT_DIR = join(__dirname, 'auto', 'protocol_registration');
 const DEFAULT_PROTOCOL_MAIN_PATH = join(DEFAULT_PROTOCOL_PROJECT_DIR, 'main.py');
 const DEFAULT_PROTOCOL_NO2FA_PROJECT_DIR = join(__dirname, 'auto');
@@ -38,6 +39,7 @@ export function createReplacementServices({
   twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
   twoFaLoginScriptPath = DEFAULT_ROXY_2FA_LOGIN_SCRIPT,
   registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
+  no2faBrowserRegisterScriptPath = DEFAULT_ROXY_NO2FA_BROWSER_REGISTER_SCRIPT,
   protocolPythonPath,
   protocolProjectPath,
   protocolMainPath,
@@ -61,6 +63,7 @@ export function createReplacementServices({
     twoFaScriptPath,
     twoFaLoginScriptPath,
     registerScriptPath,
+    no2faBrowserRegisterScriptPath,
     protocolPythonPath,
     protocolProjectPath,
     protocolMainPath,
@@ -174,6 +177,16 @@ export function createReplacementServices({
       return defaultAutomation.registerNo2faAccount(account, options);
     },
 
+    async registerNo2faBrowserAccount(account, options) {
+      if (automation?.registerNo2faBrowserAccount) {
+        return automation.registerNo2faBrowserAccount(account, options);
+      }
+      if (!defaultAutomation?.registerNo2faBrowserAccount) {
+        throw codedError('NO2FA_BROWSER_REGISTER_NOT_CONFIGURED', 'no2fa browser registration is not configured');
+      }
+      return defaultAutomation.registerNo2faBrowserAccount(account, options);
+    },
+
     stopReplacementRun(runId) {
       return stopReplacementRun(runId);
     },
@@ -234,6 +247,7 @@ export function createRoxyChildProcessAutomation({
   twoFaScriptPath = DEFAULT_ROXY_2FA_AUTH_SCRIPT,
   twoFaLoginScriptPath = DEFAULT_ROXY_2FA_LOGIN_SCRIPT,
   registerScriptPath = DEFAULT_ROXY_REGISTER_SCRIPT,
+  no2faBrowserRegisterScriptPath = DEFAULT_ROXY_NO2FA_BROWSER_REGISTER_SCRIPT,
   protocolPythonPath = normalizeOptional(process.env.PROTOCOL_PYTHON_PATH) || DEFAULT_PROTOCOL_PYTHON_PATH,
   protocolProjectPath = normalizeOptional(process.env.PROTOCOL_PROJECT_PATH) || DEFAULT_PROTOCOL_PROJECT_DIR,
   protocolMainPath = normalizeOptional(process.env.PROTOCOL_MAIN_PATH) || join(protocolProjectPath, 'main.py'),
@@ -613,6 +627,57 @@ export function createRoxyChildProcessAutomation({
             'ROXY_CDP_ENABLED',
             'ROXY_CDP_ORIGIN_ISOLATION',
             'REGISTRATION_TOKEN_OUTPUT_DIR',
+            ...ROXY_TARGET_ENV_KEYS,
+          ],
+          onLog: options?.onLog,
+        });
+      })().finally(() => {
+        protocolRegistrationInFlight = false;
+      });
+    },
+
+    registerNo2faBrowserAccount(account, options = {}) {
+      if (protocolRegistrationInFlight) {
+        return Promise.reject(codedError('NO2FA_BROWSER_REGISTER_BUSY', 'no2fa browser registration is already running for the shared Roxy profile'));
+      }
+
+      const email = normalizeRequired(account?.email, 'NO2FA_BROWSER_REGISTER_FAILED', 'no2fa browser registration account email is required');
+      const accountId = normalizeRequired(account?.id, 'NO2FA_BROWSER_REGISTER_FAILED', 'no2fa browser registration account id is required');
+      if (!/^\d+$/.test(accountId)) {
+        return Promise.reject(codedError('NO2FA_BROWSER_REGISTER_FAILED', 'no2fa browser registration account id is invalid'));
+      }
+
+      protocolRegistrationInFlight = true;
+      return (async () => {
+        notifyAutomationLog(options?.onLog, {
+          type: 'step',
+          step: 'browser-no2fa-registration',
+          message: '正在启动自动化无2FA注册浏览器流程',
+        });
+        const env = buildNo2faRegistrationEnv({
+          baseEnv,
+          account,
+          email,
+          accountId,
+        });
+        return runChildProcess({
+          spawnImpl,
+          command: nodePath,
+          args: [no2faBrowserRegisterScriptPath, '--email', email],
+          env,
+          account: { ...account, email },
+          automationRuns,
+          logDir,
+          kind: 'browser-no2fa-registration',
+          failureCode: 'NO2FA_BROWSER_REGISTER_FAILED',
+          envSummaryKeys: [
+            'REPLACEMENT_ACCOUNT_ID',
+            'REPLACEMENT_API_BASE',
+            'REGISTRATION_EMAIL_CODE_API_URL',
+            'REGISTRATION_TOKEN_OUTPUT_DIR',
+            'ROXY_NO_2FA_PREPARER',
+            'ROXY_NO_2FA_BROWSER_DIR_ID',
+            'ROXY_CDP_ENABLED',
             ...ROXY_TARGET_ENV_KEYS,
           ],
           onLog: options?.onLog,

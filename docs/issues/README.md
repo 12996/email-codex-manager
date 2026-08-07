@@ -29,3 +29,5 @@
 | issue-021 | 无2FA协议账号提链结算金额读取失败 | active | `issue-021-protocol-no2fa-trial-link-check.md` |
 | issue-022 | Roxy CDP 未就绪导致 Playwright 附着超时 | resolved | `issue-022-roxy-cdp-attach-readiness.md` |
 | issue-023 | Roxy 录制文件混入旧会话且 DOM recorder 泄露 endpoint | resolved | `issue-023-roxy-recorder-run-boundary.md` |
+| issue-024 | Roxy 无 2FA 浏览器 runner 在 ChatGPT callback 落入 auth/error | resolved | `issue-024-roxy-no2fa-chatgpt-auth-error.md` |
+| issue-025 | Roxy 无 2FA 浏览器 runner 误拒绝 create_account 响应变体 | active | `issue-025-roxy-no2fa-create-account-response-variant.md` |

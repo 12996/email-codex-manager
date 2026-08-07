@@ -71,6 +71,11 @@ function parsePreparedProfileOutput(output) {
 
 function assertNo2FaState(pageState, allowedStates) {
   const state = String(pageState?.state || 'unknown');
+  if (state === 'auth-error') {
+    const error = new Error('no2fa registration reached the ChatGPT authentication error page');
+    error.code = 'NO2FA_AUTH_ERROR';
+    throw error;
+  }
   if (['password-create', 'password-login', 'password-error'].includes(state)) {
     const error = new Error('no2fa registration unexpectedly reached a password stage');
     error.code = 'NO2FA_PASSWORD_STAGE';
@@ -118,28 +123,124 @@ async function waitForNo2FaState(page, allowedStates, options = {}) {
   throw error;
 }
 
+function no2FaStageFailureCode(stage) {
+  return `NO2FA_${String(stage || 'browser-registration')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '')}_FAILED`;
+}
+
+function attachNo2FaStageFailure(stage, error) {
+  const failure = error instanceof Error
+    ? error
+    : new Error(String(error || 'no2fa browser registration failed'));
+  if (!failure.code) failure.code = no2FaStageFailureCode(stage);
+  if (!failure.no2faStage) failure.no2faStage = stage;
+  return failure;
+}
+
+function no2FaLogUrl(value) {
+  try {
+    const url = new URL(String(value || ''));
+    return `${url.origin}${url.pathname}`;
+  } catch (_) {
+    return '';
+  }
+}
+
+async function collectNo2FaPageMetadata(page) {
+  const metadata = { url: no2FaLogUrl(page?.url?.()), controls: [] };
+  if (typeof page?.locator !== 'function') return metadata;
+  try {
+    metadata.controls = await page.locator('input, button').evaluateAll((nodes) => nodes
+      .slice(0, 16)
+      .map((node) => {
+        const element = node instanceof HTMLElement ? node : null;
+        const rect = element?.getBoundingClientRect?.();
+        return {
+          tag: element?.tagName?.toLowerCase() || '',
+          type: element?.getAttribute('type') || '',
+          name: element?.getAttribute('name') || '',
+          autocomplete: element?.getAttribute('autocomplete') || '',
+          disabled: Boolean(element?.matches?.(':disabled')),
+          readOnly: Boolean(element && 'readOnly' in element && element.readOnly),
+          ariaDisabled: element?.getAttribute('aria-disabled') === 'true',
+          visible: Boolean(rect && rect.width > 0 && rect.height > 0),
+        };
+      }));
+  } catch (_) {
+    // Diagnostics must never replace the original automation failure.
+  }
+  return metadata;
+}
+
+async function runNo2FaStage({ page, stage, operation, logger = console } = {}) {
+  try {
+    return await operation();
+  } catch (error) {
+    const failure = attachNo2FaStageFailure(stage, error);
+    const metadata = await collectNo2FaPageMetadata(page);
+    logger.error?.(`[roxy-no2fa-register] step=${stage} action=failed code=${failure.code} metadata=${JSON.stringify(metadata)}`);
+    throw failure;
+  }
+}
+
 async function readSessionAccessToken(page, options = {}) {
   const attempts = Math.max(1, Number(options.attempts || 5));
   const intervalMs = Math.max(0, Number(options.intervalMs || 3000));
-  const wait = options.wait || ((delay) => page.waitForTimeout(delay));
+  const sessionUrl = 'https://chatgpt.com/api/auth/session';
   let lastStatus = 0;
+
+  let context = null;
+  try {
+    context = typeof page?.context === 'function' ? page.context() : null;
+  } catch (_) {
+    context = null;
+  }
+  if (!context || typeof context.newPage !== 'function') {
+    const error = new Error('ChatGPT session tab cannot be created from the Roxy browser context');
+    error.code = 'NO2FA_SESSION_TAB_UNAVAILABLE';
+    throw error;
+  }
+
+  let sessionPage;
+  try {
+    // Keep the completed ChatGPT page intact. The new page shares this
+    // BrowserContext's authenticated cookies and is used only for session JSON.
+    sessionPage = await context.newPage();
+  } catch (_) {
+    const error = new Error('ChatGPT session tab could not be opened');
+    error.code = 'NO2FA_SESSION_TAB_UNAVAILABLE';
+    throw error;
+  }
+  if (!sessionPage || typeof sessionPage.goto !== 'function') {
+    try {
+      await sessionPage?.close?.();
+    } catch (_) {
+      // This page was not usable; its cleanup cannot change the error reason.
+    }
+    const error = new Error('ChatGPT session tab is not navigable');
+    error.code = 'NO2FA_SESSION_TAB_UNAVAILABLE';
+    throw error;
+  }
+
+  const wait = options.wait || ((delay) => {
+    if (typeof sessionPage.waitForTimeout === 'function') return sessionPage.waitForTimeout(delay);
+    return new Promise((resolve) => setTimeout(resolve, delay));
+  });
 
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     let result;
     try {
-      if (!String(page.url?.() || '').includes('chatgpt.com')) {
-        await page.goto('https://chatgpt.com/', {
-          waitUntil: 'domcontentloaded',
-          timeout: Number(options.navigationTimeoutMs || 60000),
-        });
-      }
-      result = await page.evaluate(async () => {
-        const response = await fetch('/api/auth/session', {
-          credentials: 'include',
-          headers: { accept: 'application/json' },
-        });
-        return { status: response.status, body: await response.text() };
+      const response = await sessionPage.goto(sessionUrl, {
+        waitUntil: 'domcontentloaded',
+        timeout: Number(options.navigationTimeoutMs || 60000),
       });
+      if (!response) {
+        throw new Error('session navigation did not return an HTTP response');
+      }
+      result = { status: response.status(), body: await response.text() };
     } catch (_) {
       if (attempt < attempts) await wait(intervalMs);
       continue;
@@ -153,6 +254,7 @@ async function readSessionAccessToken(page, options = {}) {
     }
     const accessToken = String(sessionData?.accessToken || '').trim();
     if (lastStatus >= 200 && lastStatus < 300 && accessToken) {
+      // Keep this page open so the browser visibly proves where AT came from.
       return accessToken;
     }
     if (lastStatus === 401 || lastStatus === 403) {
@@ -397,6 +499,81 @@ async function fillUsableInput(page, selector, value, label = 'input') {
   return true;
 }
 
+function submittedFieldNames(postData) {
+  const body = String(postData || '').trim();
+  if (!body) return [];
+  try {
+    const parsed = JSON.parse(body);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return Object.keys(parsed);
+    }
+  } catch (_) {
+    // OpenAI currently submits this form as URL-encoded data.
+  }
+  return [...new Set([...new URLSearchParams(body).keys()])];
+}
+
+async function submitNo2FaProfile({ page, submitPrimaryAction, timeoutMs = 30000 } = {}) {
+  if (!page || typeof page.waitForResponse !== 'function') {
+    const error = new Error('no2fa profile page cannot observe create_account response');
+    error.code = 'NO2FA_PROFILE_RESPONSE_UNAVAILABLE';
+    throw error;
+  }
+  if (typeof submitPrimaryAction !== 'function') {
+    throw new TypeError('submitPrimaryAction is required');
+  }
+
+  const createAccountResponse = page.waitForResponse((response) => {
+    const request = response?.request?.();
+    return request?.method?.() === 'POST'
+      && String(response?.url?.() || '').includes('/api/accounts/create_account');
+  }, { timeout: Math.max(1000, Number(timeoutMs) || 30000) });
+
+  try {
+    await submitPrimaryAction({ page, stage: 'profile' });
+  } catch (error) {
+    await createAccountResponse.catch(() => {});
+    throw error;
+  }
+
+  let response;
+  try {
+    response = await createAccountResponse;
+  } catch (_) {
+    const error = new Error('no2fa profile submission did not produce create_account response');
+    error.code = 'NO2FA_PROFILE_RESPONSE_MISSING';
+    throw error;
+  }
+
+  const status = Number(response.status?.() || 0);
+  if (status < 200 || status >= 300) {
+    const error = new Error('no2fa create_account response was not successful');
+    error.code = 'NO2FA_PROFILE_RESPONSE_FAILED';
+    throw error;
+  }
+
+  const fields = submittedFieldNames(response.request?.().postData?.());
+  if (!fields.includes('name') || !fields.includes('birthdate')) {
+    const error = new Error('no2fa create_account payload did not contain name and birthdate');
+    error.code = 'NO2FA_PROFILE_PAYLOAD_INVALID';
+    throw error;
+  }
+
+  let payload = null;
+  try {
+    payload = JSON.parse(await response.text());
+  } catch (_) {
+    payload = null;
+  }
+  const pageType = String(payload?.page?.type || payload?.page_type || '').trim();
+  if (pageType !== 'external_url') {
+    const error = new Error('no2fa create_account response did not advance to external_url');
+    error.code = 'NO2FA_PROFILE_RESPONSE_INVALID';
+    throw error;
+  }
+  return { status, pageType };
+}
+
 async function waitForOtpOutcome(page, options = {}) {
   const timeoutMs = Math.max(1, Number(options.timeoutMs || 30000));
   const intervalMs = Math.max(0, Number(options.intervalMs || 500));
@@ -426,6 +603,22 @@ async function waitForOtpOutcome(page, options = {}) {
   return { status: 'pending' };
 }
 
+async function resendNo2FaOtpEmail(page) {
+  const resendButton = page.locator('button[type="submit"][name="intent"][value="resend"]').first();
+  const visible = await resendButton.isVisible().catch(() => false);
+  const enabled = await resendButton.isEnabled().catch(() => false);
+  const operable = visible && enabled && await resendButton.evaluate((node) => {
+    const button = node instanceof HTMLButtonElement ? node : null;
+    return Boolean(button && !button.disabled && button.getAttribute('aria-disabled') !== 'true'
+      && !button.closest?.('[aria-disabled="true"], [inert], fieldset[disabled]'));
+  }).catch(() => false);
+  if (!operable) return false;
+
+  await resendButton.click({ force: true, timeout: 5000 });
+  await page.waitForTimeout?.(2000);
+  return true;
+}
+
 async function submitNo2FaOtp(options = {}) {
   const page = options.page;
   const email = requiredText(options.email, 'email').toLowerCase();
@@ -448,6 +641,7 @@ async function submitNo2FaOtp(options = {}) {
       codePollMaxAttempts: Number(env.ROXY_NO_2FA_OTP_POLL_ATTEMPTS || 24),
       codePollIntervalMs: Number(env.VERIFICATION_CODE_POLL_INTERVAL_MS || 5000),
       timeoutMs: Number(env.REGISTRATION_CODE_REQUEST_TIMEOUT_MS || 30000),
+      onNoNewCodeFor30Seconds: () => resendNo2FaOtpEmail(page),
     }, excludedCode);
     await fillUsableInput(page, otpSelector, code, 'OTP');
 
@@ -531,6 +725,7 @@ function createBrowserFlowDependencies(options = {}) {
 async function completeBrowserRegistration(options = {}) {
   const page = options.page;
   const env = options.env || process.env;
+  const logger = options.logger || console;
   const helpers = { ...createBrowserFlowDependencies(), ...(options.deps || {}) };
   const email = requiredText(options.email, 'email').toLowerCase();
   const name = requiredText(options.name, 'name');
@@ -541,27 +736,36 @@ async function completeBrowserRegistration(options = {}) {
   const { fillProfileFields } = helpers;
   const getSessionAccessToken = helpers.readSessionAccessToken;
   const entryUrl = String(env.OPENAI_REGISTRATION_ENTRY_URL || 'https://chatgpt.com/').trim();
+  const runStage = (stage, operation) => runNo2FaStage({ page, stage, operation, logger });
 
-  await page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-  await prepareChatGptEmailEntry(page, { env });
-  await fillEmailInput({ page, email });
-  await submitPrimaryAction({ page, stage: 'email' });
-  await waitForState(page, ['otp']);
-  await submitOtp({ page, email, name, birthday, emailCodeApiUrl: options.emailCodeApiUrl, env });
+  await runStage('entry-navigation', () => page.goto(entryUrl, { waitUntil: 'domcontentloaded', timeout: 60000 }));
+  await runStage('email-entry', () => prepareChatGptEmailEntry(page, { env }));
+  await runStage('email-fill', () => fillEmailInput({ page, email }));
+  await runStage('email-submit', () => submitPrimaryAction({ page, stage: 'email' }));
+  await runStage('otp-stage', () => waitForState(page, ['otp']));
+  await runStage('otp-submit', () => submitOtp({ page, email, name, birthday, emailCodeApiUrl: options.emailCodeApiUrl, env }));
 
-  const afterOtp = await waitForState(page, ['profile', 'chatgpt-session']);
+  const afterOtp = await runStage('post-otp-state', () => waitForState(page, ['profile', 'chatgpt-session']));
   if (afterOtp.state === 'profile') {
-    const filled = await fillProfileFields({ page, name, birthday });
+    let filled = await runStage('profile-fill', () => fillProfileFields({ page, name, birthday }));
+    if (!filled) {
+      const settledProfileState = await runStage('profile-render-wait', () => waitForState(page, ['profile', 'chatgpt-session']));
+      if (settledProfileState.state === 'chatgpt-session') {
+        return runStage('session-read', () => getSessionAccessToken(page, { env }));
+      }
+      filled = await runStage('profile-fill-retry', () => fillProfileFields({ page, name, birthday }));
+    }
     if (!filled) {
       const error = new Error('no2fa profile page did not expose usable profile fields');
       error.code = 'NO2FA_PROFILE_FIELDS_UNAVAILABLE';
+      error.no2faStage = 'profile-fill';
       throw error;
     }
-    await submitPrimaryAction({ page, stage: 'profile' });
-    await waitForState(page, ['chatgpt-session']);
+    await runStage('profile-submit', () => submitNo2FaProfile({ page, submitPrimaryAction }));
+    await runStage('chatgpt-session', () => waitForState(page, ['chatgpt-session']));
   }
 
-  return getSessionAccessToken(page, { env });
+  return runStage('session-read', () => getSessionAccessToken(page, { env }));
 }
 
 async function persistTokenThenMarkRegistered({
@@ -638,6 +842,31 @@ function generateProfileName() {
   return `${firstNames[Math.floor(Math.random() * firstNames.length)]} ${lastNames[Math.floor(Math.random() * lastNames.length)]}`;
 }
 
+function generateProfileBirthday(options = {}) {
+  const random = typeof options.random === 'function' ? options.random : Math.random;
+  const current = options.now instanceof Date ? new Date(options.now.getTime()) : new Date();
+  if (Number.isNaN(current.getTime())) {
+    const error = new Error('unable to generate a profile birthday from the current date');
+    error.code = 'NO2FA_PROFILE_BIRTHDAY_GENERATION_FAILED';
+    throw error;
+  }
+
+  const nextInteger = (maxExclusive) => {
+    const value = Number(random());
+    const normalized = Number.isFinite(value) ? Math.max(0, Math.min(value, 0.999999999)) : 0;
+    return Math.floor(normalized * maxExclusive);
+  };
+  const age = 20 + nextInteger(25); // 20 through 44, inclusive.
+  const year = current.getUTCFullYear() - age;
+  const month = nextInteger(current.getUTCMonth() + 1) + 1;
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const maxDay = month === current.getUTCMonth() + 1
+    ? Math.min(current.getUTCDate(), daysInMonth)
+    : daysInMonth;
+  const day = nextInteger(maxDay) + 1;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+}
+
 function loadProjectEnv() {
   const path = require('node:path');
   require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
@@ -650,7 +879,8 @@ async function runCli(proc = process, options = {}) {
     const args = parseCliArgs(proc.argv.slice(2), proc.env);
     const email = requiredText(args.email, 'email').toLowerCase();
     const name = String(args.name || '').trim() || (options.generateProfileName || generateProfileName)();
-    const birthday = String(args.birthday || '').trim() || '2000-01-01';
+    const birthday = String(args.birthday || '').trim()
+      || (options.generateProfileBirthday || generateProfileBirthday)();
     if (!/^\d{4}-\d{2}-\d{2}$/.test(birthday)) {
       throw new Error('birthday must use YYYY-MM-DD');
     }
@@ -665,7 +895,8 @@ async function runCli(proc = process, options = {}) {
     return 0;
   } catch (error) {
     const code = String(error?.code || 'NO2FA_BROWSER_REGISTRATION_FAILED');
-    proc.stderr.write(`[roxy-no2fa-register] failed code=${code}\n`);
+    const stage = String(error?.no2faStage || '').trim();
+    proc.stderr.write(`[roxy-no2fa-register] failed code=${code}${stage ? ` stage=${stage}` : ''}\n`);
     proc.exitCode = 1;
     return 1;
   }
@@ -677,6 +908,7 @@ module.exports = {
   createBrowserFlowDependencies,
   createReplacementAccountGateway,
   fillUsableInput,
+  generateProfileBirthday,
   openPreparedRoxyBrowser,
   parseCliArgs,
   parsePreparedProfileOutput,

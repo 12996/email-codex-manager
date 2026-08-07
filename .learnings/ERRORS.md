@@ -385,6 +385,40 @@ Roxy 页面请求失败: HTTP 401 https://auth.openai.com/api/accounts/email-otp
 
 ---
 
+## [ERR-20260803-001] roxy_no2fa_chatgpt_auth_error
+
+**Logged**: 2026-08-03T12:50:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: integration
+
+### Summary
+无 2FA browser runner 在资料提交后的 ChatGPT callback 落入 `auth/error`，session HTTP 200 但没有 AT。
+
+### Error
+```text
+ChatGPT /auth/error
+/api/auth/session: HTTP 200, accessToken missing
+```
+
+### Context
+- 最新未注册测试账号已自动完成 OTP、资料页与 callback 前流程。
+- 修复前状态机把任意 `chatgpt.com` URL 当作 session；现已显式识别 `auth-error` 并停止。
+- 账号状态保持 `unregistered`，没有生成 AT 文件。
+
+### Suggested Fix
+在新的未注册账号验证前启动 CDP network recorder，比较成功手动 run 与失败 callback 的非敏感请求路径、状态码和 cookie 名称集合；得到可复现差异前不重放当前 OAuth 交易。
+
+### Metadata
+- Reproducible: unknown
+- Related Files: `src/auto/roxy_no_2fa_register.js`, `src/auto/roxy_register_openai.js`, `docs/issues/issue-024-roxy-no2fa-chatgpt-auth-error.md`
+
+### Resolution
+- **Resolved**: 2026-08-03T13:20:00+08:00
+- **Notes**: 新账号启用 profile response guard 和 CDP network recorder 后已完成完整 browser runner 验收；旧 callback 错误未复现。
+
+---
+
 ## [ERR-20260803-003] apply-patch-add-file-prefix
 
 **Logged**: 2026-08-03T00:00:00+08:00
@@ -1321,3 +1355,97 @@ Cannot bind argument to parameter 'Path' because it is null.
 - **Notes**: 已读取实际运行日志 `protocol-registration-209-2026-07-30T09-17-16-870Z.log`。
 
 ---
+
+## [ERR-20260803-004] roxy_no2fa_profile_response_variant
+
+**Logged**: 2026-08-03T13:27:53+08:00
+**Priority**: high
+**Status**: pending
+**Area**: integration
+
+### Summary
+无 2FA browser runner 将已进入 ChatGPT 的资料提交误判为 `create_account` 响应无效。
+
+### Error
+```text
+NO2FA_PROFILE_RESPONSE_INVALID
+```
+
+### Context
+- `create_account` 已返回 2xx，提交字段包含 `name`、`birthdate`。
+- runner 因未解析到 `page.type=external_url` 而停止；同一 Roxy 页面实际随后位于 ChatGPT 首页。
+- 可见 session 页面确认邮箱归属匹配且 AT 非空，说明必须区分响应 body 读取/响应变体与真实注册失败。
+
+### Suggested Fix
+下次以新未注册账号录制非敏感 response 结构，先写覆盖该变体的失败测试，再保留字段校验并以 session 邮箱与 AT
+作为最终验证；不得仅按 ChatGPT URL 放行。
+
+### Metadata
+- Reproducible: unknown
+- Related Files: `src/auto/roxy_no_2fa_register.js`, `test/roxyNo2FaRegister.test.js`, `docs/issues/issue-025-roxy-no2fa-create-account-response-variant.md`
+
+---
+
+## [ERR-20260807-001] powershell-rg-wildcard-path
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+PowerShell 中将 `src/*.js`、`test/*.test.js` 作为 `rg` 路径参数时，Windows 路径解析失败。
+
+### Error
+```text
+rg: src/*.js: 文件名、目录名或卷标语法不正确。 (os error 123)
+rg: test/*.test.js: 文件名、目录名或卷标语法不正确。 (os error 123)
+```
+
+### Context
+- 为追踪补号接口的 Roxy 代理刷新调用链执行源码搜索。
+- `rg` 已返回部分结果，但命令整体以退出码 1 结束。
+
+### Suggested Fix
+在 PowerShell 下将目录作为搜索路径，并使用 `--glob '*.js'` / `--glob '*.test.js'` 过滤文件。
+
+### Metadata
+- Reproducible: yes
+- Related Files: `src/replacementServices.js`, `src/server.js`
+
+### Resolution
+- **Resolved**: 2026-08-07T00:00:00+08:00
+- **Notes**: 后续改为读取明确文件区间和使用 `--glob`。
+
+---
+
+## [ERR-20260807-002] powershell-complex-inline-snippet
+
+**Logged**: 2026-08-07T00:00:00+08:00
+**Priority**: low
+**Status**: resolved
+**Area**: backend
+
+### Summary
+用于同时编号多个源码片段并脱敏输出 `.env` 的复杂 PowerShell 单行命令无诊断地退出 1。
+
+### Error
+```text
+Exit code: 1
+Output: empty
+```
+
+### Context
+- 命令混合了嵌套哈希数组、条件表达式和字符串拼接，无法快速定位解析或运行错误。
+- 未修改项目运行状态。
+
+### Suggested Fix
+将源码编号读取和环境变量检查拆成简单独立命令，避免复杂单行 PowerShell。
+
+### Metadata
+- Reproducible: unknown
+- Related Files: `web/app.js`, `src/server.js`, `src/replacementServices.js`, `src/auto/roxy_oauth_login.js`
+
+### Resolution
+- **Resolved**: 2026-08-07T00:00:00+08:00
+- **Notes**: 改用 `Select-String` 和简单循环分别收集证据。

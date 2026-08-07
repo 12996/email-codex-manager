@@ -117,18 +117,10 @@ export function createApp({
       job.roxyProxyOwner = roxyProxyOwner;
       protocolRegistrationRoxyOwners.set(job.id, roxyProxyOwner);
       try {
-        const isNo2faRegistration = job.operation === 'no2fa-registration';
-        const result = await (isNo2faRegistration
-          ? replacementServices.registerNo2faAccount(account, {
-            roxyProxyOwner,
-            onLog(event) {
-              protocolRegistrationQueue.appendLog(job, {
-                level: event?.stream === 'stderr' ? 'error' : 'muted',
-                message: event?.type === 'log' ? event.text : event?.message,
-              });
-            },
-          })
-          : replacementServices.registerProtocolAccount(account, {
+        const isProtocolNo2faRegistration = job.operation === 'no2fa-registration';
+        const isBrowserNo2faRegistration = job.operation === 'browser-no2fa-registration';
+        const isNo2faRegistration = isProtocolNo2faRegistration || isBrowserNo2faRegistration;
+        const runOptions = {
           roxyProxyOwner,
           onLog(event) {
             protocolRegistrationQueue.appendLog(job, {
@@ -136,7 +128,12 @@ export function createApp({
               message: event?.type === 'log' ? event.text : event?.message,
             });
           },
-          }));
+        };
+        const result = await (isBrowserNo2faRegistration
+          ? replacementServices.registerNo2faBrowserAccount(account, runOptions)
+          : isProtocolNo2faRegistration
+            ? replacementServices.registerNo2faAccount(account, runOptions)
+            : replacementServices.registerProtocolAccount(account, runOptions));
         if (isNo2faRegistration) {
           const updatedAccount = replacementAccounts.getAccount(account.id);
           if (updatedAccount?.status !== 'registered') {
@@ -161,7 +158,11 @@ export function createApp({
           : error;
         replacementAccounts.recordOperationFailure(
           account.id,
-          job.operation === 'no2fa-registration' ? '无2FA注册' : '协议注册',
+          job.operation === 'browser-no2fa-registration'
+            ? '自动化无2FA注册'
+            : job.operation === 'no2fa-registration'
+              ? '无2FA注册'
+              : '协议注册',
           publicError.message,
         );
         throw publicError;
@@ -989,6 +990,24 @@ export function createApp({
     }
     try {
       const job = protocolRegistrationQueue.enqueue(account, { operation: 'no2fa-registration' });
+      res.status(202).json({ ok: true, job, ...protocolRegistrationQueue.getSnapshot() });
+    } catch (error) {
+      sendApiError(res, error, { account });
+    }
+  });
+
+  app.post('/replacement-accounts/:id/register-no2fa-browser', requireAuth, (req, res) => {
+    const account = replacementAccounts.getAccount(req.params.id);
+    if (!account) {
+      res.status(404).json(errorBody('ACCOUNT_NOT_FOUND', 'replacement account not found'));
+      return;
+    }
+    if (account.status !== 'unregistered') {
+      res.status(409).json(errorBody('ACCOUNT_NOT_UNREGISTERED', 'no2fa browser registration requires an unregistered account'));
+      return;
+    }
+    try {
+      const job = protocolRegistrationQueue.enqueue(account, { operation: 'browser-no2fa-registration' });
       res.status(202).json({ ok: true, job, ...protocolRegistrationQueue.getSnapshot() });
     } catch (error) {
       sendApiError(res, error, { account });

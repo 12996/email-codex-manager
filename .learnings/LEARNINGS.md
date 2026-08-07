@@ -26,6 +26,36 @@ Roxy OpenAI 注册流程中，OTP 提交后曾把通用 Continue 点击函数返
 
 ---
 
+## [LRN-20260803-002] correction
+
+**Logged**: 2026-08-03T13:05:00+08:00
+**Priority**: high
+**Status**: resolved
+**Area**: integration
+
+### Summary
+about-you 页面填写和按钮点击不能证明 `create_account` 契约正确，必须验证实际请求和响应。
+
+### Details
+用户指出 AT 缺失可能源于 about-you 未正确处理。历史成功录制表明提交请求必须含 `name`、`birthdate`，并返回
+`page.type=external_url`；旧 browser runner 只填 `input[name="age"]` 并接受 click/formGone。该判断无法证明
+当前页面组件把年龄正确转换为 `birthdate`。
+
+### Suggested Action
+资料页提交前预设 response watcher，确认 `create_account` 的 2xx 状态、无敏感值的字段名集合和
+`external_url` 页面类型；失败时停止，不继续 callback/session。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/roxy_no_2fa_register.js`, `src/auto/roxy_register_openai.js`, `test/roxyNo2FaRegister.test.js`
+- Tags: roxy, no2fa, about-you, state-machine, response-validation
+
+### Resolution
+- **Resolved**: 2026-08-03T13:05:00+08:00
+- **Notes**: 已以 `create_account` response guard 和回归测试实现。
+
+---
+
 ## [LRN-20260803-001] correction
 
 **Logged**: 2026-08-03T12:24:00+08:00
@@ -357,3 +387,33 @@ OpenAI workspace 是账号会话级数据，不能把一个测试账号的组织
 - Source: user_feedback
 - Related Files: `src/auto/protocol_cpa_auth.py`, `src/auto/test_protocol_cpa_auth.py`
 - Tags: cpa-auth, phone-add, sms, state-machine
+
+---
+
+## [LRN-20260803-003] correction
+
+**Logged**: 2026-08-03T13:14:36+08:00
+**Priority**: medium
+**Status**: resolved
+**Area**: integration
+
+### Summary
+当用户要求可见浏览器请求时，AT 读取必须使用顶层导航，而不是同页后台 fetch。
+
+### Details
+`roxy_no_2fa_register.js` 原先在 Roxy 页面内通过 `page.evaluate(fetch('/api/auth/session'))` 读取 AT，
+页面 URL 不会变化，用户无法看到 session JSON 页面。用户明确要求把当前浏览器导航到
+`https://chatgpt.com/api/auth/session` 后再读取 `accessToken`。
+
+### Suggested Action
+session token 读取器使用 `page.goto()` 的响应体解析 JSON，保留有限重试、401/403 失败和“先落盘再回写状态”
+约束；测试必须断言精确的顶层 session URL，且 mock 页面不提供 `evaluate()`。
+
+### Metadata
+- Source: user_feedback
+- Related Files: `src/auto/roxy_no_2fa_register.js`, `test/roxyNo2FaRegister.test.js`
+- Tags: roxy, session, access-token, visible-navigation
+
+### Resolution
+- **Resolved**: 2026-08-03T13:14:36+08:00
+- **Notes**: 已改为可见 Roxy tab 的 `page.goto()`，并完成 RED/GREEN 回归测试。

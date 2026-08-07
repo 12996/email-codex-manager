@@ -2,6 +2,56 @@
 
 状态：active
 
+## 2026-08-03 无 2FA Session 新标签页与资料默认值修正
+
+- 当前 `readSessionAccessToken()` 从注册主页面所属 BrowserContext 创建新 tab，只有该 tab 顶层导航
+  `https://chatgpt.com/api/auth/session` 并读取 AT；不使用主页面 `goto()` 或 `page.evaluate(fetch())`。
+  成功后 session tab 保持打开，默认 `ROXY_KEEP_OPEN=1` 下用户可直接核验 JSON 页面；不可导航的空白 tab 会关闭。
+- 未传资料参数时随机生成姓名和 20 至 44 岁对应的生日；显式 `--name` / `--birthday` 保持可复现行为。
+- about-you 首次字段不可用会在仍为 profile 状态时重试一次；未分类异常现在带稳定阶段码及脱敏 DOM 元数据，避免只显示
+  `NO2FA_BROWSER_REGISTRATION_FAILED`。
+- 回归：`node --test test/roxyNo2FaRegister.test.js` 28/28，`npm test` 71/71。
+- 最近一次成功 browser run 结束于当前新标签页脚本写入前，不能作为新实现实机验收。下次必须使用新的 `unregistered`
+  账号，观察保留的 session tab 后再确认全链路。
+
+## 2026-08-03 补号管理自动化无 2FA 注册操作
+
+- 补号菜单已将“编辑账号”置顶，并新增“自动化无2FA注册”。新前端动作请求
+  `POST /replacement-accounts/:id/register-no2fa-browser`，旧“无2FA注册”仍是 Python 协议 runner。
+- 新 endpoint 只允许 `unregistered`，与协议注册共用串行队列，启动
+  `src/auto/roxy_no_2fa_register.js --email <account.email>`；子进程后复查 AT 落盘产生的
+  `registered` 状态。队列显示“自动化无2FA注册”。
+- 本地 `.env` 已设置 `ROXY_NO_2FA_PREPARER=test/manual-roxy-proxy-refresh.cjs`，使浏览器操作按已验证的
+  手动刷新方式准备 Roxy。当前运行服务需要重启后才加载新路由和该配置。
+- 回归：`node --test test/no2faRegistrationAction.test.js test/replacementActionMenu.test.js` 10/10 通过。
+
+## 2026-08-03 可见 session AT 导航与资料响应变体
+
+- `readSessionAccessToken()` 已改为当前可见 Roxy tab 顶层导航
+  `https://chatgpt.com/api/auth/session`，从导航响应读取非空 `accessToken`；不再使用 `page.evaluate(fetch())`。
+  AT 仍坚持先落盘、再回写 `registered`；Node 回归和全量 `npm test` 55/55 通过。
+- 新未注册账号实机测试中，browser runner 已完成邮箱、OTP、资料页，资料提交符合 2xx 和
+  `name`/`birthdate` 字段约束，但因 `create_account` body 未识别为 `external_url` 以
+  `NO2FA_PROFILE_RESPONSE_INVALID` 停止。运行态页面实际已到 ChatGPT 首页。
+- 为不重跑该账号，已将同一可见 Roxy 页导航至 session URL，确认 session 邮箱归属匹配、AT 非空；AT 文件
+  非空且状态已回写 `registered`。这验证可见 session 导航链路，但不代表该响应变体的 runner 已自动验收。
+- 新增 active `docs/issues/issue-025-roxy-no2fa-create-account-response-variant.md`。下次需使用新的
+  `unregistered` 账号，在资料提交前启用 schema-only network recorder，先确认响应形状/读取竞态再做最小修复；
+  不得只根据 ChatGPT URL 放宽 guard。
+
+## 2026-08-03 无 2FA browser runner 实机自动验收
+
+- 新的未注册测试账号已由 browser runner 自动推进到 OTP、资料页和 ChatGPT callback；没有进入 password、TOTP
+  或 `user/register`。
+- 已修复并测试：邮箱验证码 API 首次瞬时错误会重试；错码后旧 OTP 被排除时会点击 `Resend email`；
+  about-you 会校验 `create_account` 的 `name`/`birthdate` payload 和 `external_url` 响应；
+  `chatgpt.com/auth/error` 不再被误判为 session，而是抛出 `NO2FA_AUTH_ERROR`。
+- 前一枚测试账号的 callback 曾落入 `/auth/error`，保持 `unregistered` 且未写 AT；不要重跑它。
+- 后续新的未注册账号已在启用 CDP network recorder 后完整自动成功：`create_account` 字段/响应契约、session
+  AT、文件落盘和 `registered` 状态回写均已验证。
+- 关联：`docs/issues/issue-024-roxy-no2fa-chatgpt-auth-error.md` 已 resolved。专项回归 25/25 通过；
+  `npm test` 55/55 通过。
+
 ## 2026-08-03 Roxy CDP 附着就绪与无 2FA 浏览器 runner
 
 - 现象复核：Roxy 未打开时 `/browser/connection_info` 返回空；重新运行

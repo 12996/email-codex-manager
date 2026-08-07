@@ -56,6 +56,10 @@ Extension Service Worker
   |- 授权码兑换与结果脱敏
   v
 OpenAI OAuth 授权页 -> localhost:1455/auth/callback?code=...&state=...
+
+Extension Offscreen Document
+  |- 仅通过私有扩展 Port 接收一次 RT
+  |- 创建 Blob 并触发用户下载
 ```
 
 建议目录为 `extensions/codex-oauth-login/`，包含 Manifest V3、扩展页面、Service Worker、纯函数 OAuth
@@ -94,6 +98,8 @@ authorizing/callback_observed/exchanging
   或磁盘持久化。
 - `下载 RT` 由用户明确点击触发，文件正文仅为 RT 本身，不含邮箱、AT、ID token、JSON 或元数据；文件名不得
   包含凭据或邮箱。
+- Manifest V3 Service Worker 不创建 Blob URL；由不可见的扩展 offscreen document 通过私有 Port 接收一次 RT、
+  创建 Blob 并执行下载。可见扩展页面不接收或渲染 RT。
 - 下载是用户选择的唯一落盘动作。无痕窗口关闭不会删除已下载文件。
 
 ## 错误处理

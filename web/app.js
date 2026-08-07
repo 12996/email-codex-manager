@@ -494,10 +494,11 @@ function accountRow(account) {
         <div class="actions">
           <button class="primary action-toggle" type="button" data-id="${account.id}">操作⌄</button>
           <div class="action-menu" hidden>
+            <button type="button" data-action="edit" data-id="${account.id}">✎ 编辑账号</button>
             <button type="button" data-action="register-protocol" data-id="${account.id}">⇄ 协议注册</button>
             <button type="button" data-action="register-no2fa" data-id="${account.id}">⇄ 无2FA注册</button>
+            <button type="button" data-action="register-no2fa-browser" data-id="${account.id}">⇄ 自动化无2FA注册</button>
             <button type="button" data-action="replace-2fa-protocol" data-id="${account.id}">⟳ 协议补号</button>
-            <button type="button" data-action="edit" data-id="${account.id}">✎ 编辑账号</button>
             <button type="button" data-action="register" data-id="${account.id}">✚ 注册</button>
             <button type="button" data-action="replace" data-id="${account.id}">⟳ 执行补号</button>
             <button type="button" data-action="replace-2fa" data-id="${account.id}">⟳ 2FA补号</button>
@@ -648,6 +649,7 @@ async function handleAction(action, id, dataset = {}) {
   if (action === 'register') return registerAccount(account);
   if (action === 'register-protocol') return registerProtocolAccount(account);
   if (action === 'register-no2fa') return registerNo2faAccount(account);
+  if (action === 'register-no2fa-browser') return registerNo2faBrowserAccount(account);
   if (action === 'replace-2fa-protocol') return replaceAccountWith2FAProtocol(account);
   if (action === 'replace') return replaceAccount(account);
   if (action === 'replace-2fa') return replaceAccountWith2FA(account);
@@ -1016,6 +1018,16 @@ async function registerNo2faAccount(account) {
   }
 }
 
+async function registerNo2faBrowserAccount(account) {
+  try {
+    await api(`/replacement-accounts/${account.id}/register-no2fa-browser`, { method: 'POST' });
+    toast('自动化无2FA注册已加入队列');
+    await loadProtocolRegistrationQueue();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 function renderProtocolQueueState(accountId) {
   const current = state.protocolRegistrationQueue.current;
   if (current?.account?.id === accountId) return `<div class="muted">${protocolJobLabel(current)}：注册中</div>`;
@@ -1025,6 +1037,7 @@ function renderProtocolQueueState(accountId) {
 }
 
 function protocolJobLabel(job) {
+  if (job?.operation === 'browser-no2fa-registration') return '自动化无2FA注册';
   return job?.operation === 'no2fa-registration' ? '无2FA注册' : '协议注册';
 }
 
